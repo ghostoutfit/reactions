@@ -1140,17 +1140,15 @@ function drawSphere(c, p) {
   c.beginPath(); c.arc(p.x, p.y, ATOM_RADIUS * e.rScale, 0, Math.PI * 2); c.fill();
 }
 
-// A thin rim on the union silhouette — each atom's circle only where it is not
-// buried inside another, so overlapping atoms read as one outline rather than a
-// pile of rings. Definition only, no glow: shadowBlur in a per-atom path is what
-// cost 8.3 ms a frame here.
-function drawMoleculeRim(atoms, c = ctx) {
-  if (!atoms || !atoms.length) return;
-  const circles = atoms.map(p => ({ x: p.x, y: p.y, r: ATOM_RADIUS * elemOf(p).rScale }));
-  const LIGHT = document.body.classList.contains('screenshot-mode');
-  c.save();
-  c.strokeStyle = LIGHT ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.30)';
-  c.lineWidth   = 1.5;
+function atomCircles(atoms) {
+  return atoms.map(p => ({ x: p.x, y: p.y, r: ATOM_RADIUS * elemOf(p).rScale }));
+}
+
+// The molecule's outer edge, as arc runs: each atom's circle only where it is
+// not buried inside another. Overlapping atoms give one outline rather than a
+// pile of rings, and nothing is ever drawn where two atoms cross.
+function silhouetteRuns(circles) {
+  const runs = [];
   const STEPS = 96;
   for (const a of circles) {
     let runStart = null;
@@ -1162,11 +1160,61 @@ function drawMoleculeRim(atoms, c = ctx) {
         b !== a && Math.hypot(px - b.x, py - b.y) < b.r);
       if (!buried && runStart === null) runStart = th;
       else if (buried && runStart !== null) {
-        c.beginPath(); c.arc(a.x, a.y, a.r, runStart, th); c.stroke();
+        runs.push({ x: a.x, y: a.y, r: a.r, a0: runStart, a1: th });
         runStart = null;
       }
     }
   }
+  return runs;
+}
+
+function strokeRuns(c, runs) {
+  for (const r of runs) { c.beginPath(); c.arc(r.x, r.y, r.r, r.a0, r.a1); c.stroke(); }
+}
+
+// Just enough 3D. The shading runs inward from the MOLECULE's silhouette, not
+// from each atom's, so there is no light direction and no edge where one atom
+// crosses another — the two things that made the gradient version wrong.
+//
+// It is the shape's own outline darkened inward, which is what an evenly lit
+// solid looks like: flat across the middle, falling off at the rim. The strokes
+// are clipped to the union, so only their inner halves land.
+let sphereDepth = 0.40;      // 0 = perfectly flat
+
+function drawMoleculeDepth(c, circles, runs) {
+  if (sphereDepth <= 0) return;
+  const path = new Path2D();
+  for (const a of circles) {
+    path.moveTo(a.x + a.r, a.y);               // or the arcs chain into each other
+    path.arc(a.x, a.y, a.r, 0, Math.PI * 2);
+  }
+  c.save();
+  c.clip(path);
+  // Round, not butt. Each run ends where the silhouette dives into the next
+  // atom, and a butt cap on a stroke this wide cuts a straight edge across the
+  // interior there. Adjacent runs share that endpoint, so round caps blend.
+  c.lineCap = 'round';
+  // Many thin passes, not a few thick ones. Each pass is the same faint stroke
+  // at a different width, so a point's darkness is just how many passes reached
+  // it — a linear ramp inward from the edge. Three heavy passes gave three
+  // visible contour rings; this is a gradient.
+  const N = 14;
+  c.strokeStyle = `rgba(0,0,0,${(0.055 * sphereDepth).toFixed(4)})`;
+  for (let i = 1; i <= N; i++) {
+    c.lineWidth = ATOM_RADIUS * 1.15 * (i / N);   // half of it lies outside the clip
+    strokeRuns(c, runs);
+  }
+  c.restore();
+}
+
+// A thin rim for definition. No glow: shadowBlur in a per-atom path is what
+// cost 8.3 ms a frame here.
+function drawMoleculeRim(c, runs) {
+  const LIGHT = document.body.classList.contains('screenshot-mode');
+  c.save();
+  c.strokeStyle = LIGHT ? 'rgba(0,0,0,0.50)' : 'rgba(255,255,255,0.22)';
+  c.lineWidth   = 1.5;
+  strokeRuns(c, runs);
   c.restore();
 }
 
@@ -1182,8 +1230,17 @@ function drawSpaceFilling() {
   _sphereCtx.setTransform(1, 0, 0, 1, 0, 0);
   _sphereCtx.clearRect(0, 0, _sphereLayer.width, _sphereLayer.height);
   _sphereCtx.setTransform(ctx.getTransform());     // match the world zoom/pan
-  for (const b of world.bodies)
-    for (const p of bodyAtoms(b)) drawSphere(_sphereCtx, p);
+  const runsFor = [];
+  for (const b of world.bodies) {
+    const atoms = bodyAtoms(b);
+    const circles = atomCircles(atoms);
+    const runs = silhouetteRuns(circles);
+    runsFor.push(runs);
+    for (const p of atoms) drawSphere(_sphereCtx, p);
+    // Shaded inside the layer, so the depth is covered by the same uniform
+    // alpha as the matter it belongs to.
+    drawMoleculeDepth(_sphereCtx, circles, runs);
+  }
 
   ctx.save();
   ctx.setTransform(1, 0, 0, 1, 0, 0);              // the layer is already in place
@@ -1191,7 +1248,7 @@ function drawSpaceFilling() {
   ctx.drawImage(_sphereLayer, 0, 0);
   ctx.restore();
 
-  for (const b of world.bodies) drawMoleculeRim(bodyAtoms(b));
+  runsFor.forEach(runs => drawMoleculeRim(ctx, runs));
 }
 
 // ─── Atom glow sprite ─────────────────────────────────────────────────────────
@@ -2561,6 +2618,7 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     row('devLoneS',  'Lone orbit speed',  0.005, 0.2, 0.005, loneSpeed, '#ff3a8a') +
     row('devNucleus', 'Nucleus size', 0, 24, 1, nucleusDiameter, '#ff80b0') +
     row('devSphereA', 'Sphere opacity', 0.15, 1, 0.05, sphereOpacity, '#9fd0ff') +
+    row('devSphereD', 'Sphere depth',   0,    1, 0.05, sphereDepth,   '#9fd0ff') +
     '<label style="display:flex;align-items:center;gap:7px;margin:9px 0 2px;cursor:pointer;">' +
       '<input type="checkbox" id="devLone" checked style="margin:0">' +
       '<span>Lone pairs (non-bonding)</span>' +
@@ -2608,6 +2666,7 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   bind('devLoneS',  v => loneSpeed   = v, false, v => v.toFixed(3));
   bind('devNucleus', v => nucleusDiameter = v, false, v => v + ' px');
   bind('devSphereA', v => sphereOpacity = v, false, v => v.toFixed(2));
+  bind('devSphereD', v => sphereDepth   = v, false, v => v.toFixed(2));
   // The field look was dialled in against the picture, so it stays adjustable
   bind('devLobeW',    v => FIELD_WIDTH = v, false, v => v.toFixed(2));
   bind('devLobeGain', v => FIELD_GAIN  = v, false, v => v.toFixed(1));
