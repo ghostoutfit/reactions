@@ -198,7 +198,7 @@ one ring at one radius instead of a scribble.
 
 ```javascript
 let loneRadius = 1.0;     // multiple of the atom's valence radius
-let loneSpeed  = 0.055;   // radians per frame at 60 fps
+let loneSpeed  = 0.125;   // radians per frame at 60 fps — one lap in 0.84 s
 ```
 
 At `loneRadius` 1.0 the ring sits on the valence shell, which is physically
