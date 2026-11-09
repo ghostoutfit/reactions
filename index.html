@@ -731,7 +731,7 @@
           <span class="slider-icon">🔍</span>
         </div>
         <label class="toggle-label" id="showFieldsRow">
-          <input type="checkbox" id="showFields">
+          <input type="checkbox" id="showFields" checked>
           <span class="field-label-electric">Show energy in fields</span>
         </label>
 
@@ -1008,15 +1008,19 @@ function bondEnergy(elA, elB) {
 
 const FIELD_SCALE = { 'hi-res': 0.30, 'detailed': 0.20, 'simple': 0.12 };
 let FIELD_WIDTH = 0.30;     // lobe half-width as a fraction of the bond length
-// A bond at rest peaks at ~1.0 (its energy over the strongest bond), so this
-// puts resting bonds in the mid blue of the colormap and leaves the top of the
-// range for flares — otherwise everything sits saturated and a hit shows nothing.
-let FIELD_GAIN = 1.8;
+// Lower is brighter: the accumulated value that maps to the top of the colormap.
+// A bond at rest peaks at its own energy over the strongest bond — 0.88 for H-H,
+// 1.00 for O=O — so 0.9 sits the resting bonds right at the top of the ramp
+// without clipping (H2 saturates 0 pixels, O2 a bare 9 at its very core). A
+// collision then drives the peak to 2.7-4.0, and because that is past the top of
+// the ramp the flare reads as a white core SPREADING through the lobe rather
+// than as the lobe simply getting brighter.
+let FIELD_GAIN = 0.9;
 
 // A collision flare: the struck bond brightens and squeezes for a moment, then
 // relaxes. Driven by the collision impulse, so a hard hit flares harder. This is
 // the only thing that moves until molecules can actually vibrate.
-let FLARE_GAIN      = 1.8;   // extra brightness at flare = 1
+let FLARE_GAIN      = 3.0;   // extra brightness at flare = 1
 const FLARE_SQUEEZE = 0.25;  // how much the lobe narrows at flare = 1
 const FLARE_TAU     = 0.30;  // seconds to decay
 
@@ -1272,7 +1276,7 @@ const TIER_TRAIL_LEN = { 'hi-res': 48, 'detailed': 32, 'simple': 18 };
 const TRAIL_MAX = 64;             // ring-buffer size; the largest tier length
 
 // Tuning, carried over from bonds and kept adjustable (dev sliders)
-let eSpeed      = 0.20;   // phase advance per frame at 60 fps
+let eSpeed      = 0.50;   // phase advance per frame at 60 fps
 let eSteer      = 0.30;   // how hard the electron is pulled onto the ideal path
 let eWander     = -0.40;  // perpendicular wobble amplitude, re-rolled each lobe
 let eRadial     = -0.50;  // along-bond amplitude wobble
@@ -1513,7 +1517,7 @@ const SPECIES = {
   O2: { els: ['O', 'O'] },
   He: { els: ['He'] },        // monatomic: no bond, two lone electrons
 };
-const COMPOSITION_DEFAULT = { H2: 2, O2: 0, He: 0 };
+const COMPOSITION_DEFAULT = { H2: 4, O2: 2, He: 0 };   // 2:1 — the ratio for water
 const COMPOSITION_MAX = 6;
 const composition = { ...COMPOSITION_DEFAULT };
 
@@ -2265,10 +2269,15 @@ function worldLoop(now) {
     // Sub-step so fast molecules cannot pass through one another in one frame
     const steps = Math.max(1, Math.ceil(dt / 0.004));
     for (let k = 0; k < steps; k++) stepWorld(dt / steps);
-    stepElectrons(dt);              // once a frame: the phase logic is per-frame
     sampleEnergy();
     if (++pctTick % Math.round(TIER_FPS[_quality] / 4) === 0) updateEnergyPct();   // ~4 Hz either way
   }
+  // Electrons run whether or not the sim does. Pause stops the molecules moving
+  // and spinning; it does not stop an atom being an atom, and a frozen electron
+  // reads as a broken picture rather than a paused one. It also means the trails
+  // are already drawn on page load, before GO is ever pressed.
+  // Once a frame, never per sub-step: the phase logic is tuned in per-frame units.
+  stepElectrons(dt);
   drawWorld();
 }
 
@@ -2502,12 +2511,12 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
     '<div style="font-size:9px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.4;margin-top:8px;">' +
       'Valence electrons</div>' +
-    row('devESpeed', 'Electron speed', 0.02, 0.6, 0.01, 0.20, '#ff3a8a') +
-    row('devETrail', 'Trail length',   0.2,  2,   0.05, 1.0,  '#ff3a8a') +
-    row('devESteer', 'Path steering',  0.02, 1,   0.02, 0.30, '#ff3a8a') +
-    row('devLoneR',  'Lone orbit radius', 0.4, 2.2, 0.05, 1.0,   '#ff3a8a') +
-    row('devLoneS',  'Lone orbit speed',  0.005, 0.2, 0.005, 0.055, '#ff3a8a') +
-    row('devNucleus', 'Nucleus size', 0, 24, 1, NUCLEUS_DIAMETER, '#ff80b0') +
+    row('devESpeed', 'Electron speed', 0.02, 0.6, 0.01, eSpeed,      '#ff3a8a') +
+    row('devETrail', 'Trail length',   0.2,  2,   0.05, eTrailScale, '#ff3a8a') +
+    row('devESteer', 'Path steering',  0.02, 1,   0.02, eSteer,      '#ff3a8a') +
+    row('devLoneR',  'Lone orbit radius', 0.4, 2.2, 0.05, loneRadius, '#ff3a8a') +
+    row('devLoneS',  'Lone orbit speed',  0.005, 0.2, 0.005, loneSpeed, '#ff3a8a') +
+    row('devNucleus', 'Nucleus size', 0, 24, 1, nucleusDiameter, '#ff80b0') +
     '<label style="display:flex;align-items:center;gap:7px;margin:9px 0 2px;cursor:pointer;">' +
       '<input type="checkbox" id="devLone" checked style="margin:0">' +
       '<span>Lone pairs (non-bonding)</span>' +

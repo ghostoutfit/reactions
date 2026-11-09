@@ -155,6 +155,11 @@ fixed `Float32Array` ring buffer, so nothing is allocated per frame.
 `stepElectrons` runs **once per frame, outside the physics sub-steps** — the
 phase logic is tuned in per-frame units and breaks up with large or uneven dt.
 
+It also runs **outside the `running` gate**. Pause stops the molecules moving
+and spinning; it does not stop an atom being an atom, and a frozen electron
+reads as a broken picture rather than a paused one. It also means the trails
+are already drawn on page load, before GO is ever pressed.
+
 ### Lone electrons
 
 Deliberately the simplest thing that works: a constant angular speed round a
@@ -184,7 +189,7 @@ on/off switch are all dev controls.
 
 ```javascript
 const SPECIES = { H2: { els: ['H','H'] }, O2: { els: ['O','O'] }, He: { els: ['He'] } };
-const composition = { H2: 2, O2: 0, He: 0 };    // 0–6 of each, dev sliders
+const composition = { H2: 4, O2: 2, He: 0 };    // 0–6 of each, dev sliders
 const ATOMIC_MASS = { H: 1, O: 16, He: 4 };
 ```
 
