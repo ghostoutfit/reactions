@@ -1405,11 +1405,23 @@ const TRAIL_MAX = 64;             // ring-buffer size; the largest tier length
 // Tuning, carried over from bonds and kept adjustable (dev sliders)
 let eSpeed      = 0.50;   // phase advance per frame at 60 fps
 let eSteer      = 0.30;   // how hard the electron is pulled onto the ideal path
-let eWander     = -0.40;  // perpendicular wobble amplitude, re-rolled each lobe
-let eRadial     = -0.50;  // along-bond amplitude wobble
 let eCrossSlow  = 0.50;   // speed multiplier at the bond midpoint crossing
 let eTrailScale = 1.0;    // multiplies the tier's trail length
 let showLonePairs = true; // non-bonding valence electrons on/off
+
+// A bare lemniscate is a narrow bow tie: its widest half-width is a/(2*sqrt 2),
+// about 0.354 of the lobe's reach. `eWidth` stretches it across the bond, and
+// 1.41 is the value that makes a lobe exactly as wide as it is long — a circle
+// round the nucleus, which is what a bonding pair should look like it is doing.
+let eWidth      = 1.45;   // perpendicular stretch; 1 = bare lemniscate
+
+// Pass-to-pass variability. All three are re-rolled at every lobe, so no two
+// laps of the figure-8 lie on top of each other and the trail reads as a cloud
+// rather than a wire. They are plus-or-minus fractions, applied directly.
+let eRadial     = 0.26;   // +-: how far the lobe reaches past the nucleus
+let eWander     = 0.30;   // +-: how wide the lobe is
+let eTilt       = 0.17;   // +- radians: lobe swing off the bond axis
+let eRoll       = 0.12;   // how fast a re-rolled target is taken up (per frame)
 
 function valenceRadius(el) { return ATOM_RADIUS * ELEMENTS[el].rScale; }
 
@@ -1419,7 +1431,7 @@ function makeElectron(kind, el) {
     // live position and velocity, body-local
     x: 0, y: 0, vx: 0, vy: 0,
     phase: 0, visit: 0,
-    effR: 0, effW: 0, targetR: 0, targetW: 0, prevVisit: -1,
+    effR: 0, effW: 0, effT: 0, targetR: 0, targetW: 0, targetT: 0, prevVisit: -1,
     // ring-buffer trail, body-local
     tx: new Float32Array(TRAIL_MAX), ty: new Float32Array(TRAIL_MAX),
     n: 0, head: 0,
@@ -1500,24 +1512,29 @@ function lemniscate(e, b, phase, visit) {
   const ux = bx / sep, uy = by / sep;
   const d = sep / 2;
   const r = valenceRadius(visit === 0 ? ai.el : ak.el);
-  const a = r * (1 + e.effR * 0.25) + d;
+  const a = r * (1 + e.effR) + d;
 
   const t = visit === 0 ? phase + Math.PI : phase;
   const denom = 1 + Math.cos(t) ** 2;
-  const px = a * Math.sin(t) / denom;
-  const py = (1 + e.effW * 0.25) * a * Math.sin(t) * Math.cos(t) / denom;
+  const lx = a * Math.sin(t) / denom;
+  const ly = eWidth * (1 + e.effW) * a * Math.sin(t) * Math.cos(t) / denom;
+  // swing the whole lobe off the bond axis, about the crossing point
+  const ct = Math.cos(e.effT), st = Math.sin(e.effT);
+  const px = lx * ct - ly * st, py = lx * st + ly * ct;
   // rotate from bond axis into body-local
   return { x: mx + px * ux - py * uy, y: my + px * uy + py * ux, a, d };
 }
 
 function stepBondElectron(e, b, k) {
-  if (e.visit !== e.prevVisit) {          // new lobe: re-roll the wobble
+  if (e.visit !== e.prevVisit) {          // new lobe: re-roll all three wobbles
     e.prevVisit = e.visit;
     e.targetR = (Math.random() * 2 - 1) * eRadial;
-    e.targetW = -Math.random() * Math.abs(eWander);
+    e.targetW = (Math.random() * 2 - 1) * eWander;
+    e.targetT = (Math.random() * 2 - 1) * eTilt;
   }
-  e.effR += (e.targetR - e.effR) * 0.08;
-  e.effW += (e.targetW - e.effW) * 0.08;
+  e.effR += (e.targetR - e.effR) * eRoll;
+  e.effW += (e.targetW - e.effW) * eRoll;
+  e.effT += (e.targetT - e.effT) * eRoll;
 
   const p0 = lemniscate(e, b, e.phase, e.visit);
   // Normalise by d/a so the speed at the crossing is the same on both sides.
@@ -2637,6 +2654,10 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     row('devESpeed', 'Electron speed', 0.02, 0.6, 0.01, eSpeed,      '#ff3a8a') +
     row('devETrail', 'Trail length',   0.2,  2,   0.05, eTrailScale, '#ff3a8a') +
     row('devESteer', 'Path steering',  0.02, 1,   0.02, eSteer,      '#ff3a8a') +
+    row('devEWidth', 'Figure-8 width',  0.6, 2.4, 0.05, eWidth,      '#ff3a8a') +
+    row('devEWand',  'Width jitter',    0,   0.8, 0.02, eWander,     '#ff3a8a') +
+    row('devERad',   'Reach jitter',    0,   0.8, 0.02, eRadial,     '#ff3a8a') +
+    row('devETilt',  'Lobe swing',      0,   0.6, 0.02, eTilt,       '#ff3a8a') +
     row('devLoneR',  'Lone orbit radius', 0.4, 2.2, 0.05, loneRadius, '#ff3a8a') +
     row('devLoneS',  'Lone orbit speed',  0.005, 0.2, 0.005, loneSpeed, '#ff3a8a') +
     row('devNucleus', 'Nucleus size', 0, 24, 1, nucleusDiameter, '#ff80b0') +
@@ -2686,6 +2707,10 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   bind('devESpeed', v => eSpeed      = v, false, v => v.toFixed(2));
   bind('devETrail', v => eTrailScale = v, false, v => v.toFixed(2));
   bind('devESteer', v => eSteer      = v, false, v => v.toFixed(2));
+  bind('devEWidth', v => eWidth      = v, false, v => v.toFixed(2));
+  bind('devEWand',  v => eWander     = v, false, v => v.toFixed(2));
+  bind('devERad',   v => eRadial     = v, false, v => v.toFixed(2));
+  bind('devETilt',  v => eTilt       = v, false, v => v.toFixed(2));
   bind('devLoneR',  v => loneRadius  = v, false, v => v.toFixed(2) + '\u00d7');
   bind('devLoneS',  v => loneSpeed   = v, false, v => v.toFixed(3));
   bind('devNucleus', v => nucleusDiameter = v, false, v => v + ' px');
