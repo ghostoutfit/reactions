@@ -30,11 +30,12 @@ so a `fields` channel can join it without touching the drawing code.
 
 ## The one idea
 
-The world is a wrap-around ("asteroids") box filling the canvas between the
-toolbar and the energy bar. Molecules are **rigid bodies** that translate, spin,
-and bounce elastically off one another. There are no walls — anything leaving an
-edge returns on the opposite one, and a body straddling an edge is drawn on both
-sides so it never appears to pop.
+The world is a **walled box** filling the canvas between the toolbar and the
+energy bar. Molecules are **rigid bodies** that translate, spin, and bounce
+perfectly elastically off one another and off the four walls.
+
+(It was a wrap-around "asteroids" box until walls replaced it. `wrapDelta` and
+`wrapOffsets` are gone — git has them if the wrap is ever wanted back.)
 
 Nothing is scripted. There is no timeline, no phases and no replay: the sim just
 runs.
@@ -63,6 +64,21 @@ Trail length and arrow speed are dev sliders; the defaults are
 `ATOM_TRAIL_DEFAULT` / `ATOM_ORBIT_DEFAULT`.
 
 Icons (`drawAtomIcon`) stay a plain ring — the arrow is unreadable at icon size.
+
+### The nucleus
+
+Each atom carries one small **proton** at its centre, lifted from fission's
+`drawParticles`: the same pink sphere (`#ff1a65` shell, `#ff80b0` core) with a
+white "+", at `nucleusDiameter` = 10 px. One proton stands in for the whole
+nucleus — an oxygen really has eight — so it is a marker saying "the positive
+charge is here", not a count. Shown in both views; in Outline it is what says
+how many atoms the silhouette is made of.
+
+**Fission drew it with a per-particle `shadowBlur`. Do not copy that.** The
+whole thing — halo, sphere and "+" — is baked once into a sprite by
+`protonSprite` and blitted, so it costs a `drawImage` per atom: the hi-res draw
+went 2.0 → 1.87 ms with it added. The blur happens at bake time, where paying
+once is fine. Size is a dev slider.
 
 Outline mode (`drawMoleculeOutline`) strokes the union silhouette — each atom
 circle only where it is not buried inside another.
@@ -207,10 +223,37 @@ glancing hit deflects both and spins them; energy drift and linear-momentum
 drift are both 0 to the precision measured, with 20 molecules over 8 s; atom
 interpenetration never exceeded 0 px.
 
-`wrapDelta` gives the minimum-image offset, so a molecule at the left edge can
-collide with one at the right edge. The loop sub-steps at 4 ms so fast molecules
-cannot tunnel through each other, and clamps `dt` to 50 ms so a backgrounded tab
-does not resume with one enormous step.
+The loop sub-steps at 4 ms so fast molecules cannot tunnel through each other,
+and clamps `dt` to 50 ms so a backgrounded tab does not resume with one
+enormous step.
+
+### Walls
+
+`collideWalls` tests **every atom against all four walls**, and the contact is at
+the atom, not at the molecule's centre — so the same rigid-body impulse runs as
+for a molecule-molecule hit and a corner-on bounce sets the molecule spinning.
+`WALL_RESTITUTION` = 1.0, so a molecule leaves with exactly the energy it
+arrived with.
+
+b.x moves as each contact resolves, so the atom's world position is recomputed
+for every wall; a molecule in a corner touches two at once.
+
+Verified: a square-on hit reverses velocity exactly (400 → −400 px/s) with zero
+induced spin; an off-centre hit leaves it spinning at 3.15 rad/s with 2.9% of
+its energy in rotation. **Energy drift 0 and wall overlap 0 px over 90
+simulated seconds at 6+6, with nothing ever escaping.** Linear momentum is
+*not* conserved, and should not be — the walls are external.
+
+Wall bounces are settled by `settleBodySpeed`, a single-body version of the
+speed band: a wall cannot take the surplus, so it is paid to and from that
+body's own spin. Measured with the band on, 90 s at 6+6: speeds stayed strictly
+within 0.75–1.25 of nominal, **0 violations in 5400 samples**, 143 floor
+top-ups, energy plateauing at 148% of spawn.
+
+`drawWalls` strokes a faint rectangle at the boundary. At zoom 1 the box lines
+up with the toolbar, the energy bar and the screen edges so it is barely
+visible — but zoomed out there is canvas beyond it, and without the line the
+molecules look like they bounce off nothing.
 
 ## Energy in fields
 

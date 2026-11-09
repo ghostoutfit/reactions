@@ -933,7 +933,10 @@ window.addEventListener('resize', () => {
   // window resize does not dump everything outside the world or on top of itself.
   const { oldW, oldH } = syncWorldBox();
   if (oldW > 0 && oldH > 0) {
-    for (const b of world.bodies) { b.x *= world.w / oldW; b.y *= world.h / oldH; }
+    for (const b of world.bodies) {
+      b.x = Math.min(world.w - b.radius, Math.max(b.radius, b.x * world.w / oldW));
+      b.y = Math.min(world.h - b.radius, Math.max(b.radius, b.y * world.h / oldH));
+    }
   }
 });
 
@@ -1010,22 +1013,19 @@ function ensureFieldBuffers(w, h) {
   fieldImg = new ImageData(fieldPix, w, h);
 }
 
-// Every bond in the world as a world-space segment, including the wrapped copies
-// so a bond straddling an edge glows on both sides like the molecule does.
+// Every bond in the world as a world-space segment.
 function bondSegments() {
   const segs = [];
   for (const b of world.bodies) {
     const bright  = 1 + FLARE_GAIN * b.flare;
     const squeeze = 1 - FLARE_SQUEEZE * b.flare;
-    for (const [dx, dy] of wrapOffsets(b)) {
-      const at = bodyAtoms(b, dx, dy);
-      for (const [i, k] of b.bonds) {
-        segs.push({
-          x1: at[i].x, y1: at[i].y, x2: at[k].x, y2: at[k].y,
-          mag: bondEnergy(at[i].el, at[k].el) / BOND_ENERGY_MAX * bright,
-          squeeze,
-        });
-      }
+    const at = bodyAtoms(b);
+    for (const [i, k] of b.bonds) {
+      segs.push({
+        x1: at[i].x, y1: at[i].y, x2: at[k].x, y2: at[k].y,
+        mag: bondEnergy(at[i].el, at[k].el) / BOND_ENERGY_MAX * bright,
+        squeeze,
+      });
     }
   }
   return segs;
@@ -1159,6 +1159,77 @@ function glowSprite(rgb, R) {
   return c;
 }
 
+// ─── Nucleus — one proton, from the fission renderer ────────────────────────
+// Lifted from fission's drawParticles: the same pink sphere (#ff1a65 shell,
+// #ff80b0 core) with a white "+", shrunk to a dot in the middle of each atom.
+// One proton stands in for the whole nucleus — an oxygen really has eight, but
+// this is a marker saying "the positive charge lives here", not a count.
+//
+// Fission drew it live with a radial gradient and shadowBlur per particle.
+// shadowBlur in a per-atom path is what cost 8.3 ms a frame here, so the whole
+// thing — halo, sphere and "+" — is baked once into a sprite and blitted. The
+// blur happens at bake time, where paying for it once is fine.
+const NUCLEUS_DIAMETER = 10;      // px; dev slider
+let nucleusDiameter = NUCLEUS_DIAMETER;
+
+const _protonCache = new Map();
+function protonSprite(d) {
+  const key = d.toFixed(1);
+  let c = _protonCache.get(key);
+  if (c) return c;
+  const R = d / 2;
+  const pad = Math.ceil(R * 1.6);               // room for the halo
+  const size = Math.ceil(d + pad * 2);
+  c = document.createElement('canvas');
+  c.width = c.height = size;
+  const g = c.getContext('2d');
+  const m = size / 2;
+
+  // Shell, fading out at the rim
+  const shell = g.createRadialGradient(m, m, 0, m, m, R * 1.1);
+  shell.addColorStop(0,    '#ff1a65');
+  shell.addColorStop(0.82, '#ff1a65');
+  shell.addColorStop(1,    'rgba(0,0,0,0)');
+  g.fillStyle = shell;
+  g.beginPath(); g.arc(m, m, R * 1.1, 0, Math.PI * 2); g.fill();
+
+  // Bright core with its halo — the one shadowBlur, paid once per size
+  const core = g.createRadialGradient(m, m, 0, m, m, R);
+  core.addColorStop(0,   '#ff80b0');
+  core.addColorStop(0.5, '#ff80b0');
+  core.addColorStop(1,   'rgba(0,0,0,0)');
+  g.save();
+  g.shadowColor = '#ff80b0';
+  g.shadowBlur  = Math.max(3, R * 1.6);
+  g.globalAlpha = 0.82;
+  g.fillStyle = core;
+  g.beginPath(); g.arc(m, m, R, 0, Math.PI * 2); g.fill();
+  g.restore();
+
+  // The "+" that marks it positive. Below about 4 px it is a smudge, so at that
+  // size it is left off rather than drawn as noise.
+  if (d >= 8) {
+    g.fillStyle = 'rgba(255,255,255,0.88)';
+    g.font = `bold ${Math.max(6, Math.round(d * 1.1))}px Lexend, sans-serif`;
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillText('+', m, m + d * 0.1);
+  }
+
+  _protonCache.set(key, c);
+  return c;
+}
+
+function drawNucleus(dc, px, py, scale = 1, alpha = 1) {
+  const d = nucleusDiameter * scale;
+  if (d < 1.5) return;
+  const sp = protonSprite(d);
+  dc.save();
+  dc.globalAlpha = alpha;
+  dc.drawImage(sp, px - sp.width / 2, py - sp.height / 2);
+  dc.restore();
+}
+
 // Where the arrowhead is right now. Driven by the wall clock, not sim time, so
 // the atoms keep tracing while the sim is paused. The per-atom offset stops
 // every atom in the world marching in lockstep.
@@ -1211,6 +1282,7 @@ function drawAtom(dc, px, py, p, radiusScale = 1, alphaScale = 1) {
   dc.fill();
 
   dc.restore();
+  drawNucleus(dc, px, py, radiusScale, alphaScale);
 }
 
 function drawAtoms(atoms, radiusScale = 1, drawCtx = ctx) {
@@ -1245,10 +1317,13 @@ function zoomFromSlider(v) {
 }
 
 // ─── World ────────────────────────────────────────────────────────────────────
-// A wrap-around ("asteroids") box the size of the canvas. Molecules are rigid
-// bodies: they translate, spin, and bounce elastically off one another. There
-// are no walls — anything leaving one edge comes back on the opposite one, and
-// a body straddling an edge is drawn on both sides.
+// A walled box filling the canvas between the toolbar and the energy bar.
+// Molecules are rigid bodies: they translate, spin, and bounce elastically off
+// one another and off the four walls.
+//
+// (This was a wrap-around "asteroids" box until walls replaced it. The wrap
+// helpers it needed — wrapDelta for minimum-image collisions, wrapOffsets for
+// drawing a body on both sides of an edge — are gone; git has them.)
 let viewZoom = 1.0;
 let showAtoms = true;
 let running = false;
@@ -1430,17 +1505,17 @@ function spawnWorld() {
     // Try for a spot clear of everything already down; after enough tries take
     // what we can get rather than loop forever in a crowded world.
     for (let attempt = 0; attempt < 400; attempt++) {
-      const b = makeBody(els,
-        Math.random() * world.w,
-        Math.random() * world.h,
+      const b = makeBody(els, 0, 0,
         Math.random() * Math.PI * 2,
         spreadSpeed(speed),
         truncNormal() * SPIN_SIGMA * 4.8,    // same bell, signed — spin either way
         speed);
-      const clear = world.bodies.every(o => {
-        const [dx, dy] = wrapDelta(o.x - b.x, o.y - b.y);
-        return Math.hypot(dx, dy) > (o.radius + b.radius) * 1.35;
-      });
+      // Placed clear of the walls, so nothing starts the run already embedded
+      // in one and gets shoved out on the first step.
+      b.x = b.radius + Math.random() * Math.max(1, world.w - 2 * b.radius);
+      b.y = b.radius + Math.random() * Math.max(1, world.h - 2 * b.radius);
+      const clear = world.bodies.every(o =>
+        Math.hypot(o.x - b.x, o.y - b.y) > (o.radius + b.radius) * 1.35);
       placed = b;
       if (clear) break;
     }
@@ -1452,14 +1527,6 @@ function spawnWorld() {
   updateSpeciesCounters();
 }
 
-// Shortest offset between two points in a wrap-around box ("minimum image")
-function wrapDelta(dx, dy) {
-  const W = world.w, H = world.h;
-  if (dx >  W / 2) dx -= W; else if (dx < -W / 2) dx += W;
-  if (dy >  H / 2) dy -= H; else if (dy < -H / 2) dy += H;
-  return [dx, dy];
-}
-
 // ─── Physics ──────────────────────────────────────────────────────────────────
 const RESTITUTION = 1.0;   // 1 = perfectly elastic: total kinetic energy is conserved
 
@@ -1469,8 +1536,7 @@ function stepWorld(dt) {
     b.x += b.vx * dt;
     b.y += b.vy * dt;
     b.angle += b.spin * dt;
-    b.x = ((b.x % world.w) + world.w) % world.w;
-    b.y = ((b.y % world.h) + world.h) % world.h;
+    collideWalls(b);
     if (b.flare > 1e-4) b.flare *= Math.exp(-dt / FLARE_TAU); else b.flare = 0;
   }
   world.time += dt;
@@ -1531,6 +1597,34 @@ function softBand(v, vMin, vMax) {
   return v;
 }
 
+// A wall is not a partner that can take the surplus, so a bounce is settled
+// against the body's own spin. That is less room than settlePairSpeeds has, and
+// when there is not enough the shortfall is counted in the same two totals.
+function settleBodySpeed(b) {
+  if (!speedBandOn) return;
+  const v = Math.hypot(b.vx, b.vy);
+  if (v < 1e-9) return;
+  const target = softBand(v, b.vTarget * (1 - SPEED_SIGMA), b.vTarget * (1 + SPEED_SIGMA));
+  if (target === v) return;
+
+  const E0 = 0.5 * b.mass * v * v + 0.5 * b.inertia * b.spin * b.spin;
+  const k = target / v;
+  b.vx *= k; b.vy *= k;
+  const rotBudget = E0 - 0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy);
+
+  if (rotBudget < 0) {                      // floor costs more than the body owns
+    b.spin = 0;
+    energyCreated += -rotBudget;
+    floorTopUps++;
+    return;
+  }
+  let e = rotBudget;
+  const cap = 0.5 * b.inertia * MAX_SPIN * MAX_SPIN;
+  if (e > cap) { e = cap; spinCapHits++; }
+  const dir = b.spin !== 0 ? Math.sign(b.spin) : (Math.random() < 0.5 ? -1 : 1);
+  b.spin = dir * Math.sqrt(2 * e / b.inertia);
+}
+
 function settlePairSpeeds(A, B) {
   if (!speedBandOn) return;
   const pair = [A, B];
@@ -1579,8 +1673,50 @@ function settlePairSpeeds(A, B) {
   });
 }
 
+// ─── Walls ────────────────────────────────────────────────────────────────────
+// Perfectly elastic: a molecule leaves with exactly the energy it arrived with.
+//
+// The contact is at the ATOM that reaches the wall, not at the molecule's
+// centre, so the same rigid-body impulse runs as for a molecule-molecule hit and
+// a corner-on bounce sets the molecule spinning. Hitting a wall square on, with
+// the bond axis along the normal, produces no spin at all — same as a head-on
+// collision, and for the same reason: no torque arm.
+const WALL_RESTITUTION = 1.0;
+
+function wallImpulse(b, rx, ry, nx, ny, depth) {
+  const [vx, vy] = pointVel(b, rx, ry);
+  const vn = vx * nx + vy * ny;
+  if (vn < 0) {                             // moving into the wall, not already leaving
+    const rn = rx * ny - ry * nx;
+    const invMassSum = 1 / b.mass + rn * rn / b.inertia;
+    const jImp = -(1 + WALL_RESTITUTION) * vn / invMassSum;
+    b.vx += jImp * nx / b.mass;
+    b.vy += jImp * ny / b.mass;
+    b.spin += rn * jImp / b.inertia;
+    b.flare = Math.min(1, b.flare + jImp / (b.mass * Math.max(1, b.vTarget)));
+    settleBodySpeed(b);
+  }
+  b.x += nx * depth;                        // lift clear so it cannot stick
+  b.y += ny * depth;
+}
+
+// Each atom is tested against all four walls. b.x moves as contacts resolve, so
+// the atom's world position is recomputed for every one of them — a molecule in
+// a corner is touching two walls at once.
+function collideWalls(b) {
+  const ca = Math.cos(b.angle), sa = Math.sin(b.angle);
+  for (const at of b.atoms) {
+    const rx = at.lx * ca - at.ly * sa, ry = at.lx * sa + at.ly * ca;
+    let d;
+    if ((d = at.r - (b.x + rx))           > 0) wallImpulse(b, rx, ry,  1,  0, d);
+    if ((d = (b.x + rx) + at.r - world.w) > 0) wallImpulse(b, rx, ry, -1,  0, d);
+    if ((d = at.r - (b.y + ry))           > 0) wallImpulse(b, rx, ry,  0,  1, d);
+    if ((d = (b.y + ry) + at.r - world.h) > 0) wallImpulse(b, rx, ry,  0, -1, d);
+  }
+}
+
 function collidePair(A, B) {
-  const [cdx, cdy] = wrapDelta(B.x - A.x, B.y - A.y);
+  const cdx = B.x - A.x, cdy = B.y - A.y;
   if (Math.hypot(cdx, cdy) > A.radius + B.radius) return;   // broad phase
 
   const ca = Math.cos(A.angle), sa = Math.sin(A.angle);
@@ -1835,22 +1971,20 @@ toolbarIconLoop(0);
 drawOutlineIcon();
 
 // ─── Renderer ─────────────────────────────────────────────────────────────────
-// Each body is drawn in up to four places: its own position plus a copy shifted
-// by a full world width/height whenever it overhangs an edge. That is what makes
-// a molecule look continuous as it wraps rather than popping across the screen.
-function wrapOffsets(b) {
-  const offs = [[0, 0]];
-  const nearL = b.x - b.radius < 0,        nearR = b.x + b.radius > world.w;
-  const nearT = b.y - b.radius < 0,        nearB = b.y + b.radius > world.h;
-  if (nearL) offs.push([ world.w, 0]);
-  if (nearR) offs.push([-world.w, 0]);
-  if (nearT) offs.push([0,  world.h]);
-  if (nearB) offs.push([0, -world.h]);
-  if (nearL && nearT) offs.push([ world.w,  world.h]);
-  if (nearL && nearB) offs.push([ world.w, -world.h]);
-  if (nearR && nearT) offs.push([-world.w,  world.h]);
-  if (nearR && nearB) offs.push([-world.w, -world.h]);
-  return offs;
+// One body, one place. The wrap-around world drew up to four copies of anything
+// overhanging an edge; with walls a molecule can never straddle one.
+// The four walls. At zoom 1 the box lines up with the toolbar, the energy bar
+// and the screen edges, so this is barely visible and barely needed — but zoomed
+// out there is empty canvas beyond it, and without a line the molecules look
+// like they are bouncing off nothing. Kept faint on purpose; delete the call in
+// drawWorld if it reads as clutter.
+function drawWalls() {
+  const LIGHT = document.body.classList.contains('screenshot-mode');
+  ctx.save();
+  ctx.strokeStyle = LIGHT ? 'rgba(0,0,0,0.22)' : 'rgba(150,190,255,0.16)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(0.5, 0.5, world.w - 1, world.h - 1);
+  ctx.restore();
 }
 
 function drawWorld() {
@@ -1864,13 +1998,18 @@ function drawWorld() {
   ctx.scale(viewZoom, viewZoom);
   ctx.translate(-world.w / 2, -world.h / 2);
 
+  drawWalls();
   if (document.getElementById('showFields').checked) drawFieldHeatmap(ctx);
 
   for (const b of world.bodies) {
-    for (const [dx, dy] of wrapOffsets(b)) {
-      const atoms = bodyAtoms(b, dx, dy);
-      if (showAtoms) drawAtoms(atoms);
-      else               drawMoleculeOutline(atoms);
+    const atoms = bodyAtoms(b);
+    if (showAtoms) {
+      drawAtoms(atoms);                     // drawAtom puts the nucleus in itself
+    } else {
+      drawMoleculeOutline(atoms);
+      // In outline view the atoms merge into one silhouette, so the nuclei are
+      // what say how many atoms it is made of.
+      for (const p of atoms) drawNucleus(ctx, p.x, p.y);
     }
   }
 
@@ -2138,6 +2277,7 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
     row('devTrail', 'Trail length', 0.1, 1, 0.02, ATOM_TRAIL_DEFAULT,  '#ff3a8a') +
     row('devOrbit', 'Arrow speed',  0.05, 3, 0.05, ATOM_ORBIT_DEFAULT, '#ff3a8a') +
+    row('devNucleus', 'Nucleus size', 0, 24, 1, NUCLEUS_DIAMETER, '#ff80b0') +
     '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
     '<div style="font-size:9px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.4;margin-top:8px;">' +
       'Energy in fields</div>' +
@@ -2174,6 +2314,7 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   bind('devO2',    v => composition.O2 = v, true);
   bind('devTrail', v => atomTrail      = v, false, v => v.toFixed(2));
   bind('devOrbit', v => atomOrbitSpeed = v, false, v => v.toFixed(2));
+  bind('devNucleus', v => nucleusDiameter = v, false, v => v + ' px');
   // The field look was dialled in against the picture, so it stays adjustable
   bind('devLobeW',    v => FIELD_WIDTH = v, false, v => v.toFixed(2));
   bind('devLobeGain', v => FIELD_GAIN  = v, false, v => v.toFixed(1));
