@@ -85,49 +85,33 @@ just showing through.
 let sphereOpacity = 0.80;   // 1 = solid; 0.80 is "20% transparent"
 ```
 
-**Nothing here is lit.** No highlight, no light direction. An earlier version
-gave each atom a radial gradient offset up-and-left to read as a ball, and it
-was wrong twice over: it looked like a reflection, and it made the front atom
-visibly occlude the one behind it.
+Each atom draws itself in three small steps, all inside the layer:
 
-### The depth
+1. the element's flat colour
+2. **limb darkening** — a gentle fade to dark at the rim, centred a little up
+   and left. No specular highlight and no bright side; just enough falloff to
+   say "ball" rather than "disc".
+3. **its own full circle, outlined.** This is what makes an overlap read as a
+   *line*: each atom keeps its own edge, so two atoms meeting show the arc
+   where they cross.
 
-`drawMoleculeDepth` darkens inward from the **molecule's** silhouette rather
-than from each atom's, which is what keeps it classy: no light direction, and
-no edge where one atom crosses another. It is the shape's own outline shaded
-inward — flat across the middle, falling off at the rim, the way an evenly lit
-solid looks. The waist pinches where two atoms meet because that is genuinely
-where the shape is thinnest.
+```javascript
+let sphereDepth = 0.40;   // limb darkening + edge strength; 0 = flat discs
+```
 
-Two things it needed to not look cheap:
+Two earlier versions were wrong, in opposite directions:
 
-- **Many thin passes, not a few thick ones.** Fourteen identical faint strokes
-  at increasing widths, so a point's darkness is just how many passes reached
-  it — a linear ramp. Three heavy passes gave three visible contour rings.
-- **Round line caps.** Each silhouette run ends where it dives into the next
-  atom, and a butt cap on a stroke that wide cuts a straight edge across the
-  interior. Adjacent runs share that endpoint, so round caps blend.
+- A **per-atom radial gradient offset up-and-left** to read as a lit ball. It
+  looked like a reflection, and the front atom hard-occluded the one behind it.
+- Darkening inward from the **molecule's** silhouette instead, which removed
+  the light direction and the occlusion — but with no per-atom edge left, two
+  atoms melted into one blob with a pinched waist instead of showing where they
+  cross. (That version also needed 14 thin passes to avoid contour banding, and
+  round line caps so the run ends did not cut a crease across the interior.)
 
-`sphereDepth` is a dev slider; 0 gives the flat look back.
-
-Flat colour is also what removes the occlusion. Two atoms of the same element
-drawn opaque into the layer merge into one shape with **no seam and no edge**
-where they cross, because there is nothing to tell them apart — measured, the
-colour is identical from one nucleus to the other straight across the overlap.
-Where two *different* elements overlap there is still a colour boundary; that
-is unavoidable, and it is a boundary between materials rather than one sphere
-in front of another.
-
-**The spheres go into a scratch layer at full opacity and the whole layer is
-blitted once at `sphereOpacity`.** Drawing them straight onto the scene would
-composite every overlap twice, so each place two atoms meet would come out
-darker than the rest and the molecule would look seamed rather than solid.
-`_sphereCtx.setTransform(ctx.getTransform())` copies the world zoom onto the
-layer, so the blit lands exactly where the scene expects it.
-
-Nuclei are drawn **before** the layer, so what shows through each is exactly
-`1 - sphereOpacity`. That is the "slightly visible" part, and it is why the
-order matters.
+The answer is per-atom again, but *subtle*: the shading is mild enough that the
+crossing arc, not the shading, is what you read. Measured across an O₂ overlap,
+the crossing line dips the red channel 183 → 144 and recovers.
 
 `drawMoleculeRim` strokes the union silhouette for definition — each atom circle
 only where it is not buried inside another, so overlapping atoms read as one
@@ -135,9 +119,8 @@ outline rather than a pile of rings. It is a thin line, **not a glow**: the old
 version used `shadowBlur`, which is the per-atom cost this project has been
 bitten by before.
 
-Cheaper than the electron view: measured at 18 bodies, **1.06 ms** whole frame
-against ~3.0 ms for the electron view. The depth passes are most of it — with
-`sphereDepth` at 0 the view costs 0.47 ms.
+Cheaper than the electron view: measured at 18 bodies, **0.81 ms** whole frame
+(0.56 of it the discs) against ~3.0 ms for the electron view.
 
 Opacity is a dev slider.
 

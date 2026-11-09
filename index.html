@@ -1125,19 +1125,36 @@ let sphereOpacity = 0.80;      // 1 = solid; 0.80 is "20% transparent\"
 const _sphereLayer = document.createElement('canvas');
 const _sphereCtx   = _sphereLayer.getContext('2d');
 
-// One atom: a flat disc of the element's colour. No gradient, no highlight, no
-// shading of any kind — this is a layer of matter, not a lit ball.
+// One atom, as a sphere. Three strokes of work, all of them small:
 //
-// Flat colour is also what removes the "in front" problem. Two atoms of the
-// same element drawn opaque into the layer merge into one shape with no seam
-// and no edge where one crosses the other, because there is nothing to tell
-// them apart. (Where two DIFFERENT elements overlap there is still a colour
-// boundary — unavoidable, and a boundary between materials rather than one
-// sphere occluding another.)
+//   1. the element's flat colour
+//   2. limb darkening — a gentle fade to dark at the rim, centred a little up
+//      and left. No specular highlight and no bright side; just enough falloff
+//      to say "ball" instead of "disc".
+//   3. its own full circle, outlined. This is the bit that makes an overlap
+//      read as a LINE: each atom keeps its own edge, so two atoms meeting show
+//      the arc where they cross instead of melting into one pinched blob.
 function drawSphere(c, p) {
   const e = elemOf(p);
+  const r = ATOM_RADIUS * e.rScale;
+  const TAU = Math.PI * 2;
+
   c.fillStyle = rgba(e.rgb, 1);
-  c.beginPath(); c.arc(p.x, p.y, ATOM_RADIUS * e.rScale, 0, Math.PI * 2); c.fill();
+  c.beginPath(); c.arc(p.x, p.y, r, 0, TAU); c.fill();
+
+  if (sphereDepth > 0) {
+    const g = c.createRadialGradient(p.x - r * 0.22, p.y - r * 0.22, r * 0.20,
+                                     p.x, p.y, r * 1.02);
+    g.addColorStop(0,    'rgba(0,0,0,0)');
+    g.addColorStop(0.60, `rgba(0,0,0,${(0.08 * sphereDepth).toFixed(3)})`);
+    g.addColorStop(1,    `rgba(0,0,0,${(0.52 * sphereDepth).toFixed(3)})`);
+    c.fillStyle = g;
+    c.beginPath(); c.arc(p.x, p.y, r, 0, TAU); c.fill();
+  }
+
+  c.strokeStyle = `rgba(0,0,0,${(0.30 + 0.25 * sphereDepth).toFixed(3)})`;
+  c.lineWidth   = 1.2;
+  c.beginPath(); c.arc(p.x, p.y, r, 0, TAU); c.stroke();
 }
 
 function atomCircles(atoms) {
@@ -1172,40 +1189,9 @@ function strokeRuns(c, runs) {
   for (const r of runs) { c.beginPath(); c.arc(r.x, r.y, r.r, r.a0, r.a1); c.stroke(); }
 }
 
-// Just enough 3D. The shading runs inward from the MOLECULE's silhouette, not
-// from each atom's, so there is no light direction and no edge where one atom
-// crosses another — the two things that made the gradient version wrong.
-//
-// It is the shape's own outline darkened inward, which is what an evenly lit
-// solid looks like: flat across the middle, falling off at the rim. The strokes
-// are clipped to the union, so only their inner halves land.
-let sphereDepth = 0.40;      // 0 = perfectly flat
-
-function drawMoleculeDepth(c, circles, runs) {
-  if (sphereDepth <= 0) return;
-  const path = new Path2D();
-  for (const a of circles) {
-    path.moveTo(a.x + a.r, a.y);               // or the arcs chain into each other
-    path.arc(a.x, a.y, a.r, 0, Math.PI * 2);
-  }
-  c.save();
-  c.clip(path);
-  // Round, not butt. Each run ends where the silhouette dives into the next
-  // atom, and a butt cap on a stroke this wide cuts a straight edge across the
-  // interior there. Adjacent runs share that endpoint, so round caps blend.
-  c.lineCap = 'round';
-  // Many thin passes, not a few thick ones. Each pass is the same faint stroke
-  // at a different width, so a point's darkness is just how many passes reached
-  // it — a linear ramp inward from the edge. Three heavy passes gave three
-  // visible contour rings; this is a gradient.
-  const N = 14;
-  c.strokeStyle = `rgba(0,0,0,${(0.055 * sphereDepth).toFixed(4)})`;
-  for (let i = 1; i <= N; i++) {
-    c.lineWidth = ATOM_RADIUS * 1.15 * (i / N);   // half of it lies outside the clip
-    strokeRuns(c, runs);
-  }
-  c.restore();
-}
+// How much the spheres are modelled: limb darkening and edge strength. 0 is a
+// perfectly flat disc.
+let sphereDepth = 0.40;
 
 // A thin rim for definition. No glow: shadowBlur in a per-atom path is what
 // cost 8.3 ms a frame here.
@@ -1236,10 +1222,9 @@ function drawSpaceFilling() {
     const circles = atomCircles(atoms);
     const runs = silhouetteRuns(circles);
     runsFor.push(runs);
+    // Each atom shades and outlines itself, inside the layer, so all of it is
+    // covered by the same uniform alpha as the matter it belongs to.
     for (const p of atoms) drawSphere(_sphereCtx, p);
-    // Shaded inside the layer, so the depth is covered by the same uniform
-    // alpha as the matter it belongs to.
-    drawMoleculeDepth(_sphereCtx, circles, runs);
   }
 
   ctx.save();
