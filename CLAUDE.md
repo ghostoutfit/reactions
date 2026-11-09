@@ -67,6 +67,32 @@ const ATOMIC_MASS = { H: 1, O: 16 };
 does not cram one species into the gaps the other left, then places each at a
 random position, heading and spin — retrying up to 400 times for a clear spot.
 
+### Spawn speed spread
+
+Speeds come from a standard normal **truncated to ±1σ** (`spreadSpeed`), so the
+fastest and slowest molecules sit one standard deviation either side of the
+peak. Rejection, not clamping — clamping would pile molecules onto the two end
+values, putting bumps exactly where the distribution should be thinnest.
+`SPEED_SIGMA` = 0.25, so the bounds are the mean ±25%. Spin uses the same bell,
+signed.
+
+Note the bounds are ±1σ of the *generating* normal. Truncating at ±1 leaves the
+sample with a realised sd of about 0.54σ, so the bounds sit ~1.84 realised sd
+out. Bounds at exactly 1 realised sd is not achievable by any bell: for support
+±h the sd cannot exceed h, and reaches it only when all the mass is on the two
+endpoints.
+
+**The spawn shape does not last.** Elastic collisions thermalise the world to a
+right-skewed Maxwell–Boltzmann (Rayleigh, in 2D) distribution within about five
+seconds even at 6+6, and it then holds steady — measured cv 0.13 at spawn, 0.48
+at 5 s, 0.52 at 20 s and 60 s. That is the physically correct equilibrium and
+the sim reaches it on its own; the Gaussian is only the initial condition.
+Making the bell persist would need periodic velocity rescaling, which is not
+physical.
+
+`speedHistogram()` in the console prints mean, sd, cv, bounds and an ASCII
+histogram per species — run it right after a spawn and again after a minute.
+
 **Heavier molecules start slower** — `equipartition`, a dev checkbox, on by
 default. `speciesSpeed` scales the dial by `sqrt(m_H2 / m)`, so every species
 begins with the same kinetic energy, as a real gas mixture at one temperature
