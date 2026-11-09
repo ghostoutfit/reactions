@@ -1340,7 +1340,7 @@ let nextBodyId = 0;
 // Build a rigid body from a list of element symbols. Atom positions are stored
 // once in body-local coordinates; world positions are derived each frame from
 // (x, y, angle), so the molecule can never stretch or come apart.
-function makeBody(els, x, y, heading, speed, spin) {
+function makeBody(els, x, y, heading, speed, spin, nominal = speed) {
   const offs = [0];
   for (let k = 1; k < els.length; k++) offs.push(offs[k - 1] + bondLen(els[k - 1], els[k]));
   const mid = (offs[0] + offs[offs.length - 1]) / 2;
@@ -1360,6 +1360,7 @@ function makeBody(els, x, y, heading, speed, spin) {
   return {
     id: nextBodyId++,
     els, atoms, mass, inertia,
+    vTarget: nominal,        // nominal speed for this species, tracks temp + dial
     x, y,
     vx: Math.cos(heading) * speed,
     vy: Math.sin(heading) * speed,
@@ -1424,7 +1425,7 @@ function stepTemperature(rawDt) {
   if (Math.abs(tempTarget - tempCurrent) < 1e-4) { tempCurrent = tempTarget; return; }
   const next = tempCurrent + (tempTarget - tempCurrent) * (1 - Math.exp(-rawDt / TEMP_TAU));
   const k = next / tempCurrent;
-  for (const b of world.bodies) { b.vx *= k; b.vy *= k; b.spin *= k; }
+  for (const b of world.bodies) { b.vx *= k; b.vy *= k; b.spin *= k; b.vTarget *= k; }
   tempCurrent = next;
 }
 
@@ -1462,6 +1463,33 @@ function spreadSpeed(mean) {
 // Console diagnostic: how the speeds actually came out, per species.
 // `speedHistogram()` after a spawn shows the intended shape; after a run it
 // shows what the collisions have made of it.
+// Console diagnostic: how the world's energy is split between moving and
+// spinning, and how often the band could not be enforced without a real
+// energy change.
+window.energySplit = function () {
+  let trans = 0, rot = 0, outOfBand = 0;
+  for (const b of world.bodies) {
+    trans += 0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy);
+    rot   += 0.5 * b.inertia * b.spin * b.spin;
+    const v = Math.hypot(b.vx, b.vy);
+    if (v < b.vTarget * (1 - SPEED_SIGMA) - 0.5 ||
+        v > b.vTarget * (1 + SPEED_SIGMA) + 0.5) outOfBand++;
+  }
+  const total = trans + rot;
+  console.table([
+    { part: 'translation', energy: +trans.toFixed(0), share: +(trans / total * 100).toFixed(1) + '%' },
+    { part: 'rotation',    energy: +rot.toFixed(0),   share: +(rot   / total * 100).toFixed(1) + '%' },
+    { part: 'total',       energy: +total.toFixed(0), share: '100%' },
+  ]);
+  console.log('band ' + (clampSpeeds ? 'on' : 'off') +
+    ' \u00b1' + Math.round(SPEED_SIGMA * 100) + '%  |  out of band now: ' + outOfBand + '/' + world.bodies.length +
+    '  |  spin capped ' + clampOverflowCount + '\u00d7, floor topped up ' + clampUnderflowCount + '\u00d7' +
+    ' (+' + (clampCreatedEnergy / Math.max(1, egRef) * 100).toFixed(1) + '% of spawn energy created)' +
+    '  |  vs energy at spawn: ' + (total / egRef * 100).toFixed(1) + '%');
+  return { trans: +trans.toFixed(0), rot: +rot.toFixed(0), outOfBand,
+           overflow: clampOverflowCount, underflow: clampUnderflowCount };
+};
+
 window.speedHistogram = function (bins = 9) {
   const byType = new Map();
   for (const b of world.bodies) {
@@ -1525,7 +1553,8 @@ function spawnWorld() {
         Math.random() * world.h,
         Math.random() * Math.PI * 2,
         spreadSpeed(speed),
-        truncNormal() * SPIN_SIGMA * 4.8);   // same bell, signed — spin either way
+        truncNormal() * SPIN_SIGMA * 4.8,    // same bell, signed — spin either way
+        speed);
       const clear = world.bodies.every(o => {
         const [dx, dy] = wrapDelta(o.x - b.x, o.y - b.y);
         return Math.hypot(dx, dy) > (o.radius + b.radius) * 1.35;
@@ -1535,6 +1564,7 @@ function spawnWorld() {
     }
     world.bodies.push(placed);
   }
+  clampOverflowCount = 0; clampUnderflowCount = 0; clampCreatedEnergy = 0;
   lastDialSpeed = launchSpeed() * tempCurrent;
   resetEnergyTrace();
   updateParticleCounters();
@@ -1574,6 +1604,96 @@ function stepWorld(dt) {
 // In 2D the cross product ω × r is (-ω·ry, ω·rx).
 function pointVel(b, rx, ry) {
   return [b.vx - b.spin * ry, b.vy + b.spin * rx];
+}
+
+// ─── Speed band ───────────────────────────────────────────────────────────────
+// Deliberately not pure physics. A molecule leaving a collision is held inside
+// the same ±SPEED_SIGMA band the spawn uses, so nothing ends up crawling across
+// the screen or streaking off it.
+//
+// The energy that takes is not discarded — it moves between translation and
+// rotation. Too fast and the surplus is spun up; too slow and the shortfall is
+// paid for out of the spin. Rotation is the reservoir that lets the band be
+// enforced while the body's total kinetic energy stays exactly what the
+// collision gave it. Only when the spin would exceed MAX_SPIN, or when there is
+// not enough spin to buy the speed-up, does any energy actually change.
+let clampSpeeds = true;        // dev toggle
+let MAX_SPIN    = 14;          // rad/s — past this it is a blur, not a spin
+let clampOverflowCount = 0;    // diagnostics: times the reservoir could not take it
+let clampUnderflowCount = 0;
+let clampCreatedEnergy = 0;   // energy conjured to hold the floor
+
+// Settled across the colliding pair, not one body at a time. A slow molecule
+// usually has little spin of its own to spend, but the molecule it just hit is
+// normally the fast one — so the pair is the natural place to balance the books.
+//
+// The pair's total energy is measured first, translation is pulled into band,
+// and whatever is left over is what the two spins are set to carry. That
+// conserves the pair's energy exactly by construction; the only leaks are the
+// spin cap and the case where the floor costs more than the pair has.
+// Soft knee. A hard clamp parks every out-of-range molecule on the boundary —
+// measured, 40% of the population ended up at exactly the floor speed, which is
+// the same pile-up the spawn sampler goes out of its way to avoid.
+//
+// Instead the outer KNEE fraction of each half-band is compressed: speeds below
+// it pass through untouched, speeds above it approach the limit asymptotically
+// and never reach it. Continuous at the knee, monotonic, strictly bounded.
+const KNEE = 0.35;
+
+function softBand(v, vMin, vMax) {
+  const d = (vMax - vMin) / 2 * KNEE;
+  if (d <= 0) return v;
+  if (v > vMax - d) return vMax - d * Math.exp(-(v - (vMax - d)) / d);
+  if (v < vMin + d) return vMin + d * Math.exp(-((vMin + d) - v) / d);
+  return v;
+}
+
+function rebalancePair(A, B) {
+  if (!clampSpeeds) return;
+  const pair = [A, B];
+  const E0 = pair.reduce((a, b) =>
+    a + 0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy)
+      + 0.5 * b.inertia * b.spin * b.spin, 0);
+
+  // 1. Pull each body's speed into its own band
+  let changed = false;
+  for (const b of pair) {
+    const v = Math.hypot(b.vx, b.vy);
+    if (v < 1e-9) continue;
+    const target = softBand(v, b.vTarget * (1 - SPEED_SIGMA), b.vTarget * (1 + SPEED_SIGMA));
+    if (target === v) continue;
+    const k = target / v;
+    b.vx *= k; b.vy *= k;
+    changed = true;
+  }
+  if (!changed) return;
+
+  // 2. Everything the pair has that translation is not using belongs to spin
+  const trans = pair.reduce((a, b) => a + 0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy), 0);
+  const rotBudget = E0 - trans;
+
+  if (rotBudget < 0) {
+    // The floor costs more than the pair owns — both are slow and neither has
+    // spin left to sell. The band wins anyway: the speeds stand and the pair
+    // gains the shortfall out of nowhere. This is the one place the sim creates
+    // energy, it is counted, and `energySplit()` reports it.
+    for (const b of pair) b.spin = 0;
+    clampCreatedEnergy += -rotBudget;
+    clampUnderflowCount++;
+    return;
+  }
+
+  // 3. Hand the budget to the two spins, keeping their ratio and directions so
+  //    the character of the collision survives being rebalanced.
+  const rotNow = pair.map(b => 0.5 * b.inertia * b.spin * b.spin);
+  const rotSum = rotNow[0] + rotNow[1];
+  pair.forEach((b, i) => {
+    let e = rotBudget * (rotSum > 1e-12 ? rotNow[i] / rotSum : 0.5);
+    const cap = 0.5 * b.inertia * MAX_SPIN * MAX_SPIN;
+    if (e > cap) { e = cap; clampOverflowCount++; }   // the one place energy leaves
+    const dir = b.spin !== 0 ? Math.sign(b.spin) : (Math.random() < 0.5 ? -1 : 1);
+    b.spin = dir * Math.sqrt(2 * e / b.inertia);
+  });
 }
 
 function collidePair(A, B) {
@@ -1620,6 +1740,8 @@ function collidePair(A, B) {
       const push = overlap / (1 / A.mass + 1 / B.mass) * 0.8;
       A.x -= push * nx / A.mass;  A.y -= push * ny / A.mass;
       B.x += push * nx / B.mass;  B.y += push * ny / B.mass;
+
+      rebalancePair(A, B);
       return;   // one contact per pair per frame keeps the response stable
     }
   }
@@ -2007,8 +2129,18 @@ function drawEnergyGraph() {
 function updateEnergyPct() {
   const el = document.getElementById('energyPctKE');
   if (!el) return;
-  const ke = totalKineticEnergy();
-  el.textContent = Math.round(ke / egRef * 100) + '%';
+  el.textContent = Math.round(totalKineticEnergy() / egRef * 100) + '%';
+}
+
+// With the band off the graph is a correctness check — a flat line means the
+// collision solver conserves energy. With the band on it is not: holding the
+// floor adds energy, so the line climbs and then plateaus. Say which it is.
+function updateEnergyNote() {
+  const el = document.getElementById('energyPctNote');
+  if (!el) return;
+  el.textContent = clampSpeeds
+    ? 'Speed band on \u2014 energy of motion drifts up, then levels off'
+    : 'Total energy of motion, relative to the start';
 }
 
 // ─── Controls ─────────────────────────────────────────────────────────────────
@@ -2036,7 +2168,7 @@ document.getElementById('neutronSpeed').addEventListener('input', function () {
   const target = launchSpeed() * tempCurrent;
   if (lastDialSpeed > 0) {
     const k = target / lastDialSpeed;
-    for (const b of world.bodies) { b.vx *= k; b.vy *= k; b.spin *= k; }
+    for (const b of world.bodies) { b.vx *= k; b.vy *= k; b.spin *= k; b.vTarget *= k; }
   }
   lastDialSpeed = target;
   resetEnergyTrace();
@@ -2141,6 +2273,11 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
       '<span>Heavy molecules start slower</span>' +
     '</label>' +
     '<div id="devEquiNote" style="opacity:0.45;font-size:10px;margin-left:21px;"></div>' +
+    '<label style="display:flex;align-items:center;gap:7px;margin:9px 0 2px;cursor:pointer;">' +
+      '<input type="checkbox" id="devClamp" checked style="margin:0">' +
+      '<span>Hold speeds in the band</span>' +
+    '</label>' +
+    '<div id="devClampNote" style="opacity:0.45;font-size:10px;margin-left:21px;"></div>' +
     '<div style="margin-top:10px;opacity:0.45;font-size:10px;">' +
       'Restitution ' + RESTITUTION.toFixed(2) + ' \u2014 collisions are elastic</div>';
   document.body.appendChild(panel);
@@ -2176,6 +2313,23 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     syncEquiNote();
     spawnWorld();
     logAction('Equipartition ' + (equipartition ? 'on' : 'off'));
+  });
+
+  // Speed band on/off — off is the pure elastic result
+  const clamp = panel.querySelector('#devClamp');
+  const clampNote = panel.querySelector('#devClampNote');
+  const syncClampNote = () => {
+    clampNote.textContent = clampSpeeds
+      ? '\u00b1' + Math.round(SPEED_SIGMA * 100) + '% of nominal; surplus goes to spin'
+      : 'Pure elastic \u2014 speeds free to run away';
+  };
+  clamp.checked = clampSpeeds;
+  syncClampNote();
+  clamp.addEventListener('change', () => {
+    clampSpeeds = clamp.checked;
+    syncClampNote();
+    updateEnergyNote();
+    logAction('Speed band ' + (clampSpeeds ? 'on' : 'off'));
   });
 
   let buf = '';
@@ -2263,6 +2417,7 @@ applyTheme('A');
 setParticleWheelActive(document.querySelector('.awheel-item[data-pmode="particles"]'));
 drawSpeedLines();
 updateGraphBtn();
+updateEnergyNote();
 document.getElementById('scrubBar').classList.add('visible');
 spawnWorld();
 startWorldLoop();        // the loop draws even while paused, so the world is visible at rest

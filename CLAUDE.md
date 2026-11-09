@@ -145,6 +145,47 @@ Atom-against-atom, resolved as a 2D rigid-body impulse with rotation
 (`collidePair`). The rotational terms are what make a glancing hit set a
 molecule spinning instead of just shoving it sideways.
 
+**Rotation is a full energy channel**, and always has been — measured, a
+glancing hit puts 62% of the pair's kinetic energy into spin, an oblique one
+57%, and a perfectly head-on one 0% (no torque arm). Nothing special was needed
+to "add" it.
+
+### Speed band — deliberately not pure
+
+`rebalancePair` holds a molecule leaving a collision inside the same
+±`SPEED_SIGMA` band the spawn uses, so nothing crawls or streaks. Dev toggle
+(`clampSpeeds`), on by default.
+
+Settled across **the pair**, not one body at a time: a slow molecule rarely has
+spin of its own to sell, but the one it just hit is usually the fast one. The
+pair's total energy is measured, translation is pulled into band, and the
+remainder is what the two spins are set to carry — so the pair's energy is
+conserved by construction.
+
+`softBand` applies a **soft knee** rather than a clamp. The outer `KNEE` = 35%
+of each half-band is compressed so speeds approach the limits asymptotically
+and never reach them. A hard clamp parked 40% of the population on exactly the
+floor speed; the knee cuts that to 9% while keeping the bounds exact.
+
+Two places energy genuinely changes, both counted and reported by
+`energySplit()`:
+- **spin cap** (`MAX_SPIN` = 14 rad/s) — rare, a handful of events per minute
+- **floor top-up** — both molecules slow with no spin left to sell, so the
+  shortfall is created from nothing
+
+Net effect, measured at 6+6 over 30 simulated minutes: speeds stay strictly
+within 0.75–1.25 of nominal with 0 violations, rotation settles around 40% of
+the energy, and total energy climbs to roughly 150–180% of spawn and then
+**plateaus** — it oscillates there rather than running away, because the
+ceiling and the spin cap shed what the floor adds.
+
+A tighter `MAX_SPIN` does **not** help the floor (min stayed ~0.65 at every
+value tried from 2 to 25) and bleeds energy badly — −46% at `MAX_SPIN` = 2.
+Do not reach for it as a fix.
+
+With the band on, the energy graph is no longer a conservation check; the note
+under the percentage says so, and switching the toggle rewords it.
+
 ```javascript
 const RESTITUTION = 1.0;   // perfectly elastic
 ```
