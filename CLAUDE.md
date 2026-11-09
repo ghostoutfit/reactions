@@ -21,7 +21,7 @@ Used consistently in code, comments and UI, so pick these words for new work:
 | **molecule** / **body** | a rigid group of atoms with `(x, y, angle, vx, vy, spin)` |
 | **species** | a recipe for a molecule: `SPECIES.H2 = { els: ['H','H'] }` |
 | **energy of motion** | kinetic — translation + rotation. `energyOfMotion()` |
-| **energy in fields** | potential. The term exists; nothing computes it yet |
+| **energy in fields** | the glowing lobe inside each bond. A picture, not a sum |
 | **the band** | the ±`SPEED_SIGMA` speed limit on collision outputs |
 | **the dial** | the launch-speed slider, `#speedDial` |
 
@@ -50,10 +50,8 @@ const ELEMENTS = {
 };
 ```
 
-`rScale` is the van der Waals radius relative to hydrogen. `q` is a partial
-charge in units of e — **both are 0**, so "Show electric field" currently draws
-nothing. Give O a negative `q` and H a positive one to light it up for polar
-bonds; `drawElectricHeatmap` already sums over `elemOf(p).q !== 0`.
+`rScale` is the van der Waals radius relative to hydrogen. There is no charge
+field on an element: see **Energy in fields** below for why.
 
 Atoms render as **a circle drawn by a travelling arrow** (`drawAtom`): an
 arrowhead laps the circle forever, paying out a trail that fades behind it. The
@@ -214,6 +212,60 @@ collide with one at the right edge. The loop sub-steps at 4 ms so fast molecules
 cannot tunnel through each other, and clamps `dt` to 50 ms so a backgrounded tab
 does not resume with one enormous step.
 
+## Energy in fields
+
+The "Show energy in fields" checkbox draws one **lobe between each pair of
+bonded atoms** — zero at each nucleus, brightest at the midpoint. The single
+idea it has to carry: a bond is two nuclei both pulled toward the space
+between them, because that is where the shared electrons spend their time.
+
+**It is a picture, not a calculation.** There are no partial charges, no test
+probe and no electron cloud, and it deliberately does not feed anything. When
+the energy bar charts arrive they do their own arithmetic — the two are the
+same idea, not the same numbers, and that is on purpose.
+
+```javascript
+const BOND_ENERGY = { 'H-H': 436, 'H-O': 463, 'O-O': 498 };  // kJ/mol
+let FIELD_WIDTH = 0.30;   // lobe half-width as a fraction of bond length
+let FIELD_GAIN  = 1.8;    // value that maps to the top of the colormap
+```
+
+Brightness scales with real bond dissociation energy, so O=O sits a little
+above H–H. **Break mode should read `BOND_ENERGY` too** — it is the number that
+decides what an impact is strong enough to pull apart, and having the glow and
+the threshold disagree would be worse than either being wrong.
+
+Each body carries `bonds` as index pairs. Atoms are laid out in a row and each
+bonds to the previous one, so a diatomic is `[[0,1]]` and water would be
+`[[0,1],[1,2]]` — two lobes off the oxygen, no special casing.
+
+### The flare
+
+Molecules are perfectly rigid, so a bond at rest never changes and the lobe
+would be wallpaper. Instead a collision lights it: `b.flare` is set from the
+impulse (`jImp / (mass × vTarget)`, which is ≈1 for a square hit at the
+species' nominal speed) and decays with `FLARE_TAU` = 0.30 s. `FIELD_GAIN` is
+set so resting bonds sit mid-colormap and leave the top of the range for
+flares. This is the only motion in the view until molecules can vibrate.
+
+`FIELD_WIDTH`, `FIELD_GAIN` and `FLARE_GAIN` are dev sliders — they were dialled
+in against the picture, so they stay adjustable.
+
+### Cost
+
+Measured at a full 6+6 world: **0.43 ms/frame at hi-res**, 0.23 detailed, 0.14
+simple, against a 16.7 ms budget. `fieldTest()` in the console re-measures.
+
+Nothing is cached. The old fission heatmap kept a composite behind
+`heatmapDirty`, which worked because a nucleus sat still; here every molecule
+moves every frame, so the cache could never hit and it was removed.
+
+The cost only works because it draws **bonded pairs only** — 12 lobes at a full
+world, each covering a box about a bond long. The fission version drew a tube
+between *every* charged pair, which here would be 276 pairs over a 57k-pixel
+grid, about 15M iterations a frame. If you ever add intermolecular lobes, cull
+them hard by distance or that number comes back.
+
 ## Energy graph
 
 A scrolling 12-second trace of total kinetic energy (translational +
@@ -225,9 +277,6 @@ check on the collision solver, not a teaching graph.
 
 Dormant, kept because the next round of work wants it. None of it is live:
 
-- **The electric-field heatmap** (`drawElectricHeatmap`, `coulombStrength`) is
-  fully wired to the "Show electric field" checkbox but draws nothing, because
-  every element's `q` is 0. Charge attraction only needs the numbers filled in.
 - **`#speedDialWrap.bounce-warn`** — the red flash on the dial, commented out in
   the stylesheet. It was fission's "this neutron is too slow" warning; break
   mode wants the same signal for "too slow to break a bond".

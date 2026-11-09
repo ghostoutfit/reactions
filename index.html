@@ -634,9 +634,8 @@
   body.screenshot-mode #energyBar * { color: #000 !important; text-shadow: none !important; }
   body.screenshot-mode #energyBar button { border-color: #000 !important; box-shadow: none !important; }
   body.screenshot-mode #energyGraph { background: #fff !important; }
-  /* Preserve educational color codes: electric = blue, strong = orange */
+  /* Preserve the educational colour code: energy in fields = blue */
   body.screenshot-mode .field-label-electric { color: #46a5ff !important; }
-  body.screenshot-mode .field-label-strong   { color: #ffb946 !important; }
   body.screenshot-mode img[alt="logo"] { display: none !important; }
 
   /* ── Quality select ──────────────────────────────────────────────────────── */
@@ -731,9 +730,9 @@
           <input type="range" id="zoomSlider" min="-1" max="1" step="0.02" value="0">
           <span class="slider-icon">🔍</span>
         </div>
-        <label class="toggle-label" id="showElectricRow">
-          <input type="checkbox" id="showElectric">
-          <span class="field-label-electric">Show electric field</span>
+        <label class="toggle-label" id="showFieldsRow">
+          <input type="checkbox" id="showFields">
+          <span class="field-label-electric">Show energy in fields</span>
         </label>
 
       </div>
@@ -795,7 +794,7 @@
 //
 //   Constants, Elements     atom radius, bond length, the periodic data we use
 //   Canvas, Quality tiers   the two canvases, the draw-cost benchmark, frame cap
-//   Colormaps, Field        the electric heatmap — dormant until charges are nonzero
+//   Colormaps, Field        energy in fields: the glowing lobe inside each bond
 //   Atom renderer           drawAtom: a circle traced by a travelling arrow
 //   Molecule outline        the union silhouette, for Outline view
 //   Species, World          what can be spawned, and the wrap-around box
@@ -822,18 +821,14 @@
 // of it, so bumping it here scales the whole scene.
 const ATOM_RADIUS = 30;
 
-// Strength of the pairwise electric term in the field heatmap. The heatmap is
-// wired up but idle: every element's q is 0, so there is nothing to sum.
-const coulombStrength = 150;
-
 // ─── Elements ─────────────────────────────────────────────────────────────────
 // rScale ≈ van der Waals radius relative to hydrogen (H 1.20 Å, O 1.52 Å).
-// q is the partial charge an atom carries, in units of e. Both are 0 here: an
-// H2 molecule is non-polar, so "Show electric field" has nothing to draw. Give
-// O a negative q and H a positive one to light the field up for polar bonds.
+// No charge here: the field view draws bonds, not charges, so a partial charge
+// per atom would be a number nothing reads. The charge-attraction work will
+// want electronegativity (H 2.20, O 3.44) rather than a hand-set q.
 const ELEMENTS = {
-  H: { label: 'H', rgb: '185,192,205', rScale: 1.00, q: 0 },   // grey
-  O: { label: 'O', rgb: '232,56,47',   rScale: 1.27, q: 0 },   // red
+  H: { label: 'H', rgb: '185,192,205', rScale: 1.00 },   // grey
+  O: { label: 'O', rgb: '232,56,47',   rScale: 1.27 },   // red
 };
 const DEFAULT_ELEMENT = 'H';
 function elemOf(p) { return ELEMENTS[p.el] || ELEMENTS[DEFAULT_ELEMENT]; }
@@ -852,16 +847,17 @@ const ctx      = canvas.getContext('2d');
 const graphCanvas = document.getElementById('energyGraph');
 const graphCtx    = graphCanvas.getContext('2d');
 
-// ─── Heatmap buffers ──────────────────────────────────────────────────────────
-const hmCanvas    = document.createElement('canvas');
-const hmCtx       = hmCanvas.getContext('2d');
-const hmComposite = document.createElement('canvas');
-const hmcCtx      = hmComposite.getContext('2d');
+// ─── Field heatmap buffers ────────────────────────────────────────────────────
+// The field is accumulated as floats at low resolution, then colour-mapped once
+// and blitted up to world size. There is no cache: every molecule moves every
+// frame, so a cached composite could never be reused.
+const fieldCanvas = document.createElement('canvas');
+const fieldCtx    = fieldCanvas.getContext('2d');
 
-let hmW = 0, hmH = 0;
-let hmDataElec = null;
-let hmImgElec  = null;
-let heatmapDirty    = true;
+let fieldW = 0, fieldH = 0;
+let fieldAcc = null;    // Float32Array, the summed lobes
+let fieldPix = null;    // Uint8ClampedArray behind fieldImg
+let fieldImg = null;
 
 // ── Quality tiers ─────────────────────────────────────────────────────────────
 // Each tier sets both how much is drawn per atom and the frame rate it is drawn
@@ -928,13 +924,11 @@ function resize() {
   canvas.height  = window.innerHeight;
   graphCanvas.width  = Math.max(1, graphCanvas.offsetWidth || (window.innerWidth - 112));
   graphCanvas.height = 110;
-  heatmapDirty   = true;
 }
 resize();
 window.addEventListener('resize', () => {
   resize();
   document.getElementById('energyBar').classList.add('visible');
-  heatmapDirty = true;
   // Stretch the wrap box to the new band, carrying the molecules with it so a
   // window resize does not dump everything outside the world or on top of itself.
   const { oldW, oldH } = syncWorldBox();
@@ -942,14 +936,6 @@ window.addEventListener('resize', () => {
     for (const b of world.bodies) { b.x *= world.w / oldW; b.y *= world.h / oldH; }
   }
 });
-
-function ensureHmBuffers(w, h) {
-  if (hmW === w && hmH === h) return;
-  hmW = w; hmH = h;
-  hmCanvas.width    = w; hmCanvas.height = h;
-  hmDataElec = new Uint8ClampedArray(w * h * 4);
-  hmImgElec  = new ImageData(hmDataElec, w, h);
-}
 
 // ─── Colormaps ────────────────────────────────────────────────────────────────
 function buildColorstops(stops, out) {
@@ -977,144 +963,131 @@ buildColorstops([
   { t: 1.0,  r: 210, g: 238, b: 255, a: 255 },
 ], COLORMAP);
 
-// ─── Electric field heatmap ───────────────────────────────────────────────────
-// masks: [{cx, cy, r}] — soft radial clipping; alpha fades to 0 at r + ATOM_RADIUS*2
-function drawElectricHeatmap(atomList, sampleFrac = 0.5, sigmaScale = 1.0, masks = null, boundsExpand = 50, destCtx = ctx, _forceRender = false) {
-  const fullW = canvas.width, fullH = canvas.height;
+// ─── Energy in fields — the lobe between two bonded atoms ───────────────────
+// Deliberately a picture, not a calculation. The reasoning it has to carry is
+// one sentence: a bond is two nuclei both pulled toward the space between them,
+// because that is where the shared electrons spend their time. So the lobe is
+// drawn BETWEEN the atoms, zero at each nucleus and brightest at the midpoint.
+//
+// No partial charges, no test probe, no electron cloud. Anything more detailed
+// would be modelling, and this is here to explain, not to compute. When the bar
+// charts arrive they do their own arithmetic; the two are the same idea, not the
+// same numbers.
+//
+// (This replaces fission's pair heatmap, which drew a tube between every pair of
+// protons in a nucleus. The lens shape survived the port almost unchanged — it
+// was already a good picture of a bond, pointed at the wrong thing.)
 
-  const _hmSizeMatch = hmComposite.width === fullW && hmComposite.height === fullH;
-  if (!_forceRender && !heatmapDirty && _hmSizeMatch) {
-    destCtx.drawImage(hmComposite, 0, 0);
-    return;
-  }
-  const scale    = _quality === 'simple' ? 0.08 : _quality === 'detailed' ? 0.15 : 0.25;
-  const w        = Math.ceil(fullW * scale);
-  const h        = Math.ceil(fullH * scale);
-  const invScale = 1 / scale;
+// Bond dissociation energies, kJ/mol. Brightness is scaled by these, so O=O sits
+// slightly above H–H. Break mode will want exactly this table to decide what an
+// impact is strong enough to pull apart.
+const BOND_ENERGY = { 'H-H': 436, 'H-O': 463, 'O-O': 498 };
+const BOND_ENERGY_MAX = 498;
+function bondEnergy(elA, elB) {
+  return BOND_ENERGY[[elA, elB].sort().join('-')] || 400;
+}
 
-  let charged = atomList.filter(p =>
-    elemOf(p).q !== 0 &&
-    p.x > -boundsExpand && p.x < fullW + boundsExpand &&
-    p.y > -boundsExpand && p.y < fullH + boundsExpand
-  );
-  if (sampleFrac < 1.0) {
-    charged = charged.filter((_, i) => i % Math.round(1 / sampleFrac) === 0);
-  }
+const FIELD_SCALE = { 'hi-res': 0.30, 'detailed': 0.20, 'simple': 0.12 };
+let FIELD_WIDTH = 0.30;     // lobe half-width as a fraction of the bond length
+// A bond at rest peaks at ~1.0 (its energy over the strongest bond), so this
+// puts resting bonds in the mid blue of the colormap and leaves the top of the
+// range for flares — otherwise everything sits saturated and a hit shows nothing.
+let FIELD_GAIN = 1.8;
 
-  const refEnergy = coulombStrength / (ATOM_RADIUS * 2);
-  const logRef    = Math.log(2);
-  const elecPairs = [];
-  for (let i = 0; i < charged.length; i++) {
-    for (let j = i+1; j < charged.length; j++) {
-      const a = charged[i], b = charged[j];
-      const dx = b.x - a.x, dy = b.y - a.y;
-      const dist = Math.sqrt(dx*dx + dy*dy);
-      if (dist < 0.01) continue;
-      const energy   = coulombStrength / dist;
-      const sigma    = Math.max(3.5, 28 / Math.sqrt(dist)) * sigmaScale;
-      const distFade = Math.exp(-dist / 350);
-      const mag      = Math.min(1, Math.log(1 + energy / refEnergy) / logRef) * distFade;
-      const cullSq   = 16 * (sigma*2) * (sigma*2);
-      elecPairs.push({ ax: a.x, ay: a.y, ux: dx/dist, uy: dy/dist, dist, sigma, mag, cullSq });
+// A collision flare: the struck bond brightens and squeezes for a moment, then
+// relaxes. Driven by the collision impulse, so a hard hit flares harder. This is
+// the only thing that moves until molecules can actually vibrate.
+let FLARE_GAIN      = 1.8;   // extra brightness at flare = 1
+const FLARE_SQUEEZE = 0.25;  // how much the lobe narrows at flare = 1
+const FLARE_TAU     = 0.30;  // seconds to decay
+
+function ensureFieldBuffers(w, h) {
+  if (fieldW === w && fieldH === h) return;
+  fieldW = w; fieldH = h;
+  fieldCanvas.width = w; fieldCanvas.height = h;
+  fieldAcc = new Float32Array(w * h);
+  fieldPix = new Uint8ClampedArray(w * h * 4);
+  fieldImg = new ImageData(fieldPix, w, h);
+}
+
+// Every bond in the world as a world-space segment, including the wrapped copies
+// so a bond straddling an edge glows on both sides like the molecule does.
+function bondSegments() {
+  const segs = [];
+  for (const b of world.bodies) {
+    const bright  = 1 + FLARE_GAIN * b.flare;
+    const squeeze = 1 - FLARE_SQUEEZE * b.flare;
+    for (const [dx, dy] of wrapOffsets(b)) {
+      const at = bodyAtoms(b, dx, dy);
+      for (const [i, k] of b.bonds) {
+        segs.push({
+          x1: at[i].x, y1: at[i].y, x2: at[k].x, y2: at[k].y,
+          mag: bondEnergy(at[i].el, at[k].el) / BOND_ENERGY_MAX * bright,
+          squeeze,
+        });
+      }
     }
   }
-  elecPairs.sort((a, b) => b.mag - a.mag);
-  if (elecPairs.length === 0) return;
+  return segs;
+}
 
-  ensureHmBuffers(w, h);
-  hmDataElec.fill(0);
+function drawFieldHeatmap(destCtx) {
+  const segs = bondSegments();
+  if (!segs.length) return;
 
-  // Clamp pixel loop to the bounding box of active charged — skips the large
-  // empty canvas area around the molecules, which is typically 90%+ of pixels.
-  let bxMin = w, bxMax = 0, byMin = h, byMax = 0;
-  for (const p of charged) {
-    const sx = (p.x * scale) | 0, sy = (p.y * scale) | 0;
-    if (sx < bxMin) bxMin = sx; if (sx > bxMax) bxMax = sx;
-    if (sy < byMin) byMin = sy; if (sy > byMax) byMax = sy;
-  }
-  const bMarg = Math.ceil(50 * scale);  // max pair influence radius in world px
-  bxMin = Math.max(0, bxMin - bMarg);  bxMax = Math.min(w - 1, bxMax + bMarg);
-  byMin = Math.max(0, byMin - bMarg);  byMax = Math.min(h - 1, byMax + bMarg);
+  const scale = FIELD_SCALE[_quality] || 0.2;
+  const w = Math.max(1, Math.ceil(world.w * scale));
+  const h = Math.max(1, Math.ceil(world.h * scale));
+  ensureFieldBuffers(w, h);
+  fieldAcc.fill(0);
+  const inv = 1 / scale;
 
-  for (let py = byMin; py <= byMax; py++) {
-    const worldY = py * invScale;
-    for (let px = bxMin; px <= bxMax; px++) {
-      const worldX = px * invScale;
-      let total = 0;
-      for (let k = 0; k < elecPairs.length; k++) {
-        const p    = elecPairs[k];
-        const rx   = worldX - p.ax, ry = worldY - p.ay;
-        const para = rx*p.ux + ry*p.uy;
-        const e1   = para > 0 ? Math.min(1, para/8) : 0;
-        const e2   = para < p.dist ? Math.min(1, (p.dist-para)/8) : 0;
-        const ef   = e1 * e2;
-        if (ef <= 0) continue;
-        const perpSq = Math.max(0, rx*rx + ry*ry - para*para);
-        if (perpSq > p.cullSq) continue;
-        const t      = para / p.dist;
-        const sigmaT = p.sigma * (1 + Math.sin(Math.PI * t));
-        total += p.mag * Math.exp(-perpSq / (2*sigmaT*sigmaT)) * ef;
-        if (total >= 1/3) break;
-      }
-      if (total > 0.002) {
-        // Soft radial mask — clamp the heatmap to the molecule boundary.
-        // Supports two mask types:
-        //   circle  { cx, cy, r, bleed }
-        //   capsule { type:'capsule', cx1,cy1,r1, cx2,cy2,r2, bleed }
-        //     — tapered hull between two spheres; fills the gap with no dark seam.
-        let maskAlpha = 1;
-        if (masks) {
-          maskAlpha = 0;
-          const defaultBleed = ATOM_RADIUS * 2;
-          for (const m of masks) {
-            if (maskAlpha >= 1) break;
-            const bleed = m.bleed !== undefined ? m.bleed : defaultBleed;
-            if (m.type === 'capsule') {
-              // Project pixel onto the segment cx1→cx2, interpolate radius
-              const sdx = m.cx2 - m.cx1, sdy = m.cy2 - m.cy1;
-              const lenSq = sdx*sdx + sdy*sdy;
-              const st = lenSq > 0
-                ? Math.max(0, Math.min(1, ((worldX-m.cx1)*sdx + (worldY-m.cy1)*sdy) / lenSq))
-                : 0;
-              const projX = m.cx1 + st*sdx, projY = m.cy1 + st*sdy;
-              const perpDist = Math.sqrt((worldX-projX)**2 + (worldY-projY)**2);
-              const capsR = m.r1 + (m.r2 - m.r1) * st;
-              if (perpDist <= capsR) { maskAlpha = 1; break; }
-              const mt = (perpDist - capsR) / bleed;
-              maskAlpha = Math.max(maskAlpha, mt < 1 ? 1 - mt : 0);
-            } else {
-              const mdx = worldX - m.cx, mdy = worldY - m.cy;
-              const mdist = Math.sqrt(mdx*mdx + mdy*mdy);
-              if (mdist <= m.r) { maskAlpha = 1; break; }
-              const mt = (mdist - m.r) / bleed;
-              maskAlpha = Math.max(maskAlpha, mt < 1 ? 1 - mt : 0);
-            }
-          }
-        }
-        if (maskAlpha > 0) {
-          const ci = Math.min(255, (total * 3.0 * 255)|0);
-          const c4 = ci * 4;
-          const di = (py * w + px) * 4;
-          hmDataElec[di]   = COLORMAP[c4];   hmDataElec[di+1] = COLORMAP[c4+1];
-          hmDataElec[di+2] = COLORMAP[c4+2];
-          hmDataElec[di+3] = (COLORMAP[c4+3] * maskAlpha + 0.5) | 0;
-        }
+  for (const s of segs) {
+    const sdx = s.x2 - s.x1, sdy = s.y2 - s.y1;
+    const L = Math.hypot(sdx, sdy);
+    if (L < 1e-6) continue;
+    const ux = sdx / L, uy = sdy / L;
+    const sigma  = L * FIELD_WIDTH * s.squeeze;
+    const twoSig = 2 * sigma * sigma;
+    const cullSq = twoSig * 3;                 // past here the gaussian is < 5%
+    const reach  = sigma * 2.5;
+
+    // Only the pixels this one lobe can reach — a box about a bond long
+    const x0 = Math.max(0,     Math.floor((Math.min(s.x1, s.x2) - reach) * scale));
+    const x1 = Math.min(w - 1, Math.ceil ((Math.max(s.x1, s.x2) + reach) * scale));
+    const y0 = Math.max(0,     Math.floor((Math.min(s.y1, s.y2) - reach) * scale));
+    const y1 = Math.min(h - 1, Math.ceil ((Math.max(s.y1, s.y2) + reach) * scale));
+
+    for (let py = y0; py <= y1; py++) {
+      const wy = py * inv - s.y1;
+      for (let px = x0; px <= x1; px++) {
+        const wx = px * inv - s.x1;
+        const along = wx * ux + wy * uy;        // distance along the bond axis
+        if (along < 0 || along > L) continue;   // nothing outside the two nuclei
+        const perpSq = wx * wx + wy * wy - along * along;
+        if (perpSq > cullSq) continue;
+        // sin() puts zero at each nucleus and the peak exactly between them
+        const lobe = Math.sin(Math.PI * (along / L));
+        fieldAcc[py * w + px] += s.mag * lobe * Math.exp(-perpSq / twoSig);
       }
     }
   }
 
-  if (hmComposite.width !== fullW || hmComposite.height !== fullH) {
-    hmComposite.width = fullW; hmComposite.height = fullH;
+  for (let i = 0, n = w * h; i < n; i++) {
+    const v = fieldAcc[i];
+    if (v <= 0.002) { fieldPix[i * 4 + 3] = 0; continue; }
+    const c = Math.min(255, (v / FIELD_GAIN * 255) | 0) * 4;
+    const d = i * 4;
+    fieldPix[d] = COLORMAP[c]; fieldPix[d + 1] = COLORMAP[c + 1];
+    fieldPix[d + 2] = COLORMAP[c + 2]; fieldPix[d + 3] = COLORMAP[c + 3];
   }
-  hmcCtx.clearRect(0, 0, fullW, fullH);
-  hmcCtx.imageSmoothingEnabled = true;
-  hmcCtx.imageSmoothingQuality = 'low';
-  hmCtx.putImageData(hmImgElec, 0, 0);
-  hmcCtx.drawImage(hmCanvas, 0, 0, fullW, fullH);
-  destCtx.drawImage(hmComposite, 0, 0);
-  if (destCtx === ctx) {
-    heatmapDirty = false;
-  }
+
+  fieldCtx.putImageData(fieldImg, 0, 0);
+  destCtx.save();
+  destCtx.imageSmoothingEnabled = true;        // the upscale is what softens it
+  destCtx.imageSmoothingQuality = 'high';
+  destCtx.drawImage(fieldCanvas, 0, 0, world.w, world.h);
+  destCtx.restore();
 }
 
 // ─── Molecule outline — union silhouette of the atom circles ────────────────
@@ -1330,6 +1303,11 @@ function makeBody(els, x, y, heading, speed, spin, nominal = speed) {
   return {
     id: nextBodyId++,
     els, atoms, mass, inertia,
+    // Which atoms are bonded to which, as index pairs. Atoms are laid out in a
+    // row, so each one bonds to the previous: a diatomic has the single bond
+    // [[0,1]]. Water would be [[0,1],[1,2]] — two lobes off the oxygen.
+    bonds: els.slice(1).map((_, k) => [k, k + 1]),
+    flare: 0,                // collision brightness, decays towards 0
     vTarget: nominal,        // nominal speed for this species, tracks temp + dial
     x, y,
     vx: Math.cos(heading) * speed,
@@ -1493,6 +1471,7 @@ function stepWorld(dt) {
     b.angle += b.spin * dt;
     b.x = ((b.x % world.w) + world.w) % world.w;
     b.y = ((b.y % world.h) + world.h) % world.h;
+    if (b.flare > 1e-4) b.flare *= Math.exp(-dt / FLARE_TAU); else b.flare = 0;
   }
   world.time += dt;
 
@@ -1638,6 +1617,12 @@ function collidePair(A, B) {
       B.vx += jImp * nx / B.mass;  B.vy += jImp * ny / B.mass;
       A.spin -= rnA * jImp / A.inertia;
       B.spin += rnB * jImp / B.inertia;
+
+      // Light the bond up for a moment. jImp / (mass x nominal speed) is near 1
+      // for a square hit at the speed this species normally travels, so a hard
+      // collision flares and a graze barely registers.
+      A.flare = Math.min(1, A.flare + jImp / (A.mass * Math.max(1, A.vTarget)));
+      B.flare = Math.min(1, B.flare + jImp / (B.mass * Math.max(1, B.vTarget)));
 
       // Push the pair apart so they do not stay interlocked and re-collide
       const overlap = minDist - dist;
@@ -1879,11 +1864,7 @@ function drawWorld() {
   ctx.scale(viewZoom, viewZoom);
   ctx.translate(-world.w / 2, -world.h / 2);
 
-  const showElec = document.getElementById('showElectric').checked;
-  if (showElec) {
-    const all = world.bodies.flatMap(b => bodyAtoms(b));
-    drawElectricHeatmap(all, 0.5, 1.0, null);
-  }
+  if (document.getElementById('showFields').checked) drawFieldHeatmap(ctx);
 
   for (const b of world.bodies) {
     for (const [dx, dy] of wrapOffsets(b)) {
@@ -2069,17 +2050,14 @@ document.getElementById('speedDial').addEventListener('input', function () {
 
 document.getElementById('zoomSlider').addEventListener('input', function () {
   viewZoom = zoomFromSlider(parseFloat(this.value));
-  heatmapDirty = true;
 });
 
-document.getElementById('showElectric').addEventListener('change', function () {
-  heatmapDirty = true;
-  logAction('Electric field ' + (this.checked ? 'on' : 'off'));
+document.getElementById('showFields').addEventListener('change', function () {
+  logAction('Energy in fields ' + (this.checked ? 'on' : 'off'));
 });
 
 document.getElementById('qualitySelect').addEventListener('change', function () {
   _applyQuality(this.value);
-  heatmapDirty = true;
 });
 
 document.querySelectorAll('.temp-btn').forEach(btn => {
@@ -2161,6 +2139,12 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     row('devTrail', 'Trail length', 0.1, 1, 0.02, ATOM_TRAIL_DEFAULT,  '#ff3a8a') +
     row('devOrbit', 'Arrow speed',  0.05, 3, 0.05, ATOM_ORBIT_DEFAULT, '#ff3a8a') +
     '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
+    '<div style="font-size:9px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.4;margin-top:8px;">' +
+      'Energy in fields</div>' +
+    row('devLobeW',   'Lobe width',      0.1,  0.8, 0.02, FIELD_WIDTH, '#46a5ff') +
+    row('devLobeGain','Lobe brightness', 0.5,  4,   0.1,  FIELD_GAIN,  '#46a5ff') +
+    row('devFlare',   'Flare on impact', 0,    5,   0.1,  FLARE_GAIN,  '#46a5ff') +
+    '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
     '<label style="display:flex;align-items:center;gap:7px;margin:9px 0 2px;cursor:pointer;">' +
       '<input type="checkbox" id="devEqui" checked style="margin:0">' +
       '<span>Heavy molecules start slower</span>' +
@@ -2190,6 +2174,10 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   bind('devO2',    v => composition.O2 = v, true);
   bind('devTrail', v => atomTrail      = v, false, v => v.toFixed(2));
   bind('devOrbit', v => atomOrbitSpeed = v, false, v => v.toFixed(2));
+  // The field look was dialled in against the picture, so it stays adjustable
+  bind('devLobeW',    v => FIELD_WIDTH = v, false, v => v.toFixed(2));
+  bind('devLobeGain', v => FIELD_GAIN  = v, false, v => v.toFixed(1));
+  bind('devFlare',    v => FLARE_GAIN  = v, false, v => v.toFixed(1));
 
   // Equipartition on/off, so both can be compared side by side
   const equi = panel.querySelector('#devEqui');
@@ -2279,7 +2267,6 @@ function applyTheme(key) {
   document.getElementById('themeLight').classList.remove('active');
   document.querySelectorAll('.theme-btn:not(#themeLight):not([data-theme="L"])').forEach(b => b.classList.remove('active'));
   document.getElementById('theme'+key).classList.add('active');
-  heatmapDirty = true;   // the main loop repaints the scene every frame
 }
 document.getElementById('themeA').addEventListener('click', () => applyTheme('A'));
 document.getElementById('themeB').addEventListener('click', () => applyTheme('B'));
@@ -2287,12 +2274,10 @@ document.getElementById('themeC').addEventListener('click', () => applyTheme('C'
 function getBgColor() { return document.getElementById('bgColorPicker').value; }
 document.getElementById('bgColorPicker').addEventListener('input', function() {
   document.documentElement.style.setProperty('--bg-color', this.value);
-  heatmapDirty = true;
 });
 document.getElementById('themeLight').addEventListener('click', () => {
   const on = document.body.classList.toggle('screenshot-mode');
   document.getElementById('themeLight').classList.toggle('active', on);
-  heatmapDirty = true;
 });
 applyTheme('A');
 
@@ -2303,6 +2288,7 @@ applyTheme('A');
 //   runPerfTest()      what a worst-case frame costs, vs the tier thresholds
 //   speedHistogram()   the speed distribution per species, vs SPEED_SIGMA
 //   energySplit()      motion vs rotation, and what the speed band cost
+//   fieldTest()        the field heatmap's draw cost, per quality tier
 
 // Console diagnostic: `runPerfTest()` re-measures and prints the numbers next to
 // the constants they are compared against, without changing the current tier.
@@ -2352,6 +2338,28 @@ window.energySplit = function () {
 // How the speeds actually came out, per species. Run it after a spawn to see
 // the intended bell; run it again after a minute to see what the collisions
 // have made of it.
+// What the bond-field heatmap costs to draw, at each tier, for the world as it
+// stands right now. Printed against the frame budget it has to fit inside.
+window.fieldTest = function (samples = 20) {
+  const saved = _quality;
+  const rows = [];
+  for (const q of ['simple', 'detailed', 'hi-res']) {
+    _quality = q;
+    drawFieldHeatmap(ctx);                      // warm the buffers at this size
+    const t0 = performance.now();
+    for (let i = 0; i < samples; i++) drawFieldHeatmap(ctx);
+    rows.push({ tier: q, grid: fieldW + 'x' + fieldH,
+                ms: +((performance.now() - t0) / samples).toFixed(2),
+                'of budget': ((performance.now() - t0) / samples / (1000 / TIER_FPS[q]) * 100).toFixed(1) + '%' });
+  }
+  _quality = saved;
+  console.table(rows);
+  console.log(world.bodies.length + ' molecules, ' + bondSegments().length +
+    ' bond lobes (wrapped copies included)  |  frame budget ' +
+    (1000 / TIER_FPS[saved]).toFixed(1) + ' ms at ' + saved);
+  return rows;
+};
+
 window.speedHistogram = function (bins = 9) {
   const byType = new Map();
   for (const b of world.bodies) {
