@@ -93,7 +93,7 @@ Two kinds of electron, which is the whole point:
 | kind | path |
 |---|---|
 | **bonding** | a lemniscate (figure-8) whose two lobes wrap the two nuclei and whose crossing is the bond midpoint |
-| **lone** | orbits its own nucleus on the valence shell, in a sector facing away from the bond |
+| **lone** | runs a plain circle around its own nucleus at a fixed radius |
 
 ```javascript
 const VALENCE    = { H: 1, O: 6, He: 2 };
@@ -134,10 +134,19 @@ This is the dominant draw cost, so it is bucketed like bonds does it: the trail
 is split into `TIER_BUCKETS` runs and **each is stroked once at its own alpha**,
 rather than one stroke per point. That is ~10 strokes an electron instead of 50.
 
-Measured at the heaviest the sliders allow (6 H₂ + 6 O₂ + 6 He = 96 electrons):
-**2.45 ms for the whole frame** — electrons, field, nuclei and walls together —
-against a 16.7 ms budget. Electrons alone at 6+6 are 1.11 ms at hi-res, 0.81
-detailed, 0.65 simple.
+Measured at the heaviest the sliders allow — 6 H₂ + 6 O₂ + 6 He = **96
+electrons**, trails full at 48 points, hi-res:
+
+| | ms/frame |
+|---|---|
+| electrons alone | 0.45 |
+| whole frame, field off | 0.40 |
+| whole frame, field on | 0.75 |
+
+against a 16.7 ms budget.
+
+**Measure with the trails actually full.** A freshly respawned world reads
+~0.26 ms because every trail is empty, which is not a number worth having.
 
 Trails live in **body-local coordinates** and are transformed at draw time, so a
 molecule can translate and spin without smearing or rebuilding them. Each is a
@@ -146,7 +155,30 @@ fixed `Float32Array` ring buffer, so nothing is allocated per frame.
 `stepElectrons` runs **once per frame, outside the physics sub-steps** — the
 phase logic is tuned in per-frame units and breaks up with large or uneven dt.
 
-Speed, trail length, steering and a lone-pairs on/off switch are dev controls.
+### Lone electrons
+
+Deliberately the simplest thing that works: a constant angular speed round a
+circle of fixed radius. No jitter, no damping, no sector confinement. An atom's
+lone electrons are spaced evenly and all travel the same way, so they read as
+one ring at one radius instead of a scribble.
+
+```javascript
+let loneRadius = 1.0;     // multiple of the atom's valence radius
+let loneSpeed  = 0.055;   // radians per frame at 60 fps
+```
+
+At `loneRadius` 1.0 the ring sits on the valence shell, which is physically
+where a lone pair belongs — **but that is also how far the bonding lemniscate
+reaches past each nucleus, so the two overlap and the figure-8 gets hard to
+pick out.** Around **1.7** pushes the ring clear and the bond reads through the
+middle of it. Both are one slider apart; 1.0 is the default because it is the
+honest radius.
+
+They do pass through the bond region on the way round, which a real lone pair
+would not. The plain circle is the point, not the lobe geometry.
+
+Speed, trail length, steering, lone orbit radius and speed, and a lone-pairs
+on/off switch are all dev controls.
 
 ## What is in the world
 

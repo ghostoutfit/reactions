@@ -1286,8 +1286,8 @@ function makeElectron(kind, el) {
     // ring-buffer trail, body-local
     tx: new Float32Array(TRAIL_MAX), ty: new Float32Array(TRAIL_MAX),
     n: 0, head: 0,
-    // lone-electron state
-    angle: 0, dAngle: 0, cx: 0, cy: 0, r: 0, sector: 0, arc: LONE_ARC,
+    // lone-electron state: just where it is on its circle
+    angle: 0,
   };
 }
 
@@ -1324,33 +1324,29 @@ function buildElectrons(b) {
       awayX += at.lx - b.atoms[other].lx;
       awayY += at.ly - b.atoms[other].ly;
     }
-    // An atom with no bonds has nothing to face away from, so its electrons get
-    // the whole circle. That is the helium case: a full shell, free all round.
-    const bonded = (awayX !== 0 || awayY !== 0);
-    const facing = bonded ? Math.atan2(awayY, awayX) : 0;
-    const arc = bonded ? LONE_ARC : Math.PI * 2;
+    // Start angle only — which way the atom faces no longer confines anything,
+    // it just stops every atom's ring starting from the same place.
+    const facing = (awayX !== 0 || awayY !== 0) ? Math.atan2(awayY, awayX) : 0;
     for (let q = 0; q < lone; q++) {
       const e = makeElectron('lone', at.el);
       e.i = i;
-      e.cx = at.lx; e.cy = at.ly;
-      e.r = valenceRadius(at.el);
-      e.sector = facing;
-      e.arc = arc;
-      // Spread across whatever the electron is free to use
-      e.angle = facing + (lone === 1 ? 0 : (q / lone - 0.5) * arc);
-      e.dAngle = (Math.random() < 0.5 ? -1 : 1) * LONE_BASE_DA;
-      e.x = e.cx + e.r * Math.cos(e.angle);
-      e.y = e.cy + e.r * Math.sin(e.angle);
+      e.angle = facing + q / lone * Math.PI * 2;   // evenly spaced round the circle
+      e.x = at.lx + valenceRadius(at.el) * Math.cos(e.angle);
+      e.y = at.ly + valenceRadius(at.el) * Math.sin(e.angle);
       list.push(e);
     }
   }
   b.electrons = list;
 }
 
-const LONE_ARC     = 4.2;     // radians the lone electrons are spread across
-const LONE_BASE_DA = 0.030;   // base angular speed, rad/frame at 60 fps
-const LONE_JITTER  = 0.010;
-const LONE_DAMP    = 0.992;
+// Non-bonding electrons just run a circle at a fixed radius — no jitter, no
+// damping, no sector. Evenly spaced and all going the same way round, so an
+// atom's lone electrons read as one ring at one radius rather than a scribble.
+//
+// They do pass through the bond region on the way round, which a real lone pair
+// would not; the plain circle is the point here, not the lobe geometry.
+let loneRadius = 1.0;     // multiple of the atom's valence radius
+let loneSpeed  = 0.055;   // radians per frame at 60 fps
 
 // Ideal lemniscate position for a bond electron, in body-local coordinates.
 // `a = r + d` puts the far edge of each lobe exactly on that atom's valence
@@ -1408,26 +1404,14 @@ function stepBondElectron(e, b, k) {
   e.y += e.vy + 0.06 * (p0.y - e.y);
 }
 
+// Straight round the circle, same speed every frame. The radius is read fresh
+// each step so the dev slider moves the ring live.
 function stepLoneElectron(e, b, k) {
-  e.dAngle += (Math.random() - 0.5) * LONE_JITTER * k;
-  e.dAngle *= LONE_DAMP;
-  const dir = e.dAngle >= 0 ? 1 : -1;
-  if (Math.abs(e.dAngle) < LONE_BASE_DA) e.dAngle += dir * LONE_BASE_DA * 0.12;
-  e.angle += e.dAngle * k;
-  // Turn back at the edges of the sector, so lone pairs stay on the far side of
-  // the atom from the bond instead of wandering through it. An unbonded atom has
-  // arc = 2*pi, so this never fires and the electron orbits freely.
-  if (e.arc < Math.PI * 2) {
-    let rel = e.angle - e.sector;
-    rel = ((rel + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
-    if (Math.abs(rel) > e.arc / 2) {
-      e.angle = e.sector + Math.sign(rel) * e.arc / 2;
-      e.dAngle = -e.dAngle;
-    }
-  }
   const at = b.atoms[e.i];
-  e.x = at.lx + e.r * Math.cos(e.angle);
-  e.y = at.ly + e.r * Math.sin(e.angle);
+  const r = valenceRadius(at.el) * loneRadius;
+  e.angle += loneSpeed * k;
+  e.x = at.lx + r * Math.cos(e.angle);
+  e.y = at.ly + r * Math.sin(e.angle);
 }
 
 // One step per FRAME, not per physics sub-step: the phase logic is tuned in
@@ -2512,6 +2496,8 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     row('devESpeed', 'Electron speed', 0.02, 0.6, 0.01, 0.20, '#ff3a8a') +
     row('devETrail', 'Trail length',   0.2,  2,   0.05, 1.0,  '#ff3a8a') +
     row('devESteer', 'Path steering',  0.02, 1,   0.02, 0.30, '#ff3a8a') +
+    row('devLoneR',  'Lone orbit radius', 0.4, 2.2, 0.05, 1.0,   '#ff3a8a') +
+    row('devLoneS',  'Lone orbit speed',  0.005, 0.2, 0.005, 0.055, '#ff3a8a') +
     row('devNucleus', 'Nucleus size', 0, 24, 1, NUCLEUS_DIAMETER, '#ff80b0') +
     '<label style="display:flex;align-items:center;gap:7px;margin:9px 0 2px;cursor:pointer;">' +
       '<input type="checkbox" id="devLone" checked style="margin:0">' +
@@ -2556,6 +2542,8 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   bind('devESpeed', v => eSpeed      = v, false, v => v.toFixed(2));
   bind('devETrail', v => eTrailScale = v, false, v => v.toFixed(2));
   bind('devESteer', v => eSteer      = v, false, v => v.toFixed(2));
+  bind('devLoneR',  v => loneRadius  = v, false, v => v.toFixed(2) + '\u00d7');
+  bind('devLoneS',  v => loneSpeed   = v, false, v => v.toFixed(3));
   bind('devNucleus', v => nucleusDiameter = v, false, v => v + ' px');
   // The field look was dialled in against the picture, so it stays adjustable
   bind('devLobeW',    v => FIELD_WIDTH = v, false, v => v.toFixed(2));
