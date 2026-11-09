@@ -408,6 +408,15 @@ them hard by distance or that number comes back.
 
 ## Energy graph
 
+**Hidden by default** — SHOW LINE GRAPH on the energy bar brings it back,
+along with the key and the percentage readout, which share its `.visible`
+classes.
+
+Showing or hiding it changes the energy bar's height, which moves the bottom
+wall, so `setGraphShown` calls `restretchWorld()` — the same re-fit the window
+resize uses. Without it the world keeps its old box and leaves a gap between
+the bottom wall and the bar.
+
 A scrolling 12-second trace of total kinetic energy (translational +
 rotational), full scale = 2× the energy at spawn, so **a flat line across the
 middle is the correct result**. A visible step means energy leaked — it is a
