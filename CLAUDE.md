@@ -1,81 +1,102 @@
-# fission — Fission Digital Model
+# reactions — Molecular Collision Model
 
-Standalone single-file sim deployed to `ghostoutfit.github.io/fission/`.
-Derived from the canonical `v13/index.html` in the `protons` repo — **fission tab only**, chain reaction fully removed.
-Vanilla HTML + CSS + JS only. No build step — edit `index.html` directly.
+Standalone single-file sim. Vanilla HTML + CSS + JS, no build step — edit `index.html` directly.
 
 To run locally: `python3 -m http.server` in this directory, then open `localhost:8000/`.
 
-## Differences from canonical v13
+Forked from the `fission` repo and gutted: the nuclear physics, the scripted
+fission animation and its scrub/replay machinery are all gone. What was kept is
+the chrome — themes, quality selector, zoom, the toolbar, the energy bar.
 
-- Chain Reaction tab and all its code removed (see below)
-- `currentTab` is a `const` `'fission'` — never changes
-- `applyTab()` simplified to fission-only init
-- Image paths use `images/` (no `../images/` parent prefix)
+**Naming is still mid-migration.** A lot of ids and a few function names are
+inherited from fission and have not been renamed yet (`#scrubBar` is the energy
+bar, `#neutronSpeed` is the launch-speed dial, `#newBtnNucleus` is the molecule
+icon, `#nucleusWheel` wraps the respawn button, `nucleusIconLoop` draws the
+toolbar icons). The behaviour is correct; the labels are not.
 
-## What was removed (chain reaction code)
+## The one idea
 
-Everything related to chain reaction is gone:
-- `chainNeutrons`, `chainRAF`, `enrichSites`, `chainParticleOffsets`
-- `drawChainOverlay`, `drawChainBarChart`, `updateChain`, `ensureChainLoop`
-- `triggerEnrichSite`, `emitChainNeutrons`, `pickChainSite`
-- All `CHAIN_*` constants
+The world is a wrap-around ("asteroids") box filling the canvas between the
+toolbar and the energy bar. Molecules are **rigid bodies** that translate, spin,
+and bounce elastically off one another. There are no walls — anything leaving an
+edge returns on the opposite one, and a body straddling an edge is drawn on both
+sides so it never appears to pop.
 
-Do not re-add these — use the `chain-reaction` repo for that functionality.
+Nothing is scripted. There is no timeline, no phases and no replay: the sim just
+runs.
 
-## Physics constants
-
-```javascript
-const PARTICLE_RADIUS = 10;
-const coulombStrength = 150;   // distinct from v11 (139) and v14 (400)
-```
-
-## Phase machine
-
-Fission animation parameterized by scrub fraction `t ∈ [0, 1]`:
-
-```
-NEUTRON_FRAC = 0.20   // neutron approach
-PH1_END      = 0.30   // wobble buildup
-PH2_END      = 0.375  // elongation peak
-ANIM_T_END   = 0.47   // daughter ejection ends
-```
-
-No frame buffer — scrubbing is phase-indexed via `currentScrubFrac`. `renderAtFrac(frac)` reconstructs geometry analytically.
-
-## Speed slider
-
-`#playbackSpeed` — min 0.1, max 2.05, step 0.05, default **1.0**.
-Blue tick mark at default position; snaps within ±0.10 of 1.0.
-
-## Key globals
+## Atoms and molecules
 
 ```javascript
-let staticFissAngle = 0;       // reset on NEW/Clear/Go; randomized at neutron impact
-let dragRotY = 0, dragRotX = 0;  // nucleus drag accumulators; cleared on mouseup
-let wobbleMode;                // 'dip1' / 'dip2' / 'dip3' / 'stable'
-const NORMAL_DURATION = 5000;  // ms — fission playback length
+const PARTICLE_RADIUS = 30;    // drawn radius of one H atom; most geometry is a multiple of it
+const BOND_OVERLAP    = 0.72;  // < 1 so bonded atoms overlap, space-filling style
+const ELEMENTS = {
+  H: { rgb: '185,192,205', rScale: 1.00, q: 0 },   // grey
+  O: { rgb: '232,56,47',   rScale: 1.27, q: 0 },   // red
+};
 ```
 
-## Images
+`rScale` is the van der Waals radius relative to hydrogen. `q` is a partial
+charge in units of e — **both are 0**, so "Show electric field" currently draws
+nothing. Give O a negative `q` and H a positive one to light it up for polar
+bonds; `drawElectricHeatmap` already sums over `elemOf(p).q !== 0`.
 
+Atoms render as **semitransparent hollow spheres** (`drawAtom`): a radial
+gradient that is nearly clear at the centre and gathers towards the rim, plus a
+rim stroke for the silhouette and a specular arc at hi-res. Outline mode
+(`drawMoleculeOutline`) strokes the union silhouette — each atom circle only
+where it is not buried inside another.
+
+## What is in the world
+
+```javascript
+const SPECIES = [ { els: ['H','H'], weight: 1 } ];   // give a species weight > 0 to mix it in
+const ATOMIC_MASS = { H: 1, O: 16 };
 ```
-images/
-  favicon.png / favicon.svg
-  Turtle.png / Rabbit.png / Stopwatch.png
-  logo-placeholder.png
+
+`spawnWorld(n)` places `n` molecules at random positions, headings and spins,
+retrying up to 400 times per molecule for a spot clear of what is already down.
+Default count is 2; the dev panel slider goes to 40.
+
+A body stores its atoms once in **body-local** coordinates and derives world
+positions each frame from `(x, y, angle)`, so a molecule can never stretch or
+come apart. `bodyAtoms(b, dx, dy)` is the only way to get world positions.
+
+## Collisions
+
+Atom-against-atom, resolved as a 2D rigid-body impulse with rotation
+(`collidePair`). The rotational terms are what make a glancing hit set a
+molecule spinning instead of just shoving it sideways.
+
+```javascript
+const RESTITUTION = 1.0;   // perfectly elastic
 ```
+
+Verified: a head-on hit reverses both velocities exactly and induces no spin; a
+glancing hit deflects both and spins them; energy drift and linear-momentum
+drift are both 0 to the precision measured, with 20 molecules over 8 s; atom
+interpenetration never exceeded 0 px.
+
+`wrapDelta` gives the minimum-image offset, so a molecule at the left edge can
+collide with one at the right edge. The loop sub-steps at 4 ms so fast molecules
+cannot tunnel through each other, and clamps `dt` to 50 ms so a backgrounded tab
+does not resume with one enormous step.
+
+## Energy graph
+
+A scrolling 12-second trace of total kinetic energy (translational +
+rotational), full scale = 2× the energy at spawn, so **a flat line across the
+middle is the correct result**. A visible step means energy leaked — it is a
+check on the collision solver, not a teaching graph.
+
+## Known gaps
+
+- The world band excludes the full-width strip above the toolbar, even on the
+  right where the toolbar panel does not reach. Simple, but it wastes screen.
+- Molecules cannot be dragged or clicked; the old nucleus-rotation drag is gone.
+- No reactions. Molecules bounce; they never break or combine.
 
 ## Deployment
 
-GitHub Pages from `main` branch root. Push to `origin` to deploy.
-Remote: `https://github.com/ghostoutfit/fission.git`
-
-## Cross-sim search
-
-```bash
-# Compare with canonical v13
-grep -n "functionName" index.html /path/to/protons/v13/index.html
-```
-
-Changes to canonical `v13/index.html` in the protons repo should generally be ported here (fission-relevant parts only). They are not auto-synced.
+Not deployed yet. No git remote is configured — the fission remote was removed
+when this repo was copied, so `git push` will not reach fission.
