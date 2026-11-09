@@ -8,11 +8,25 @@ Forked from the `fission` repo and gutted: the nuclear physics, the scripted
 fission animation and its scrub/replay machinery are all gone. What was kept is
 the chrome — themes, quality selector, zoom, the toolbar, the energy bar.
 
-**Naming is still mid-migration.** A lot of ids and a few function names are
-inherited from fission and have not been renamed yet (`#scrubBar` is the energy
-bar, `#neutronSpeed` is the launch-speed dial, `#newBtnNucleus` is the molecule
-icon, `#nucleusWheel` wraps the respawn button, `nucleusIconLoop` draws the
-toolbar icons). The behaviour is correct; the labels are not.
+The fission names are gone — nothing is called a nucleus, a neutron or a scrub
+bar any more. `index.html` opens with a map of its sections; read that first.
+
+## Vocabulary
+
+Used consistently in code, comments and UI, so pick these words for new work:
+
+| word | means |
+|---|---|
+| **atom** | one circle — `{el, lx, ly, r, m}` in body-local coordinates |
+| **molecule** / **body** | a rigid group of atoms with `(x, y, angle, vx, vy, spin)` |
+| **species** | a recipe for a molecule: `SPECIES.H2 = { els: ['H','H'] }` |
+| **energy of motion** | kinetic — translation + rotation. `energyOfMotion()` |
+| **energy in fields** | potential. The term exists; nothing computes it yet |
+| **the band** | the ±`SPEED_SIGMA` speed limit on collision outputs |
+| **the dial** | the launch-speed slider, `#speedDial` |
+
+The energy trace stores samples as `{ t, motion }` rather than a bare number,
+so a `fields` channel can join it without touching the drawing code.
 
 ## The one idea
 
@@ -28,7 +42,7 @@ runs.
 ## Atoms and molecules
 
 ```javascript
-const PARTICLE_RADIUS = 30;    // drawn radius of one H atom; most geometry is a multiple of it
+const ATOM_RADIUS     = 30;    // drawn radius of one H atom; most geometry is a multiple of it
 const BOND_OVERLAP    = 0.72;  // < 1 so bonded atoms overlap, space-filling style
 const ELEMENTS = {
   H: { rgb: '185,192,205', rScale: 1.00, q: 0 },   // grey
@@ -207,6 +221,22 @@ rotational), full scale = 2× the energy at spawn, so **a flat line across the
 middle is the correct result**. A visible step means energy leaked — it is a
 check on the collision solver, not a teaching graph.
 
+## What is deliberately left standing
+
+Dormant, kept because the next round of work wants it. None of it is live:
+
+- **The electric-field heatmap** (`drawElectricHeatmap`, `coulombStrength`) is
+  fully wired to the "Show electric field" checkbox but draws nothing, because
+  every element's `q` is 0. Charge attraction only needs the numbers filled in.
+- **`#speedDialWrap.bounce-warn`** — the red flash on the dial, commented out in
+  the stylesheet. It was fission's "this neutron is too slow" warning; break
+  mode wants the same signal for "too slow to break a bond".
+- **`z` on atoms** is always 0 but `drawAtoms` already sorts by it, so a molecule
+  that is not a flat row has a draw order waiting.
+- **`formulaOf`** does full Hill ordering, so it already prints H₂O correctly.
+- **`world.bodies[].id`** is stable per body — the handle for selecting one
+  molecule and charting it alone.
+
 ## Known gaps
 
 - The world band excludes the full-width strip above the toolbar, even on the
@@ -214,8 +244,12 @@ check on the collision solver, not a teaching graph.
 - Composition lives in the dev panel, not the toolbar.
 - The temperature ramp runs even while paused, so velocities change with nothing
   moving. Harmless, but the pause is not a total freeze.
-- Molecules cannot be dragged or clicked; the old nucleus-rotation drag is gone.
+- Molecules cannot be dragged, clicked or selected.
 - No reactions. Molecules bounce; they never break or combine.
+- No internal vibration — a molecule is perfectly rigid, so a collision has only
+  translation and rotation to put energy into.
+- Only two counter slots in the toolbar (`sp1`/`sp2`); a third species would not
+  be shown.
 
 ## Deployment
 

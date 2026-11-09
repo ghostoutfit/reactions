@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Fission Digital Model</title>
+<title>Reactions Digital Model</title>
 <link rel="icon" type="image/png" href="images/favicon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -287,9 +287,14 @@
     gap: 6px;
   }
 
-  /* ── Neutron speed bounce warning ────────────────────────────────────── */
-  #neutronSpeedWrap { position: relative; display: flex; align-items: center; }
-  #neutronSpeedWrap.bounce-warn::before {
+  /* ── Launch-speed dial ─────────────────────────────────────────────────── */
+  #speedDialWrap { position: relative; display: flex; align-items: center; }
+
+  /* Nothing sets .bounce-warn any more — it was the fission warning that the
+     neutron was too slow to split anything. Kept because break mode will want
+     the same red flash on the dial when the speed is too low to break a bond. */
+  /*
+  #speedDialWrap.bounce-warn::before {
     content: '←';
     position: absolute;
     top: -24px;
@@ -303,11 +308,11 @@
       0 0 16px rgba(255,38,38,0.9),
       0 0 32px rgba(255,38,38,0.6);
     pointer-events: none;
-    animation: neutronWarnPulse 0.75s ease-in-out infinite;
+    animation: speedWarnPulse 0.75s ease-in-out infinite;
     white-space: nowrap;
     line-height: 1;
   }
-  #neutronSpeedWrap.bounce-warn::after {
+  #speedDialWrap.bounce-warn::after {
     content: '';
     position: absolute;
     inset: -10px;
@@ -316,13 +321,13 @@
     filter: blur(18px);
     z-index: -1;
     pointer-events: none;
-    animation: neutronWarnPulse 0.75s ease-in-out infinite;
+    animation: speedWarnPulse 0.75s ease-in-out infinite;
   }
-  @keyframes neutronWarnPulse {
+  @keyframes speedWarnPulse {
     0%, 100% { opacity: 0.3; }
     50%       { opacity: 1.0; }
   }
-
+  */
   /* ── Control boxes ─────────────────────────────────────────────────────── */
   .ctrl-box-pink {
     display: flex;
@@ -359,8 +364,7 @@
   }
 
   /* ── NEW button wrapper (the molecule choice dropdown was removed) ────────── */
-  .pwheel { position: relative; display: flex; flex-direction: column; align-self: stretch; }
-  .pwheel.locked { opacity: 0.35; pointer-events: none; }
+  .respawn-wrap { position: relative; display: flex; flex-direction: column; align-self: stretch; }
 
   .ctrl-box-blue {
     display: flex;
@@ -428,7 +432,7 @@
   }
 
   /* ── Scrub bar — floating glass at bottom ──────────────────────────────── */
-  #scrubBar {
+  #energyBar {
     position: fixed;
     bottom: 0; left: 0; right: 0;
     z-index: 10;
@@ -440,9 +444,9 @@
     border-top: 1px solid var(--ui-border);
     box-shadow: 0 -1px 0 var(--accent1-dim), 0 -4px 20px rgba(0,0,0,0.5);
   }
-  #scrubBar.visible { display: flex; }
+  #energyBar.visible { display: flex; }
   /* Left panel: key labels + replay/clock controls */
-  #scrubLeftPanel {
+  #energyBarLeft {
     display: flex;
     flex-direction: column;
     justify-content: flex-end;
@@ -450,7 +454,7 @@
     width: 112px;
     border-right: 1px solid var(--ui-border);
   }
-  #scrubGraphKey {
+  #energyGraphKey {
     display: none;
     flex-direction: column;
     gap: 6px;
@@ -462,8 +466,8 @@
     line-height: 1.25;
     letter-spacing: 0.02em;
   }
-  #scrubGraphKey.visible { display: flex; }
-  #scrubControls {
+  #energyGraphKey.visible { display: flex; }
+  #energyBarClock {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -471,8 +475,8 @@
     padding: 0 8px;
     flex-shrink: 0;
   }
-  /* Right panel: energyMain (graph+slider) + scrubRowRight (pct+toggle) */
-  #scrubRightPanel {
+  /* Right panel: energyMain (graph+slider) + energyReadout (pct+toggle) */
+  #energyBarRight {
     flex: 1;
     min-width: 0;
     display: flex;
@@ -487,7 +491,7 @@
     gap: 4px;
     padding: 6px 0;
   }
-  #scrubButtons {
+  #energyBarButtons {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -503,7 +507,7 @@
     background: rgba(26,110,255,0.04);
   }
   #energyGraphBox.visible { display: flex; }
-  #scrubPercents {
+  #energyPercents {
     display: none;
     flex: 1;
     flex-direction: column;
@@ -515,7 +519,7 @@
     font-weight: 700;
     line-height: 1;
   }
-  #scrubPercents.visible { display: flex; }
+  #energyPercents.visible { display: flex; }
   #energyPctNums {
     display: flex;
     gap: 10px;
@@ -563,14 +567,6 @@
     height: 110px;
     cursor: crosshair;
   }
-  #scrubBar .scrub-label {
-    font-size: 10px;
-    color: var(--text-dim);
-    white-space: nowrap;
-    letter-spacing: 1px;
-    text-transform: uppercase;
-  }
-  #scrubPct { display: none; }
 
   .theme-btn {
     width: 18px; height: 18px;
@@ -629,14 +625,14 @@
     color: rgba(0,0,0,0.35) !important;
     border-color: rgba(0,0,0,0.12) !important;
   }
-  body.screenshot-mode #scrubBar {
+  body.screenshot-mode #energyBar {
     background: rgba(255,255,255,0.42) !important;
     border-top-color: rgba(0,0,0,0.15) !important;
     box-shadow: none !important;
   }
-  body.screenshot-mode #scrubBar,
-  body.screenshot-mode #scrubBar * { color: #000 !important; text-shadow: none !important; }
-  body.screenshot-mode #scrubBar button { border-color: #000 !important; box-shadow: none !important; }
+  body.screenshot-mode #energyBar,
+  body.screenshot-mode #energyBar * { color: #000 !important; text-shadow: none !important; }
+  body.screenshot-mode #energyBar button { border-color: #000 !important; box-shadow: none !important; }
   body.screenshot-mode #energyGraph { background: #fff !important; }
   /* Preserve educational color codes: electric = blue, strong = orange */
   body.screenshot-mode .field-label-electric { color: #46a5ff !important; }
@@ -684,10 +680,10 @@
 
     <!-- Pink box: respawn button + launch speed + what is in the world -->
     <div class="ctrl-box-pink">
-      <span class="ctrl-box-label ctrl-box-label-pink">PARTICLES</span>
-      <div class="pwheel" id="nucleusWheel">
+      <span class="ctrl-box-label ctrl-box-label-pink">MOLECULES</span>
+      <div class="respawn-wrap" id="respawnGroup">
         <button id="newBtn" class="btn" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;align-self:stretch;padding:6px 12px;">
-          <canvas id="newBtnNucleus" width="96" height="42" style="display:block;flex-shrink:0;image-rendering:pixelated"></canvas>
+          <canvas id="newBtnMolecule" width="96" height="42" style="display:block;flex-shrink:0;image-rendering:pixelated"></canvas>
           <span id="newBtnLabel" style="font-size:11px;text-transform:none;letter-spacing:normal;">H&#8322;</span>
         </button>
       </div>
@@ -695,16 +691,16 @@
         <div class="slider-group">
           <div style="display:flex;align-items:center;gap:1px">
             <canvas id="speedLinesCanvas" width="50" height="46" style="display:block;flex-shrink:0;image-rendering:pixelated"></canvas>
-            <canvas id="neutronIconCanvas" width="46" height="46" style="display:block;flex-shrink:0;image-rendering:pixelated"></canvas>
+            <canvas id="speedDialIconCanvas" width="46" height="46" style="display:block;flex-shrink:0;image-rendering:pixelated"></canvas>
           </div>
-          <div id="neutronSpeedWrap"><input type="range" id="neutronSpeed" min="0.2" max="8.0" step="0.1" value="4.0"></div>
+          <div id="speedDialWrap"><input type="range" id="speedDial" min="0.2" max="8.0" step="0.1" value="4.0"></div>
         </div>
-        <div id="particleCounters" style="display:flex;gap:5px;justify-content:center;">
+        <div id="speciesCounters" style="display:flex;gap:5px;justify-content:center;">
           <div style="flex:1;background:rgba(255,255,255,0.05);border-radius:6px;padding:3px 5px;text-align:center;font-size:11px;color:var(--text-dim);line-height:1.5;white-space:nowrap;">
-            <span id="p1Label" style="font-size:9px;letter-spacing:0.05em;opacity:0.6;">&times;2&nbsp;</span><span id="p1Formula" style="color:var(--accent1);font-weight:700">H&#8322;</span>
+            <span id="sp1Count" style="font-size:9px;letter-spacing:0.05em;opacity:0.6;">&times;2&nbsp;</span><span id="sp1Formula" style="color:var(--accent1);font-weight:700">H&#8322;</span>
           </div>
-          <div id="p2Counter" style="flex:1;background:rgba(255,255,255,0.05);border-radius:6px;padding:3px 5px;text-align:center;font-size:11px;color:var(--text-dim);line-height:1.5;white-space:nowrap;">
-            <span id="p2Label" style="font-size:9px;letter-spacing:0.05em;opacity:0.6;">&times;0&nbsp;</span><span id="p2Formula" style="color:var(--accent1);font-weight:700">H&#8322;</span>
+          <div id="sp2Slot" style="flex:1;background:rgba(255,255,255,0.05);border-radius:6px;padding:3px 5px;text-align:center;font-size:11px;color:var(--text-dim);line-height:1.5;white-space:nowrap;">
+            <span id="sp2Count" style="font-size:9px;letter-spacing:0.05em;opacity:0.6;">&times;0&nbsp;</span><span id="sp2Formula" style="color:var(--accent1);font-weight:700">H&#8322;</span>
           </div>
         </div>
       </div>
@@ -743,38 +739,38 @@
       </div>
       <div style="display:flex;gap:10px;align-self:stretch;align-items:center">
         <div style="display:flex;flex-direction:column;gap:4px">
-          <button class="awheel-item active" data-pmode="particles" style="display:flex;align-items:center;gap:5px"><canvas id="particlesModeIcon" width="22" height="18" style="display:block;flex-shrink:0;image-rendering:pixelated"></canvas>Particles</button>
-          <button class="awheel-item" data-pmode="outline" style="display:flex;align-items:center;gap:5px"><canvas id="outlineModeIcon" width="22" height="18" style="display:block;flex-shrink:0;image-rendering:pixelated"></canvas>Outline</button>
+          <button class="awheel-item active" data-view="atoms" style="display:flex;align-items:center;gap:5px"><canvas id="atomsModeIcon" width="22" height="18" style="display:block;flex-shrink:0;image-rendering:pixelated"></canvas>Atoms</button>
+          <button class="awheel-item" data-view="outline" style="display:flex;align-items:center;gap:5px"><canvas id="outlineModeIcon" width="22" height="18" style="display:block;flex-shrink:0;image-rendering:pixelated"></canvas>Outline</button>
         </div>
       </div>
     </div>
   </div>
 </div>
-<div id="scrubBar">
-  <div id="scrubLeftPanel">
-    <div id="scrubGraphKey">
-      <div id="keKeyLabel" style="color:#ff3a6e;text-shadow:0 0 8px rgba(255,45,100,0.8)"><svg width="22" height="4" style="vertical-align:middle;margin-right:5px"><line x1="0" y1="2" x2="22" y2="2" stroke="currentColor" stroke-width="2.5"/></svg>Energy<br>of Motion</div>
+<div id="energyBar">
+  <div id="energyBarLeft">
+    <div id="energyGraphKey">
+      <div class="graph-key-motion" style="color:#ff3a6e;text-shadow:0 0 8px rgba(255,45,100,0.8)"><svg width="22" height="4" style="vertical-align:middle;margin-right:5px"><line x1="0" y1="2" x2="22" y2="2" stroke="currentColor" stroke-width="2.5"/></svg>Energy<br>of Motion</div>
     </div>
-    <div id="scrubControls">
+    <div id="energyBarClock">
       <div style="display:flex;flex-direction:column;align-items:center;gap:2px;">
         <span class="slider-icon" style="font-size:32px"><img src="images/Stopwatch.png" style="height:1em;vertical-align:middle;display:block"></span>
       </div>
     </div>
   </div>
-  <div id="scrubRightPanel">
+  <div id="energyBarRight">
     <div id="energyMain">
       <div id="energyGraphBox">
         <canvas id="energyGraph" width="100" height="110"></canvas>
       </div>
     </div>
-    <div id="scrubRowRight">
-      <div id="scrubPercents">
+    <div id="energyReadout">
+      <div id="energyPercents">
         <div id="energyPctNums">
-          <span id="energyPctKE" style="color:#ff2060;text-shadow:0 0 8px rgba(255,20,80,0.7);">100%</span>
+          <span id="energyPctMotion" style="color:#ff2060;text-shadow:0 0 8px rgba(255,20,80,0.7);">100%</span>
         </div>
         <div id="energyPctNote">Total energy of motion, relative to the start</div>
       </div>
-      <div id="scrubButtons">
+      <div id="energyBarButtons">
         <button id="energyGraphToggle" class="btn">HIDE LINE<br>GRAPH</button>
         <img src="images/logo-placeholder.png" alt="logo" style="height:60px;width:auto;opacity:0;display:block;border-radius:4px;flex-shrink:0;">
       </div>
@@ -792,11 +788,42 @@
 </div>
 
 <script>
+// REACTIONS — a molecular collision sandbox. One file, no build step.
+//
+// The sections below, in the order they appear. Each only uses what is above it,
+// apart from the controls and Init at the foot, which wire up everything.
+//
+//   Constants, Elements     atom radius, bond length, the periodic data we use
+//   Canvas, Quality tiers   the two canvases, the draw-cost benchmark, frame cap
+//   Colormaps, Field        the electric heatmap — dormant until charges are nonzero
+//   Atom renderer           drawAtom: a circle traced by a travelling arrow
+//   Molecule outline        the union silhouette, for Outline view
+//   Species, World          what can be spawned, and the wrap-around box
+//   Temperature             the Low/High dial and its exponential ramp
+//   Spawn speed spread      the truncated bell that speeds start from
+//   Physics                 stepWorld + collidePair: rigid-body impulse with spin
+//   Speed band              settlePairSpeeds: deliberately not pure
+//   Formula readout         ['H','H'] -> 'H₂', and the species counters
+//   Icons                   the toolbar canvases
+//   Renderer, Main loop     drawWorld and worldLoop
+//   Energy trace            the scrolling energy-of-motion graph
+//   Controls, Dev panel     event wiring; type "dev" for the experiment knobs
+//   Themes                  the four colour schemes
+//   Console diagnostics     runPerfTest / speedHistogram / energySplit
+//   Init                    start-up order, then the bug-report button
+//
+// Vocabulary: an ATOM is one circle, a MOLECULE is a rigid BODY of atoms, a
+// SPECIES is a recipe for one (H2, O2). Energy is "energy of motion" and
+// "energy in fields" throughout — the same words the UI uses.
+
 // ─── Constants ────────────────────────────────────────────────────────────────
-// PARTICLE_RADIUS is the drawn radius of one ATOM (was one proton/neutron at 10px).
-// Nearly all the scene geometry — masks, outline scallops, projectile offsets — is
-// expressed as a multiple of it, so bumping it here scales the whole scene.
-const PARTICLE_RADIUS = 30;
+// ATOM_RADIUS is the drawn radius of one hydrogen atom. Nearly all the scene
+// geometry — bond lengths, outlines, icon scaling — is expressed as a multiple
+// of it, so bumping it here scales the whole scene.
+const ATOM_RADIUS = 30;
+
+// Strength of the pairwise electric term in the field heatmap. The heatmap is
+// wired up but idle: every element's q is 0, so there is nothing to sum.
 const coulombStrength = 150;
 
 // ─── Elements ─────────────────────────────────────────────────────────────────
@@ -816,30 +843,25 @@ const rgba = (rgb, a) => `rgba(${rgb},${a})`;
 // < 1 so bonded atoms visibly overlap the way a space-filling model does.
 const BOND_OVERLAP = 0.72;
 function bondLen(elA, elB) {
-  return (ELEMENTS[elA].rScale + ELEMENTS[elB].rScale) * PARTICLE_RADIUS * BOND_OVERLAP;
+  return (ELEMENTS[elA].rScale + ELEMENTS[elB].rScale) * ATOM_RADIUS * BOND_OVERLAP;
 }
 
 // ─── Canvas ───────────────────────────────────────────────────────────────────
 const canvas   = document.getElementById('canvas');
 const ctx      = canvas.getContext('2d');
-const egCanvas = document.getElementById('energyGraph');
-const egCtx    = egCanvas.getContext('2d');
+const graphCanvas = document.getElementById('energyGraph');
+const graphCtx    = graphCanvas.getContext('2d');
 
 // ─── Heatmap buffers ──────────────────────────────────────────────────────────
 const hmCanvas    = document.createElement('canvas');
 const hmCtx       = hmCanvas.getContext('2d');
 const hmComposite = document.createElement('canvas');
 const hmcCtx      = hmComposite.getContext('2d');
-const hmSnap      = document.createElement('canvas');  // pre-transition snapshot for crossfade
-const hmSnapCtx   = hmSnap.getContext('2d');
 
 let hmW = 0, hmH = 0;
 let hmDataElec = null;
 let hmImgElec  = null;
 let heatmapDirty    = true;
-let hmFrameCounter  = 0;
-let _hmXfadeStartFrac = -1;   // frac at which phase-3 crossfade began; -1 = inactive
-const HM_XFADE_DURATION = 0.04;  // crossfade window in frac units (~200ms at normal speed)
 
 // ── Quality tiers ─────────────────────────────────────────────────────────────
 // Each tier sets both how much is drawn per atom and the frame rate it is drawn
@@ -860,7 +882,7 @@ function _applyQuality(level) {
 
 // ── Renderer benchmark ────────────────────────────────────────────────────────
 // Measures what the sim actually draws — arc-stroke trails, not the gradient
-// blobs the nuclear version used — so the tier it picks reflects real cost.
+// blobs the fission version used — so the tier it picks reflects real cost.
 // One pass is a full worst-case frame: MAX atoms at hi-res segment count.
 // getImageData() at the end forces a GPU sync so the timing is real.
 const BENCH_ATOMS = 24;   // a full world: 6 H2 + 6 O2, two atoms each
@@ -901,35 +923,17 @@ function pickTier(ms) {
   return 'simple';
 }
 
-// Console diagnostic: `runPerfTest()` re-measures and prints the numbers next to
-// the constants they are compared against, without changing the current tier.
-window.runPerfTest = function (samples = 5) {
-  const runs = Array.from({ length: samples }, () => _runPerfBenchmark());
-  const median = runs.slice().sort((a, b) => a - b)[Math.floor(samples / 2)];
-  console.table([
-    { metric: 'worst-case frame draw', value: +median.toFixed(2), unit: 'ms',
-      note: BENCH_ATOMS + ' atoms x ' + TIER_SEGMENTS['hi-res'] + ' segments' },
-    { metric: 'hi-res threshold',   value: TIER_THRESHOLD_MS['hi-res'],   unit: 'ms', note: 'below this -> hi-res' },
-    { metric: 'detailed threshold', value: TIER_THRESHOLD_MS['detailed'], unit: 'ms', note: 'below this -> detailed' },
-    { metric: 'frame budget @60fps', value: +(1000 / 60).toFixed(2), unit: 'ms', note: 'one whole frame' },
-    { metric: 'would pick',   value: pickTier(median), unit: '', note: TIER_FPS[pickTier(median)] + ' fps' },
-    { metric: 'current tier', value: _quality, unit: '', note: TIER_FPS[_quality] + ' fps' },
-  ]);
-  console.log('runs (ms):', runs.map(r => +r.toFixed(2)).join(', '));
-  return { median: +median.toFixed(2), wouldPick: pickTier(median), current: _quality };
-};
-
 function resize() {
   canvas.width   = window.innerWidth;
   canvas.height  = window.innerHeight;
-  egCanvas.width  = Math.max(1, egCanvas.offsetWidth || (window.innerWidth - 112));
-  egCanvas.height = 110;
+  graphCanvas.width  = Math.max(1, graphCanvas.offsetWidth || (window.innerWidth - 112));
+  graphCanvas.height = 110;
   heatmapDirty   = true;
 }
 resize();
 window.addEventListener('resize', () => {
   resize();
-  document.getElementById('scrubBar').classList.add('visible');
+  document.getElementById('energyBar').classList.add('visible');
   heatmapDirty = true;
   // Stretch the wrap box to the new band, carrying the molecules with it so a
   // window resize does not dump everything outside the world or on top of itself.
@@ -973,43 +977,9 @@ buildColorstops([
   { t: 1.0,  r: 210, g: 238, b: 255, a: 255 },
 ], COLORMAP);
 
-// ─── Molecule generation ──────────────────────────────────────────────────────
-// A molecule is a list of atoms laid out in a row along `angle`, centred on
-// (cx, cy). Same shape as the old nucleus object — {particles, sphereR, cx, cy} —
-// so every consumer downstream (masks, outlines, pre-render, force panel) is
-// unchanged. `els` is e.g. ['H','H'] for H2 or ['H','O','H'] for water.
-function makeMolecule(els, cx, cy, angle = 0, tag = null) {
-  // Cumulative offsets along the chain, then re-centred on the midpoint
-  const offs = [0];
-  for (let k = 1; k < els.length; k++) {
-    offs.push(offs[k - 1] + bondLen(els[k - 1], els[k]));
-  }
-  const mid = (offs[0] + offs[offs.length - 1]) / 2;
-
-  const ca = Math.cos(angle), sa = Math.sin(angle);
-  const particles = els.map((el, k) => {
-    const d = offs[k] - mid;
-    return { x: cx + d * ca, y: cy + d * sa, z: 0, el, type: 'atom', i: k, tag };
-  });
-
-  // Enclosing radius: furthest atom centre plus its own drawn radius
-  const sphereR = Math.max(...els.map((el, k) =>
-    Math.abs(offs[k] - mid) + PARTICLE_RADIUS * ELEMENTS[el].rScale));
-
-  return { particles, sphereR, cx, cy };
-}
-
-// Half the length of a molecule laid out along its own axis — how far its
-// centre sits from its leading edge.
-function moleculeHalfLen(els) {
-  let total = 0;
-  for (let k = 1; k < els.length; k++) total += bondLen(els[k - 1], els[k]);
-  return total / 2 + PARTICLE_RADIUS * Math.max(...els.map(e => ELEMENTS[e].rScale));
-}
-
 // ─── Electric field heatmap ───────────────────────────────────────────────────
-// masks: [{cx, cy, r}] — soft radial clipping; alpha fades to 0 at r + PARTICLE_RADIUS*2
-function drawElectricHeatmap(particleList, sampleFrac = 0.5, sigmaScale = 1.0, masks = null, boundsExpand = 50, destCtx = ctx, _forceRender = false) {
+// masks: [{cx, cy, r}] — soft radial clipping; alpha fades to 0 at r + ATOM_RADIUS*2
+function drawElectricHeatmap(atomList, sampleFrac = 0.5, sigmaScale = 1.0, masks = null, boundsExpand = 50, destCtx = ctx, _forceRender = false) {
   const fullW = canvas.width, fullH = canvas.height;
 
   const _hmSizeMatch = hmComposite.width === fullW && hmComposite.height === fullH;
@@ -1022,21 +992,21 @@ function drawElectricHeatmap(particleList, sampleFrac = 0.5, sigmaScale = 1.0, m
   const h        = Math.ceil(fullH * scale);
   const invScale = 1 / scale;
 
-  let protons = particleList.filter(p =>
+  let charged = atomList.filter(p =>
     elemOf(p).q !== 0 &&
     p.x > -boundsExpand && p.x < fullW + boundsExpand &&
     p.y > -boundsExpand && p.y < fullH + boundsExpand
   );
   if (sampleFrac < 1.0) {
-    protons = protons.filter((_, i) => i % Math.round(1 / sampleFrac) === 0);
+    charged = charged.filter((_, i) => i % Math.round(1 / sampleFrac) === 0);
   }
 
-  const refEnergy = coulombStrength / (PARTICLE_RADIUS * 2);
+  const refEnergy = coulombStrength / (ATOM_RADIUS * 2);
   const logRef    = Math.log(2);
   const elecPairs = [];
-  for (let i = 0; i < protons.length; i++) {
-    for (let j = i+1; j < protons.length; j++) {
-      const a = protons[i], b = protons[j];
+  for (let i = 0; i < charged.length; i++) {
+    for (let j = i+1; j < charged.length; j++) {
+      const a = charged[i], b = charged[j];
       const dx = b.x - a.x, dy = b.y - a.y;
       const dist = Math.sqrt(dx*dx + dy*dy);
       if (dist < 0.01) continue;
@@ -1054,10 +1024,10 @@ function drawElectricHeatmap(particleList, sampleFrac = 0.5, sigmaScale = 1.0, m
   ensureHmBuffers(w, h);
   hmDataElec.fill(0);
 
-  // Clamp pixel loop to the bounding box of active protons — skips the large
-  // empty canvas area around the nucleus, which is typically 90%+ of pixels.
+  // Clamp pixel loop to the bounding box of active charged — skips the large
+  // empty canvas area around the molecules, which is typically 90%+ of pixels.
   let bxMin = w, bxMax = 0, byMin = h, byMax = 0;
-  for (const p of protons) {
+  for (const p of charged) {
     const sx = (p.x * scale) | 0, sy = (p.y * scale) | 0;
     if (sx < bxMin) bxMin = sx; if (sx > bxMax) bxMax = sx;
     if (sy < byMin) byMin = sy; if (sy > byMax) byMax = sy;
@@ -1087,7 +1057,7 @@ function drawElectricHeatmap(particleList, sampleFrac = 0.5, sigmaScale = 1.0, m
         if (total >= 1/3) break;
       }
       if (total > 0.002) {
-        // Soft radial mask — clamp heatmap to nucleus boundary.
+        // Soft radial mask — clamp the heatmap to the molecule boundary.
         // Supports two mask types:
         //   circle  { cx, cy, r, bleed }
         //   capsule { type:'capsule', cx1,cy1,r1, cx2,cy2,r2, bleed }
@@ -1095,7 +1065,7 @@ function drawElectricHeatmap(particleList, sampleFrac = 0.5, sigmaScale = 1.0, m
         let maskAlpha = 1;
         if (masks) {
           maskAlpha = 0;
-          const defaultBleed = PARTICLE_RADIUS * 2;
+          const defaultBleed = ATOM_RADIUS * 2;
           for (const m of masks) {
             if (maskAlpha >= 1) break;
             const bleed = m.bleed !== undefined ? m.bleed : defaultBleed;
@@ -1154,7 +1124,7 @@ function drawElectricHeatmap(particleList, sampleFrac = 0.5, sigmaScale = 1.0, m
 function drawMoleculeOutline(atoms, c = ctx) {
   if (!atoms || !atoms.length) return;
   const circles = atoms.map(p => ({
-    x: p.x, y: p.y, r: PARTICLE_RADIUS * elemOf(p).rScale,
+    x: p.x, y: p.y, r: ATOM_RADIUS * elemOf(p).rScale,
   }));
 
   const LIGHT = document.body.classList.contains('screenshot-mode');
@@ -1226,7 +1196,7 @@ function atomPhase(p) {
 
 function drawAtom(dc, px, py, p, radiusScale = 1, alphaScale = 1) {
   const e = elemOf(p);
-  const R = PARTICLE_RADIUS * e.rScale * radiusScale;
+  const R = ATOM_RADIUS * e.rScale * radiusScale;
   const a = (v) => Math.min(1, v * alphaScale);
 
   const head = atomPhase(p);
@@ -1270,10 +1240,10 @@ function drawAtom(dc, px, py, p, radiusScale = 1, alphaScale = 1) {
   dc.restore();
 }
 
-function drawParticles(particles, radiusScale = 1, drawCtx = ctx) {
+function drawAtoms(atoms, radiusScale = 1, drawCtx = ctx) {
   const dc = drawCtx;
   // z ascending = back to front, so overlapping trails layer correctly
-  const sorted = [...particles].sort((a, b) => (a.z || 0) - (b.z || 0));
+  const sorted = [...atoms].sort((a, b) => (a.z || 0) - (b.z || 0));
   for (const p of sorted) drawAtom(dc, p.x, p.y, p, radiusScale);
 }
 
@@ -1307,7 +1277,7 @@ function zoomFromSlider(v) {
 // are no walls — anything leaving one edge comes back on the opposite one, and
 // a body straddling an edge is drawn on both sides.
 let viewZoom = 1.0;
-let showParticles = true;
+let showAtoms = true;
 let running = false;
 
 // Atomic masses, in units where H = 1. Used for collision impulses and for the
@@ -1326,7 +1296,7 @@ const world = {
 // nothing can drift behind an opaque panel and look like it vanished.
 function syncWorldBox() {
   const tbH  = document.getElementById('toolbar').offsetHeight;
-  const sbEl = document.getElementById('scrubBar');
+  const sbEl = document.getElementById('energyBar');
   const sbH  = sbEl.classList.contains('visible') ? sbEl.offsetHeight : 0;
   const oldW = world.w, oldH = world.h;
   world.top = tbH;
@@ -1349,7 +1319,7 @@ function makeBody(els, x, y, heading, speed, spin, nominal = speed) {
     el,
     lx: offs[k] - mid,            // body-local, along the molecule axis
     ly: 0,
-    r: PARTICLE_RADIUS * ELEMENTS[el].rScale,
+    r: ATOM_RADIUS * ELEMENTS[el].rScale,
     m: ATOMIC_MASS[el] || 1,
   }));
 
@@ -1382,7 +1352,7 @@ function bodyAtoms(b, dx = 0, dy = 0) {
 
 // Launch speed in px/s for H2, from the speed slider (0.2–8.0 on the dial)
 function launchSpeed() {
-  return parseFloat(document.getElementById('neutronSpeed').value) * 45;
+  return parseFloat(document.getElementById('speedDial').value) * 45;
 }
 
 // Equipartition: heavier molecules start slower, so every species begins with
@@ -1460,72 +1430,6 @@ function spreadSpeed(mean) {
   return mean * (1 + truncNormal() * SPEED_SIGMA);
 }
 
-// Console diagnostic: how the speeds actually came out, per species.
-// `speedHistogram()` after a spawn shows the intended shape; after a run it
-// shows what the collisions have made of it.
-// Console diagnostic: how the world's energy is split between moving and
-// spinning, and how often the band could not be enforced without a real
-// energy change.
-window.energySplit = function () {
-  let trans = 0, rot = 0, outOfBand = 0;
-  for (const b of world.bodies) {
-    trans += 0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy);
-    rot   += 0.5 * b.inertia * b.spin * b.spin;
-    const v = Math.hypot(b.vx, b.vy);
-    if (v < b.vTarget * (1 - SPEED_SIGMA) - 0.5 ||
-        v > b.vTarget * (1 + SPEED_SIGMA) + 0.5) outOfBand++;
-  }
-  const total = trans + rot;
-  console.table([
-    { part: 'translation', energy: +trans.toFixed(0), share: +(trans / total * 100).toFixed(1) + '%' },
-    { part: 'rotation',    energy: +rot.toFixed(0),   share: +(rot   / total * 100).toFixed(1) + '%' },
-    { part: 'total',       energy: +total.toFixed(0), share: '100%' },
-  ]);
-  console.log('band ' + (clampSpeeds ? 'on' : 'off') +
-    ' \u00b1' + Math.round(SPEED_SIGMA * 100) + '%  |  out of band now: ' + outOfBand + '/' + world.bodies.length +
-    '  |  spin capped ' + clampOverflowCount + '\u00d7, floor topped up ' + clampUnderflowCount + '\u00d7' +
-    ' (+' + (clampCreatedEnergy / Math.max(1, egRef) * 100).toFixed(1) + '% of spawn energy created)' +
-    '  |  vs energy at spawn: ' + (total / egRef * 100).toFixed(1) + '%');
-  return { trans: +trans.toFixed(0), rot: +rot.toFixed(0), outOfBand,
-           overflow: clampOverflowCount, underflow: clampUnderflowCount };
-};
-
-window.speedHistogram = function (bins = 9) {
-  const byType = new Map();
-  for (const b of world.bodies) {
-    const f = formulaOf(b.els);
-    if (!byType.has(f)) byType.set(f, []);
-    byType.get(f).push(Math.hypot(b.vx, b.vy));
-  }
-  const rows = [];
-  for (const [f, v] of byType) {
-    const n = v.length;
-    const mean = v.reduce((a, x) => a + x, 0) / n;
-    const sd = Math.sqrt(v.reduce((a, x) => a + (x - mean) ** 2, 0) / n);
-    const lo = Math.min(...v), hi = Math.max(...v);
-    rows.push({
-      species: f, n,
-      mean: +mean.toFixed(1), sd: +sd.toFixed(1),
-      'sd/mean': +(sd / mean).toFixed(3),
-      min: +lo.toFixed(1), max: +hi.toFixed(1),
-      'spread in sd': +((hi - lo) / (sd || 1)).toFixed(2),
-    });
-  }
-  console.table(rows);
-  console.log('target sd/mean at spawn: ' + SPEED_SIGMA +
-              '  (bounds are ±1σ, so a fresh spawn spans ~2σ)');
-  // Crude bell check across everything
-  const all = [...byType.values()].flat();
-  if (all.length) {
-    const lo = Math.min(...all), hi = Math.max(...all), w = (hi - lo) / bins || 1;
-    const h = new Array(bins).fill(0);
-    for (const x of all) h[Math.min(bins - 1, Math.floor((x - lo) / w))]++;
-    h.forEach((c, i) => console.log(
-      (lo + i * w).toFixed(0).padStart(5) + ' |' + '█'.repeat(c)));
-  }
-  return rows;
-};
-
 function spawnWorld() {
   syncWorldBox();
   world.bodies = [];
@@ -1564,10 +1468,10 @@ function spawnWorld() {
     }
     world.bodies.push(placed);
   }
-  clampOverflowCount = 0; clampUnderflowCount = 0; clampCreatedEnergy = 0;
+  spinCapHits = 0; floorTopUps = 0; energyCreated = 0;
   lastDialSpeed = launchSpeed() * tempCurrent;
   resetEnergyTrace();
-  updateParticleCounters();
+  updateSpeciesCounters();
 }
 
 // Shortest offset between two points in a wrap-around box ("minimum image")
@@ -1617,11 +1521,11 @@ function pointVel(b, rx, ry) {
 // enforced while the body's total kinetic energy stays exactly what the
 // collision gave it. Only when the spin would exceed MAX_SPIN, or when there is
 // not enough spin to buy the speed-up, does any energy actually change.
-let clampSpeeds = true;        // dev toggle
+let speedBandOn = true;        // dev toggle
 let MAX_SPIN    = 14;          // rad/s — past this it is a blur, not a spin
-let clampOverflowCount = 0;    // diagnostics: times the reservoir could not take it
-let clampUnderflowCount = 0;
-let clampCreatedEnergy = 0;   // energy conjured to hold the floor
+let spinCapHits = 0;    // diagnostics: times the reservoir could not take it
+let floorTopUps = 0;
+let energyCreated = 0;   // energy conjured to hold the floor
 
 // Settled across the colliding pair, not one body at a time. A slow molecule
 // usually has little spin of its own to spend, but the molecule it just hit is
@@ -1648,8 +1552,8 @@ function softBand(v, vMin, vMax) {
   return v;
 }
 
-function rebalancePair(A, B) {
-  if (!clampSpeeds) return;
+function settlePairSpeeds(A, B) {
+  if (!speedBandOn) return;
   const pair = [A, B];
   const E0 = pair.reduce((a, b) =>
     a + 0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy)
@@ -1678,8 +1582,8 @@ function rebalancePair(A, B) {
     // gains the shortfall out of nowhere. This is the one place the sim creates
     // energy, it is counted, and `energySplit()` reports it.
     for (const b of pair) b.spin = 0;
-    clampCreatedEnergy += -rotBudget;
-    clampUnderflowCount++;
+    energyCreated += -rotBudget;
+    floorTopUps++;
     return;
   }
 
@@ -1690,7 +1594,7 @@ function rebalancePair(A, B) {
   pair.forEach((b, i) => {
     let e = rotBudget * (rotSum > 1e-12 ? rotNow[i] / rotSum : 0.5);
     const cap = 0.5 * b.inertia * MAX_SPIN * MAX_SPIN;
-    if (e > cap) { e = cap; clampOverflowCount++; }   // the one place energy leaves
+    if (e > cap) { e = cap; spinCapHits++; }   // the one place energy leaves
     const dir = b.spin !== 0 ? Math.sign(b.spin) : (Math.random() < 0.5 ? -1 : 1);
     b.spin = dir * Math.sqrt(2 * e / b.inertia);
   });
@@ -1741,19 +1645,18 @@ function collidePair(A, B) {
       A.x -= push * nx / A.mass;  A.y -= push * ny / A.mass;
       B.x += push * nx / B.mass;  B.y += push * ny / B.mass;
 
-      rebalancePair(A, B);
+      settlePairSpeeds(A, B);
       return;   // one contact per pair per frame keeps the response stable
     }
   }
 }
 
-function totalKineticEnergy() {
+function energyOfMotion() {
   return world.bodies.reduce((a, b) =>
     a + 0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy)
       + 0.5 * b.inertia * b.spin * b.spin, 0);
 }
 
-// ─── Formula readout ──────────────────────────────────────────────────────────
 // ─── Formula readout ──────────────────────────────────────────────────────────
 const SUBS = '\u2080\u2081\u2082\u2083\u2084\u2085\u2086\u2087\u2088\u2089';
 const sub = (n) => String(n).split('').map(d => SUBS[+d]).join('');
@@ -1770,14 +1673,18 @@ function formulaOf(els) {
     .join('');
 }
 
-// Shows what is in the world: the distinct species and how many of each.
-function updateParticleCounters() {
-  const f1   = document.getElementById('p1Formula');
-  const f2   = document.getElementById('p2Formula');
-  const l1   = document.getElementById('p1Label');
-  const l2   = document.getElementById('p2Label');
-  const p2El = document.getElementById('p2Counter');
-  if (!f1) return;
+// Shows what is in the world: the distinct species and how many of each. Two
+// fixed slots, each a "xN" count beside a formula. Slot 1 always holds its
+// space (a dash in an empty world) and slot 2 goes visibility:hidden rather
+// than display:none when there is only one species, so the pink box never
+// changes width.
+function updateSpeciesCounters() {
+  const slots = [
+    { count: document.getElementById('sp1Count'), formula: document.getElementById('sp1Formula') },
+    { count: document.getElementById('sp2Count'), formula: document.getElementById('sp2Formula'),
+      box:   document.getElementById('sp2Slot') },
+  ];
+  if (!slots[0].formula) return;
 
   const tally = new Map();
   for (const b of world.bodies) {
@@ -1785,23 +1692,22 @@ function updateParticleCounters() {
     tally.set(f, (tally.get(f) || 0) + 1);
   }
   const rows = [...tally.entries()];
-  const put = (lab, val, [formula, n] = []) => {
-    if (!formula) { lab.textContent = ''; val.textContent = '\u2014'; return false; }
-    lab.textContent = '×' + n + '\u00a0';
-    val.textContent = formula;
-    return true;
-  };
-  put(l1, f1, rows[0]);                      // slot 1 shows a dash in an empty world
-  p2El.style.visibility = put(l2, f2, rows[1]) ? '' : 'hidden';
+
+  slots.forEach((slot, k) => {
+    const [formula, n] = rows[k] || [];
+    slot.count.textContent   = formula ? '×' + n + ' ' : '';
+    slot.formula.textContent = formula || '—';
+    if (slot.box) slot.box.style.visibility = formula ? '' : 'hidden';
+  });
 }
 
-// ─── Speed lines (neutron speed indicator) ────────────────────────────────────
+// ─── Speed lines — the dash marks beside the launch-speed dial ──────────────
 function drawSpeedLines() {
   const canvas = document.getElementById('speedLinesCanvas');
   if (!canvas) return;
   const c = canvas.getContext('2d');
   const w = canvas.width, h = canvas.height;
-  const slider = document.getElementById('neutronSpeed');
+  const slider = document.getElementById('speedDial');
   const min = parseFloat(slider.min), max = parseFloat(slider.max);
   const t   = (parseFloat(slider.value) - min) / (max - min);  // 0..1
 
@@ -1832,23 +1738,7 @@ function drawSpeedLines() {
   });
 }
 
-// ─── Projectile icon (beside the speed slider) ───────────────────────────────
-const neutronIconJitter = { x: 0, y: 0 };
-
-function drawNeutronIcon() {
-  drawMoleculeIcon(document.getElementById('neutronIconCanvas'),
-                   SPECIES.H2.els, neutronIconJitter, 3);
-}
-
-function neutronIconLoop() {
-  neutronIconJitter.x = (neutronIconJitter.x + (Math.random() - 0.5) * 0.7) * 0.78;
-  neutronIconJitter.y = (neutronIconJitter.y + (Math.random() - 0.5) * 0.7) * 0.78;
-  drawNeutronIcon();
-  requestAnimationFrame(neutronIconLoop);
-}
-neutronIconLoop();
-
-// ─── Molecule icons (NEW button, projectile, Particles mode button) ──────────
+// ─── Molecule icons (NEW button, speed dial, Atoms mode button) ─────────────
 // Same hollow-shell look as drawAtom, at icon scale and independent of the
 // quality setting (these canvases are tiny and redraw at ~15 fps).
 function drawAtomIcon(c, px, py, el, R) {
@@ -1935,25 +1825,28 @@ function drawOutlineIcon() {
   c.closePath(); c.stroke(); c.restore();
 }
 
-let _iconLast = -67;
-const newBtnIconJitter = { x: 0, y: 0 };
-const miniIconJitter   = { x: 0, y: 0 };
-function wobbleIcon(j, step) {
-  j.x = (j.x + (Math.random() - 0.5) * step) * 0.78;
-  j.y = (j.y + (Math.random() - 0.5) * step) * 0.78;
-}
+// One loop for every live toolbar icon, at ~15 fps. Each gets its own wobble so
+// they do not all drift in lockstep. (The speed dial used to run a second rAF
+// loop of its own at the full frame rate, for an icon 46 px across.)
+const ICON_CANVASES = [
+  { id: 'newBtnMolecule',      pad: 4, wobble: 0.7, jitter: { x: 0, y: 0 } },   // respawn button
+  { id: 'speedDialIconCanvas', pad: 3, wobble: 0.7, jitter: { x: 0, y: 0 } },   // beside the speed dial
+  { id: 'atomsModeIcon',       pad: 1, wobble: 0.4, jitter: { x: 0, y: 0 } },   // Atoms view button
+];
 
-function nucleusIconLoop(now) {
+let _iconLast = -67;
+function toolbarIconLoop(now) {
   if (now - _iconLast >= 67) {   // ~15 fps
     _iconLast = now;
-    wobbleIcon(newBtnIconJitter, 0.7);
-    wobbleIcon(miniIconJitter,   0.4);
-    drawMoleculeIcon(document.getElementById('newBtnNucleus'), SPECIES.H2.els, newBtnIconJitter, 4);
-    drawMoleculeIcon(document.getElementById('particlesModeIcon'), SPECIES.H2.els, miniIconJitter, 1);
+    for (const ic of ICON_CANVASES) {
+      ic.jitter.x = (ic.jitter.x + (Math.random() - 0.5) * ic.wobble) * 0.78;
+      ic.jitter.y = (ic.jitter.y + (Math.random() - 0.5) * ic.wobble) * 0.78;
+      drawMoleculeIcon(document.getElementById(ic.id), SPECIES.H2.els, ic.jitter, ic.pad);
+    }
   }
-  requestAnimationFrame(nucleusIconLoop);
+  requestAnimationFrame(toolbarIconLoop);
 }
-nucleusIconLoop(0);
+toolbarIconLoop(0);
 drawOutlineIcon();
 
 // ─── Renderer ─────────────────────────────────────────────────────────────────
@@ -1995,7 +1888,7 @@ function drawWorld() {
   for (const b of world.bodies) {
     for (const [dx, dy] of wrapOffsets(b)) {
       const atoms = bodyAtoms(b, dx, dy);
-      if (showParticles) drawParticles(atoms);
+      if (showAtoms) drawAtoms(atoms);
       else               drawMoleculeOutline(atoms);
     }
   }
@@ -2008,7 +1901,7 @@ function drawWorld() {
 let worldRAF   = null;
 let lastFrame  = 0;
 let lastDrawn  = 0;
-let egPctTick  = 0;
+let pctTick  = 0;
 
 function timeScale() {
   return parseFloat(document.getElementById('playbackSpeed').value);
@@ -2033,7 +1926,7 @@ function worldLoop(now) {
     const steps = Math.max(1, Math.ceil(dt / 0.004));
     for (let k = 0; k < steps; k++) stepWorld(dt / steps);
     sampleEnergy();
-    if (++egPctTick % Math.round(TIER_FPS[_quality] / 4) === 0) updateEnergyPct();   // ~4 Hz either way
+    if (++pctTick % Math.round(TIER_FPS[_quality] / 4) === 0) updateEnergyPct();   // ~4 Hz either way
   }
   drawWorld();
 }
@@ -2054,71 +1947,71 @@ function setRunning(on) {
 // ─── Energy trace ─────────────────────────────────────────────────────────────
 // A scrolling record of the world's total kinetic energy. With perfectly elastic
 // collisions the line should stay flat — a visible step means energy leaked.
-const EG_WINDOW  = 12;     // seconds shown across the graph
-const EG_SAMPLES = 480;
-let egTrace = [];          // [{ t, ke }]
-let egRef   = 1;           // energy at spawn, the 100% line
+const GRAPH_WINDOW  = 12;     // seconds shown across the graph
+const GRAPH_SAMPLES = 480;
+let energyTrace = [];          // [{ t, motion }] — energy in fields joins this later
+let energyAtSpawn   = 1;           // energy at spawn, the 100% line
 
 function resetEnergyTrace() {
-  egTrace = [];
-  egRef = Math.max(1e-6, totalKineticEnergy());
+  energyTrace = [];
+  energyAtSpawn = Math.max(1e-6, energyOfMotion());
 }
 
 function sampleEnergy() {
-  egTrace.push({ t: world.time, ke: totalKineticEnergy() });
-  while (egTrace.length > EG_SAMPLES) egTrace.shift();
-  const cutoff = world.time - EG_WINDOW;
-  while (egTrace.length && egTrace[0].t < cutoff) egTrace.shift();
+  energyTrace.push({ t: world.time, motion: energyOfMotion() });
+  while (energyTrace.length > GRAPH_SAMPLES) energyTrace.shift();
+  const cutoff = world.time - GRAPH_WINDOW;
+  while (energyTrace.length && energyTrace[0].t < cutoff) energyTrace.shift();
 }
 
 function drawEnergyGraph() {
-  const W = egCanvas.width, H = egCanvas.height;
+  const W = graphCanvas.width, H = graphCanvas.height;
   const PAD = 8, gH = H - PAD * 2;
-  egCtx.clearRect(0, 0, W, H);
+  graphCtx.clearRect(0, 0, W, H);
 
   const LIGHT = document.body.classList.contains('screenshot-mode');
   const gridCol = LIGHT ? 'rgba(0,0,0,0.10)' : 'rgba(255,255,255,0.06)';
   const axisCol = LIGHT ? 'rgba(0,0,0,0.55)' : 'rgba(0,200,255,0.35)';
-  const keCol   = LIGHT ? '#000'             : '#ff3a6e';
-  const keGlow  = LIGHT ? 'rgba(0,0,0,0)'    : 'rgba(255,45,100,0.9)';
+  const motionCol   = LIGHT ? '#000'             : '#ff3a6e';
+  const motionGlow  = LIGHT ? 'rgba(0,0,0,0)'    : 'rgba(255,45,100,0.9)';
 
-  egCtx.strokeStyle = gridCol;
-  egCtx.lineWidth = 1;
+  graphCtx.strokeStyle = gridCol;
+  graphCtx.lineWidth = 1;
   for (let i = 1; i <= 3; i++) {
     const y = PAD + gH * (1 - i / 4);
-    egCtx.beginPath(); egCtx.moveTo(0, y); egCtx.lineTo(W, y); egCtx.stroke();
+    graphCtx.beginPath(); graphCtx.moveTo(0, y); graphCtx.lineTo(W, y); graphCtx.stroke();
   }
 
-  egCtx.save();
-  egCtx.shadowBlur = LIGHT ? 0 : 6;
-  egCtx.shadowColor = LIGHT ? 'rgba(0,0,0,0)' : 'rgba(0,200,255,0.5)';
-  egCtx.strokeStyle = axisCol;
-  egCtx.lineWidth = 1;
-  egCtx.beginPath(); egCtx.moveTo(0, H - PAD); egCtx.lineTo(W, H - PAD); egCtx.stroke();
-  egCtx.restore();
+  graphCtx.save();
+  graphCtx.shadowBlur = LIGHT ? 0 : 6;
+  graphCtx.shadowColor = LIGHT ? 'rgba(0,0,0,0)' : 'rgba(0,200,255,0.5)';
+  graphCtx.strokeStyle = axisCol;
+  graphCtx.lineWidth = 1;
+  graphCtx.beginPath(); graphCtx.moveTo(0, H - PAD); graphCtx.lineTo(W, H - PAD); graphCtx.stroke();
+  graphCtx.restore();
 
-  if (egTrace.length > 1) {
-    const t1 = world.time, t0 = t1 - EG_WINDOW;
+  if (energyTrace.length > 1) {
+    const t1 = world.time, t0 = t1 - GRAPH_WINDOW;
     // Full scale is twice the starting energy, but grows to fit if the trace
     // runs higher — switching to High is a 9× jump and must stay on the graph.
-    const peak = egTrace.reduce((a, pt) => Math.max(a, pt.ke), 0);
-    const full = Math.max(egRef * 2, peak * 1.15);
-    const px = (t) => ((t - t0) / EG_WINDOW) * (W - 1);
-    const py = (ke) => PAD + gH * (1 - Math.max(0, Math.min(1, ke / full)));
+    const peak = energyTrace.reduce((a, pt) => Math.max(a, pt.motion), 0);
+    const full = Math.max(energyAtSpawn * 2, peak * 1.15);
+    const px = (t) => ((t - t0) / GRAPH_WINDOW) * (W - 1);
+    const py = (e) => PAD + gH * (1 - Math.max(0, Math.min(1, e / full)));
     const stroke = (lw, blur, alpha) => {
-      egCtx.save();
-      egCtx.globalAlpha = alpha;
-      egCtx.shadowBlur = LIGHT ? 0 : blur;
-      egCtx.shadowColor = keGlow;
-      egCtx.strokeStyle = keCol;
-      egCtx.lineWidth = lw;
-      egCtx.beginPath();
-      egTrace.forEach((pt, k) => {
-        const x = px(pt.t), y = py(pt.ke);
-        if (k === 0) egCtx.moveTo(x, y); else egCtx.lineTo(x, y);
+      graphCtx.save();
+      graphCtx.globalAlpha = alpha;
+      graphCtx.shadowBlur = LIGHT ? 0 : blur;
+      graphCtx.shadowColor = motionGlow;
+      graphCtx.strokeStyle = motionCol;
+      graphCtx.lineWidth = lw;
+      graphCtx.beginPath();
+      energyTrace.forEach((pt, k) => {
+        const x = px(pt.t), y = py(pt.motion);
+        if (k === 0) graphCtx.moveTo(x, y); else graphCtx.lineTo(x, y);
       });
-      egCtx.stroke();
-      egCtx.restore();
+      graphCtx.stroke();
+      graphCtx.restore();
     };
     stroke(8, 28, 0.25);
     stroke(3, 10, 0.55);
@@ -2127,9 +2020,9 @@ function drawEnergyGraph() {
 }
 
 function updateEnergyPct() {
-  const el = document.getElementById('energyPctKE');
+  const el = document.getElementById('energyPctMotion');
   if (!el) return;
-  el.textContent = Math.round(totalKineticEnergy() / egRef * 100) + '%';
+  el.textContent = Math.round(energyOfMotion() / energyAtSpawn * 100) + '%';
 }
 
 // With the band off the graph is a correctness check — a flat line means the
@@ -2138,7 +2031,7 @@ function updateEnergyPct() {
 function updateEnergyNote() {
   const el = document.getElementById('energyPctNote');
   if (!el) return;
-  el.textContent = clampSpeeds
+  el.textContent = speedBandOn
     ? 'Speed band on \u2014 energy of motion drifts up, then levels off'
     : 'Total energy of motion, relative to the start';
 }
@@ -2160,7 +2053,7 @@ document.getElementById('newBtn').addEventListener('click', () => {
 });
 
 let lastDialSpeed = 0;
-document.getElementById('neutronSpeed').addEventListener('input', function () {
+document.getElementById('speedDial').addEventListener('input', function () {
   drawSpeedLines();
   // Scale the whole world by the same factor rather than flattening every
   // molecule to one speed — collisions have spread them out, and that spread
@@ -2193,15 +2086,15 @@ document.querySelectorAll('.temp-btn').forEach(btn => {
   btn.addEventListener('click', () => setTemperature(btn.dataset.temp));
 });
 
-function setParticleWheelActive(targetBtn) {
-  document.querySelectorAll('.awheel-item[data-pmode]').forEach(b =>
+function setViewModeActive(targetBtn) {
+  document.querySelectorAll('.awheel-item[data-view]').forEach(b =>
     b.classList.toggle('active', b === targetBtn));
 }
-document.querySelectorAll('.awheel-item[data-pmode]').forEach(btn => {
+document.querySelectorAll('.awheel-item[data-view]').forEach(btn => {
   btn.addEventListener('click', () => {
-    showParticles = btn.dataset.pmode === 'particles';
-    setParticleWheelActive(btn);
-    logAction('View: ' + btn.dataset.pmode);
+    showAtoms = btn.dataset.view === 'atoms';
+    setViewModeActive(btn);
+    logAction('View: ' + btn.dataset.view);
   });
 });
 
@@ -2224,7 +2117,7 @@ document.getElementById('playbackSpeed').addEventListener('change', function () 
 
 // Energy graph show/hide. The key, the graph and the percentage appear together,
 // each via its own `.visible` class (they are display:none by default).
-const GRAPH_PARTS = ['scrubGraphKey', 'energyGraphBox', 'scrubPercents'];
+const GRAPH_PARTS = ['energyGraphKey', 'energyGraphBox', 'energyPercents'];
 let graphShown = true;
 
 function setGraphShown(on) {
@@ -2274,10 +2167,10 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     '</label>' +
     '<div id="devEquiNote" style="opacity:0.45;font-size:10px;margin-left:21px;"></div>' +
     '<label style="display:flex;align-items:center;gap:7px;margin:9px 0 2px;cursor:pointer;">' +
-      '<input type="checkbox" id="devClamp" checked style="margin:0">' +
+      '<input type="checkbox" id="devBand" checked style="margin:0">' +
       '<span>Hold speeds in the band</span>' +
     '</label>' +
-    '<div id="devClampNote" style="opacity:0.45;font-size:10px;margin-left:21px;"></div>' +
+    '<div id="devBandNote" style="opacity:0.45;font-size:10px;margin-left:21px;"></div>' +
     '<div style="margin-top:10px;opacity:0.45;font-size:10px;">' +
       'Restitution ' + RESTITUTION.toFixed(2) + ' \u2014 collisions are elastic</div>';
   document.body.appendChild(panel);
@@ -2316,20 +2209,20 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   });
 
   // Speed band on/off — off is the pure elastic result
-  const clamp = panel.querySelector('#devClamp');
-  const clampNote = panel.querySelector('#devClampNote');
-  const syncClampNote = () => {
-    clampNote.textContent = clampSpeeds
+  const clamp = panel.querySelector('#devBand');
+  const clampNote = panel.querySelector('#devBandNote');
+  const syncBandNote = () => {
+    clampNote.textContent = speedBandOn
       ? '\u00b1' + Math.round(SPEED_SIGMA * 100) + '% of nominal; surplus goes to spin'
       : 'Pure elastic \u2014 speeds free to run away';
   };
-  clamp.checked = clampSpeeds;
-  syncClampNote();
+  clamp.checked = speedBandOn;
+  syncBandNote();
   clamp.addEventListener('change', () => {
-    clampSpeeds = clamp.checked;
-    syncClampNote();
+    speedBandOn = clamp.checked;
+    syncBandNote();
     updateEnergyNote();
-    logAction('Speed band ' + (clampSpeeds ? 'on' : 'off'));
+    logAction('Speed band ' + (speedBandOn ? 'on' : 'off'));
   });
 
   let buf = '';
@@ -2403,6 +2296,98 @@ document.getElementById('themeLight').addEventListener('click', () => {
 });
 applyTheme('A');
 
+// ─── Console diagnostics ──────────────────────────────────────────────────────
+// Calibration lives on `window`, not in the UI: run it from the browser console
+// on demand. Each one prints the measured values next to the constants they are
+// compared against, so a discrepancy is obvious at a glance.
+//   runPerfTest()      what a worst-case frame costs, vs the tier thresholds
+//   speedHistogram()   the speed distribution per species, vs SPEED_SIGMA
+//   energySplit()      motion vs rotation, and what the speed band cost
+
+// Console diagnostic: `runPerfTest()` re-measures and prints the numbers next to
+// the constants they are compared against, without changing the current tier.
+window.runPerfTest = function (samples = 5) {
+  const runs = Array.from({ length: samples }, () => _runPerfBenchmark());
+  const median = runs.slice().sort((a, b) => a - b)[Math.floor(samples / 2)];
+  console.table([
+    { metric: 'worst-case frame draw', value: +median.toFixed(2), unit: 'ms',
+      note: BENCH_ATOMS + ' atoms x ' + TIER_SEGMENTS['hi-res'] + ' segments' },
+    { metric: 'hi-res threshold',   value: TIER_THRESHOLD_MS['hi-res'],   unit: 'ms', note: 'below this -> hi-res' },
+    { metric: 'detailed threshold', value: TIER_THRESHOLD_MS['detailed'], unit: 'ms', note: 'below this -> detailed' },
+    { metric: 'frame budget @60fps', value: +(1000 / 60).toFixed(2), unit: 'ms', note: 'one whole frame' },
+    { metric: 'would pick',   value: pickTier(median), unit: '', note: TIER_FPS[pickTier(median)] + ' fps' },
+    { metric: 'current tier', value: _quality, unit: '', note: TIER_FPS[_quality] + ' fps' },
+  ]);
+  console.log('runs (ms):', runs.map(r => +r.toFixed(2)).join(', '));
+  return { median: +median.toFixed(2), wouldPick: pickTier(median), current: _quality };
+};
+
+// Console diagnostic: how the world's energy is split between moving and
+// spinning, and how often the band could not be enforced without a real
+// energy change.
+window.energySplit = function () {
+  let trans = 0, rot = 0, outOfBand = 0;
+  for (const b of world.bodies) {
+    trans += 0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy);
+    rot   += 0.5 * b.inertia * b.spin * b.spin;
+    const v = Math.hypot(b.vx, b.vy);
+    if (v < b.vTarget * (1 - SPEED_SIGMA) - 0.5 ||
+        v > b.vTarget * (1 + SPEED_SIGMA) + 0.5) outOfBand++;
+  }
+  const total = trans + rot;
+  console.table([
+    { part: 'translation', energy: +trans.toFixed(0), share: +(trans / total * 100).toFixed(1) + '%' },
+    { part: 'rotation',    energy: +rot.toFixed(0),   share: +(rot   / total * 100).toFixed(1) + '%' },
+    { part: 'total',       energy: +total.toFixed(0), share: '100%' },
+  ]);
+  console.log('band ' + (speedBandOn ? 'on' : 'off') +
+    ' \u00b1' + Math.round(SPEED_SIGMA * 100) + '%  |  out of band now: ' + outOfBand + '/' + world.bodies.length +
+    '  |  spin capped ' + spinCapHits + '\u00d7, floor topped up ' + floorTopUps + '\u00d7' +
+    ' (+' + (energyCreated / Math.max(1, energyAtSpawn) * 100).toFixed(1) + '% of spawn energy created)' +
+    '  |  vs energy at spawn: ' + (total / energyAtSpawn * 100).toFixed(1) + '%');
+  return { trans: +trans.toFixed(0), rot: +rot.toFixed(0), outOfBand,
+           overflow: spinCapHits, underflow: floorTopUps };
+};
+
+// How the speeds actually came out, per species. Run it after a spawn to see
+// the intended bell; run it again after a minute to see what the collisions
+// have made of it.
+window.speedHistogram = function (bins = 9) {
+  const byType = new Map();
+  for (const b of world.bodies) {
+    const f = formulaOf(b.els);
+    if (!byType.has(f)) byType.set(f, []);
+    byType.get(f).push(Math.hypot(b.vx, b.vy));
+  }
+  const rows = [];
+  for (const [f, v] of byType) {
+    const n = v.length;
+    const mean = v.reduce((a, x) => a + x, 0) / n;
+    const sd = Math.sqrt(v.reduce((a, x) => a + (x - mean) ** 2, 0) / n);
+    const lo = Math.min(...v), hi = Math.max(...v);
+    rows.push({
+      species: f, n,
+      mean: +mean.toFixed(1), sd: +sd.toFixed(1),
+      'sd/mean': +(sd / mean).toFixed(3),
+      min: +lo.toFixed(1), max: +hi.toFixed(1),
+      'spread in sd': +((hi - lo) / (sd || 1)).toFixed(2),
+    });
+  }
+  console.table(rows);
+  console.log('target sd/mean at spawn: ' + SPEED_SIGMA +
+              '  (bounds are ±1σ, so a fresh spawn spans ~2σ)');
+  // Crude bell check across everything
+  const all = [...byType.values()].flat();
+  if (all.length) {
+    const lo = Math.min(...all), hi = Math.max(...all), w = (hi - lo) / bins || 1;
+    const h = new Array(bins).fill(0);
+    for (const x of all) h[Math.min(bins - 1, Math.floor((x - lo) / w))]++;
+    h.forEach((c, i) => console.log(
+      (lo + i * w).toFixed(0).padStart(5) + ' |' + '█'.repeat(c)));
+  }
+  return rows;
+};
+
 // ─── Init ─────────────────────────────────────────────────────────────────────
 // Pick a quality tier from what this machine can actually draw. `runPerfTest()`
 // in the console re-measures and shows the numbers; the dropdown overrides it.
@@ -2414,11 +2399,11 @@ applyTheme('A');
               ' (call runPerfTest() for the full table)');
 })();
 
-setParticleWheelActive(document.querySelector('.awheel-item[data-pmode="particles"]'));
+setViewModeActive(document.querySelector('.awheel-item[data-view="atoms"]'));
 drawSpeedLines();
 updateGraphBtn();
 updateEnergyNote();
-document.getElementById('scrubBar').classList.add('visible');
+document.getElementById('energyBar').classList.add('visible');
 spawnWorld();
 startWorldLoop();        // the loop draws even while paused, so the world is visible at rest
 
@@ -2430,14 +2415,14 @@ function getBugState() {
     composition: { ...composition },
     species:    world.bodies.map(b => formulaOf(b.els)),
     worldTime:  +world.time.toFixed(2),
-    keFraction: +(totalKineticEnergy() / egRef).toFixed(4),
+    motionFraction: +(energyOfMotion() / energyAtSpawn).toFixed(4),
     actionLog:  actionLog.slice(),
   };
 }
 document.getElementById('bugReportBtn').addEventListener('click', e => {
   e.preventDefault();
   const state = encodeURIComponent(JSON.stringify(getBugState()));
-  const url   = `https://ghostoutfit.github.io/protons/dev/bug-report.html?sim=fission&sourceUrl=${encodeURIComponent(location.href)}&state=${state}`;
+  const url   = `https://ghostoutfit.github.io/protons/dev/bug-report.html?sim=reactions&sourceUrl=${encodeURIComponent(location.href)}&state=${state}`;
   document.getElementById('bugModalFrame').src = url;
   document.getElementById('bugModal').style.display = 'flex';
 });
