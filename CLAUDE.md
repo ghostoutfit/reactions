@@ -77,41 +77,65 @@ once is fine. Size is a dev slider.
 
 ## Space-filling view
 
-The **Outline** button. Each atom is a **flat disc** at its van der Waals
-radius, so a molecule reads as one continuous layer of matter with its nuclei
-just showing through.
+The **Outline** button. Each atom is a **sphere** at its van der Waals radius,
+so a molecule reads as one continuous layer of matter with its nuclei just
+showing through.
 
 ```javascript
 let sphereOpacity = 0.80;   // 1 = solid; 0.80 is "20% transparent"
 ```
 
-Each atom draws itself in three small steps, all inside the layer:
+Each atom draws its **body** inside the layer:
 
 1. the element's flat colour
 2. **limb darkening** — a gentle fade to dark at the rim, centred a little up
    and left. No specular highlight and no bright side; just enough falloff to
    say "ball" rather than "disc".
-3. **its own full circle, outlined.** This is what makes an overlap read as a
-   *line*: each atom keeps its own edge, so two atoms meeting show the arc
-   where they cross.
 
 ```javascript
 let sphereDepth = 0.40;   // limb darkening + edge strength; 0 = flat discs
 ```
 
-Two earlier versions were wrong, in opposite directions:
+Then the **edges**, once per molecule, on top of all its bodies: the outer
+silhouette, and the seam.
+
+### The seam is a circle
+
+Two spheres meet in a **circle** — not in the lens their two flat discs make.
+That circle lies in the plane perpendicular to the bond, so on screen it is an
+ellipse: full width across the bond, squashed along it by however far the bond
+is tilted out of the screen.
+
+```
+d = centre separation      a = (d² + rA² − rB²) / 2d     (A → the chord)
+h = √(rA² − a²)            the circle's true radius
+```
+
+A bond lying flat in the screen plane would project that circle **edge-on**,
+giving back a bare line — the "overlap" look. So the view is given one fixed
+tilt and every seam is drawn at it:
+
+```javascript
+let seamTilt = 0.34;   // 0 = edge-on (a line); 1 = face-on (a full circle)
+```
+
+Measured on an O=O at r 38.1, d 54.9: seam radius **26.4 px**, **18.0 px** wide
+on screen. No atom draws its own full outline any more — inside an overlap, what
+belongs there is the seam, not two crossing arcs.
+
+Three earlier versions were wrong:
 
 - A **per-atom radial gradient offset up-and-left** to read as a lit ball. It
   looked like a reflection, and the front atom hard-occluded the one behind it.
-- Darkening inward from the **molecule's** silhouette instead, which removed
-  the light direction and the occlusion — but with no per-atom edge left, two
-  atoms melted into one blob with a pinched waist instead of showing where they
-  cross. (That version also needed 14 thin passes to avoid contour banding, and
-  round line caps so the run ends did not cut a crease across the interior.)
-
-The answer is per-atom again, but *subtle*: the shading is mild enough that the
-crossing arc, not the shading, is what you read. Measured across an O₂ overlap,
-the crossing line dips the red channel 183 → 144 and recovers.
+- Darkening inward from the **molecule's** silhouette instead, which removed the
+  light direction and the occlusion — but with no per-atom edge left, two atoms
+  melted into one blob with a pinched waist. (That version also needed 14 thin
+  passes to avoid contour banding, and round line caps so the run ends did not
+  cut a crease across the interior.)
+- **Per-atom full circles** again, subtle enough that the crossing arc was what
+  you read. That gave a line, but the wrong one: the outline of the *overlap*,
+  two arcs meeting at points, rather than the one circle where the surfaces
+  actually intersect.
 
 `drawMoleculeRim` strokes the union silhouette for definition — each atom circle
 only where it is not buried inside another, so overlapping atoms read as one
