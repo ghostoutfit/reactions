@@ -827,8 +827,9 @@ const ATOM_RADIUS = 30;
 // per atom would be a number nothing reads. The charge-attraction work will
 // want electronegativity (H 2.20, O 3.44) rather than a hand-set q.
 const ELEMENTS = {
-  H: { label: 'H', rgb: '185,192,205', rScale: 1.00 },   // grey
-  O: { label: 'O', rgb: '232,56,47',   rScale: 1.27 },   // red
+  H:  { label: 'H',  rgb: '185,192,205', rScale: 1.00 },   // grey
+  O:  { label: 'O',  rgb: '232,56,47',   rScale: 1.27 },   // red
+  He: { label: 'He', rgb: '127,219,232', rScale: 1.17 },   // pale cyan — noble
 };
 const DEFAULT_ELEMENT = 'H';
 function elemOf(p) { return ELEMENTS[p.el] || ELEMENTS[DEFAULT_ELEMENT]; }
@@ -864,7 +865,6 @@ let fieldImg = null;
 // at. 60 fps is plenty for this sim; the light tier settles for 30 so a weak
 // machine spends its budget on a steady picture rather than a stuttering one.
 const TIER_FPS = { 'hi-res': 60, 'detailed': 60, 'simple': 30 };
-const TIER_SEGMENTS = { 'hi-res': 28, 'detailed': 16, 'simple': 8 };
 
 let _quality = 'hi-res';            // 'hi-res' | 'detailed' | 'simple'
 let frameBudgetMs = 1000 / 60;      // minimum wall time between drawn frames
@@ -877,11 +877,12 @@ function _applyQuality(level) {
 }
 
 // ── Renderer benchmark ────────────────────────────────────────────────────────
-// Measures what the sim actually draws — arc-stroke trails, not the gradient
-// blobs the fission version used — so the tier it picks reflects real cost.
-// One pass is a full worst-case frame: MAX atoms at hi-res segment count.
-// getImageData() at the end forces a GPU sync so the timing is real.
-const BENCH_ATOMS = 24;   // a full world: 6 H2 + 6 O2, two atoms each
+// Prices what the sim actually draws — the valence-electron trails, which are
+// far and away the biggest cost now. One pass is the heaviest world the sliders
+// can make: 6 H2 + 6 O2, which is 6x2 + 6x12 = 84 electrons. Pricing it as
+// all-O2 would be 144 and would talk a capable machine down a tier for no
+// reason. getImageData() at the end forces a GPU sync so the timing is real.
+const BENCH_WORLD = [['H', 'H'], ['O', 'O']];   // 6 of each, as the sliders cap it
 
 function _runPerfBenchmark() {
   const oc = document.createElement('canvas');
@@ -890,11 +891,20 @@ function _runPerfBenchmark() {
   const saved = _quality;
   _quality = 'hi-res';                 // always price the heaviest tier
 
-  const atoms = Array.from({ length: BENCH_ATOMS }, (_, i) => ({
-    el: i % 2 ? 'O' : 'H', i: i % 2, bodyId: i,
-  }));
-  const pass = () => atoms.forEach((p, i) =>
-    drawAtom(dc, 50 + (i % 8) * 75, 50 + Math.floor(i / 8) * 75, p));
+  // Synthetic bodies, filled trails, laid out across the offscreen canvas
+  const bodies = Array.from({ length: 12 }, (_, i) => {
+    const b = withElectrons(makeBody(BENCH_WORLD[i % 2], 0, 0, 0, 0, 0, 1));
+    b.x = 60 + (i % 4) * 150; b.y = 70 + Math.floor(i / 4) * 130;
+    b.angle = i * 0.7;
+    for (const e of b.electrons) {
+      for (let t = 0; t < TRAIL_MAX; t++) {
+        e.tx[t] = Math.cos(t * 0.3) * 40; e.ty[t] = Math.sin(t * 0.3) * 25;
+      }
+      e.n = TIER_TRAIL_LEN['hi-res']; e.head = 0;
+    }
+    return b;
+  });
+  const pass = () => bodies.forEach(b => drawElectrons(b, dc));
 
   pass();                              // warm-up: settle JIT, GPU init, glow cache
   dc.getImageData(0, 0, 1, 1);
@@ -1127,16 +1137,7 @@ function drawMoleculeOutline(atoms, c = ctx) {
   c.restore();
 }
 
-// ─── Atom renderer — a circle drawn by a travelling arrow ───────────────────
-// Not a surface: an arrowhead laps the circle forever, paying out a trail that
-// fades behind it. The trail covers most of the circle so the atom still has a
-// readable silhouette, while the bright head says which way it is being drawn.
-// (The earlier translucent shell read as a soap bubble.)
-const ATOM_ORBIT_DEFAULT = 0.65;   // laps per second
-const ATOM_TRAIL_DEFAULT = 0.82;   // fraction of the circle the trail covers
-let atomOrbitSpeed = ATOM_ORBIT_DEFAULT;
-let atomTrail      = ATOM_TRAIL_DEFAULT;
-
+// ─── Atom glow sprite ─────────────────────────────────────────────────────────
 // Arrowhead glow. Canvas shadowBlur costs ~8 ms a frame at a full world — it was
 // 88% of the whole hi-res draw — so the halo is a radial-gradient sprite baked
 // once per element and colour and then just blitted.
@@ -1230,66 +1231,288 @@ function drawNucleus(dc, px, py, scale = 1, alpha = 1) {
   dc.restore();
 }
 
-// Where the arrowhead is right now. Driven by the wall clock, not sim time, so
-// the atoms keep tracing while the sim is paused. The per-atom offset stops
-// every atom in the world marching in lockstep.
-function atomPhase(p) {
-  const off = (((p.i || 0) * 0.37) + ((p.bodyId || 0) * 0.231)) % 1;
-  return (performance.now() / 1000 * atomOrbitSpeed + off) * Math.PI * 2;
+// ─── Valence electrons ────────────────────────────────────────────────────────
+// Ported from the `bonds` repo's Trails view. Each valence electron is a moving
+// point that pays out a fading trail with an arrowhead at its head — the arrow
+// is the electron, and the trail is where it has just been.
+//
+// ONLY the valence shell is modelled. Inner shells are ignored entirely: they
+// take no part in bonding and would be a crowd of circles around every nucleus.
+//
+// Two kinds of electron, which is the whole idea:
+//
+//   BONDING  — shared by two atoms, running a lemniscate (figure-8) whose two
+//              lobes wrap the two nuclei and whose crossing is the bond midpoint.
+//              This is what makes a bond look like a bond: one path, two atoms.
+//   LONE     — not in any bond, orbiting its own nucleus on the valence shell.
+//              Two helium atoms have nothing but these, and never bond.
+//
+// Everything is held in BODY-LOCAL coordinates and transformed at draw time, so
+// a molecule can translate and spin without smearing or rebuilding its trails.
+
+// Helium's shell is full, so it bonds with nothing: a He body has no bonds and
+// its two electrons stay lone. That is the non-bonding case the renderer has to
+// handle, and the reason He is here at all.
+const VALENCE   = { H: 1, O: 6, He: 2 };                // outer-shell electrons
+const BOND_ORDER = { 'H-H': 1, 'H-O': 1, 'O-O': 2 };    // 2 = double bond
+function bondOrder(elA, elB) {
+  return BOND_ORDER[[elA, elB].sort().join('-')] || 1;
 }
 
-function drawAtom(dc, px, py, p, radiusScale = 1, alphaScale = 1) {
-  const e = elemOf(p);
-  const R = ATOM_RADIUS * e.rScale * radiusScale;
-  const a = (v) => Math.min(1, v * alphaScale);
+// Trail detail per tier. This is the whole cost of the view: one stroke per
+// bucket per electron, every frame.
+const TIER_BUCKETS   = { 'hi-res': 10, 'detailed': 6, 'simple': 3 };
+const TIER_TRAIL_LEN = { 'hi-res': 48, 'detailed': 32, 'simple': 18 };
+const TRAIL_MAX = 64;             // ring-buffer size; the largest tier length
 
-  const head = atomPhase(p);
-  const span = atomTrail * Math.PI * 2;
-  const SEGS = TIER_SEGMENTS[_quality] || 28;
-  const lw   = Math.max(1.2, R * 0.105);
+// Tuning, carried over from bonds and kept adjustable (dev sliders)
+let eSpeed      = 0.20;   // phase advance per frame at 60 fps
+let eSteer      = 0.30;   // how hard the electron is pulled onto the ideal path
+let eWander     = -0.40;  // perpendicular wobble amplitude, re-rolled each lobe
+let eRadial     = -0.50;  // along-bond amplitude wobble
+let eCrossSlow  = 0.50;   // speed multiplier at the bond midpoint crossing
+let eTrailScale = 1.0;    // multiplies the tier's trail length
+let showLonePairs = true; // non-bonding valence electrons on/off
+
+function valenceRadius(el) { return ATOM_RADIUS * ELEMENTS[el].rScale; }
+
+function makeElectron(kind, el) {
+  return {
+    kind, el,
+    // live position and velocity, body-local
+    x: 0, y: 0, vx: 0, vy: 0,
+    phase: 0, visit: 0,
+    effR: 0, effW: 0, targetR: 0, targetW: 0, prevVisit: -1,
+    // ring-buffer trail, body-local
+    tx: new Float32Array(TRAIL_MAX), ty: new Float32Array(TRAIL_MAX),
+    n: 0, head: 0,
+    // lone-electron state
+    angle: 0, dAngle: 0, cx: 0, cy: 0, r: 0, sector: 0, arc: LONE_ARC,
+  };
+}
+
+// Build the valence shell for one body: bonding electrons on each bond, then
+// whatever each atom has left over orbiting on its own.
+function buildElectrons(b) {
+  const list = [];
+  const spent = b.atoms.map(() => 0);     // electrons each atom has put into bonds
+
+  for (const [i, k] of b.bonds) {
+    const order = bondOrder(b.atoms[i].el, b.atoms[k].el);
+    spent[i] += order; spent[k] += order;
+    const count = order * 2;              // a bond is pairs: 2 electrons per order
+    for (let q = 0; q < count; q++) {
+      const e = makeElectron('bond', q % 2 ? b.atoms[k].el : b.atoms[i].el);
+      e.i = i; e.k = k;
+      // Spread the pair (or the four of a double bond) around the figure-8 so
+      // they are not stacked on top of one another.
+      const t = q / count;
+      e.visit = t < 0.5 ? 0 : 1;
+      e.phase = (t % 0.5) * 2 * Math.PI;
+      list.push(e);
+    }
+  }
+
+  for (let i = 0; i < b.atoms.length; i++) {
+    const at = b.atoms[i];
+    const lone = Math.max(0, (VALENCE[at.el] || 0) - spent[i]);
+    // Point the lone electrons away from whatever this atom is bonded to
+    let awayX = 0, awayY = 0;
+    for (const [p, q] of b.bonds) {
+      const other = p === i ? q : q === i ? p : -1;
+      if (other < 0) continue;
+      awayX += at.lx - b.atoms[other].lx;
+      awayY += at.ly - b.atoms[other].ly;
+    }
+    // An atom with no bonds has nothing to face away from, so its electrons get
+    // the whole circle. That is the helium case: a full shell, free all round.
+    const bonded = (awayX !== 0 || awayY !== 0);
+    const facing = bonded ? Math.atan2(awayY, awayX) : 0;
+    const arc = bonded ? LONE_ARC : Math.PI * 2;
+    for (let q = 0; q < lone; q++) {
+      const e = makeElectron('lone', at.el);
+      e.i = i;
+      e.cx = at.lx; e.cy = at.ly;
+      e.r = valenceRadius(at.el);
+      e.sector = facing;
+      e.arc = arc;
+      // Spread across whatever the electron is free to use
+      e.angle = facing + (lone === 1 ? 0 : (q / lone - 0.5) * arc);
+      e.dAngle = (Math.random() < 0.5 ? -1 : 1) * LONE_BASE_DA;
+      e.x = e.cx + e.r * Math.cos(e.angle);
+      e.y = e.cy + e.r * Math.sin(e.angle);
+      list.push(e);
+    }
+  }
+  b.electrons = list;
+}
+
+const LONE_ARC     = 4.2;     // radians the lone electrons are spread across
+const LONE_BASE_DA = 0.030;   // base angular speed, rad/frame at 60 fps
+const LONE_JITTER  = 0.010;
+const LONE_DAMP    = 0.992;
+
+// Ideal lemniscate position for a bond electron, in body-local coordinates.
+// `a = r + d` puts the far edge of each lobe exactly on that atom's valence
+// shell: d carries it to the nucleus, r wraps it around.
+//
+// The two visits are the two lobes of ONE figure-8 — visit 0 is t in [0, pi],
+// visit 1 is t in [pi, 2pi] — so the electron crosses the bond midpoint between
+// them, which is the point of the whole shape.
+function lemniscate(e, b, phase, visit) {
+  const ai = b.atoms[e.i], ak = b.atoms[e.k];
+  const mx = (ai.lx + ak.lx) / 2, my = (ai.ly + ak.ly) / 2;
+  const bx = ak.lx - ai.lx, by = ak.ly - ai.ly;
+  const sep = Math.hypot(bx, by) || 1;
+  const ux = bx / sep, uy = by / sep;
+  const d = sep / 2;
+  const r = valenceRadius(visit === 0 ? ai.el : ak.el);
+  const a = r * (1 + e.effR * 0.25) + d;
+
+  const t = visit === 0 ? phase + Math.PI : phase;
+  const denom = 1 + Math.cos(t) ** 2;
+  const px = a * Math.sin(t) / denom;
+  const py = (1 + e.effW * 0.25) * a * Math.sin(t) * Math.cos(t) / denom;
+  // rotate from bond axis into body-local
+  return { x: mx + px * ux - py * uy, y: my + px * uy + py * ux, a, d };
+}
+
+function stepBondElectron(e, b, k) {
+  if (e.visit !== e.prevVisit) {          // new lobe: re-roll the wobble
+    e.prevVisit = e.visit;
+    e.targetR = (Math.random() * 2 - 1) * eRadial;
+    e.targetW = -Math.random() * Math.abs(eWander);
+  }
+  e.effR += (e.targetR - e.effR) * 0.08;
+  e.effW += (e.targetW - e.effW) * 0.08;
+
+  const p0 = lemniscate(e, b, e.phase, e.visit);
+  // Normalise by d/a so the speed at the crossing is the same on both sides.
+  // Without this a bond between a big atom and a small one kinks at the
+  // midpoint, because the two lobes have different amplitudes.
+  let spd = eSpeed * k * (p0.d / p0.a);
+  const localT = e.visit === 0 ? e.phase + Math.PI : e.phase;
+  spd *= eCrossSlow + (1 - eCrossSlow) * Math.abs(Math.sin(localT));
+
+  let nextPhase = e.phase + spd, nextVisit = e.visit;
+  if (nextPhase >= Math.PI) { nextPhase -= Math.PI; nextVisit = (e.visit + 1) % 2; }
+  const p1 = lemniscate(e, b, nextPhase, nextVisit);
+  e.phase = nextPhase; e.visit = nextVisit;
+
+  // Steer towards the ideal velocity rather than snapping to the ideal point —
+  // that slight lag is what keeps the trail from being a perfect repeated curve.
+  const sr = e.n === 0 ? 1 : eSteer;
+  e.vx += sr * ((p1.x - p0.x) - e.vx);
+  e.vy += sr * ((p1.y - p0.y) - e.vy);
+  e.x += e.vx + 0.06 * (p0.x - e.x);
+  e.y += e.vy + 0.06 * (p0.y - e.y);
+}
+
+function stepLoneElectron(e, b, k) {
+  e.dAngle += (Math.random() - 0.5) * LONE_JITTER * k;
+  e.dAngle *= LONE_DAMP;
+  const dir = e.dAngle >= 0 ? 1 : -1;
+  if (Math.abs(e.dAngle) < LONE_BASE_DA) e.dAngle += dir * LONE_BASE_DA * 0.12;
+  e.angle += e.dAngle * k;
+  // Turn back at the edges of the sector, so lone pairs stay on the far side of
+  // the atom from the bond instead of wandering through it. An unbonded atom has
+  // arc = 2*pi, so this never fires and the electron orbits freely.
+  if (e.arc < Math.PI * 2) {
+    let rel = e.angle - e.sector;
+    rel = ((rel + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
+    if (Math.abs(rel) > e.arc / 2) {
+      e.angle = e.sector + Math.sign(rel) * e.arc / 2;
+      e.dAngle = -e.dAngle;
+    }
+  }
+  const at = b.atoms[e.i];
+  e.x = at.lx + e.r * Math.cos(e.angle);
+  e.y = at.ly + e.r * Math.sin(e.angle);
+}
+
+// One step per FRAME, not per physics sub-step: the phase logic is tuned in
+// per-frame units and breaks up with a large or uneven step.
+function stepElectrons(frameDt) {
+  const k = Math.min(2, frameDt * 60);        // 1.0 at 60 fps, clamped
+  const len = Math.round((TIER_TRAIL_LEN[_quality] || 32) * eTrailScale);
+  for (const b of world.bodies) {
+    if (!b.electrons) continue;
+    for (const e of b.electrons) {
+      if (e.kind === 'bond') stepBondElectron(e, b, k);
+      else if (showLonePairs) stepLoneElectron(e, b, k);
+      else continue;
+      e.tx[e.head] = e.x; e.ty[e.head] = e.y;
+      e.head = (e.head + 1) % TRAIL_MAX;
+      if (e.n < Math.min(len, TRAIL_MAX)) e.n++;
+      else if (e.n > len) e.n = len;
+    }
+  }
+}
+
+// ─── Drawing the trails ───────────────────────────────────────────────────────
+// Bucketed alpha, as in bonds: the trail is split into BUCKETS runs and each is
+// stroked once at its own alpha, instead of one stroke per point. That is the
+// difference between ~10 strokes an electron and ~50.
+function drawElectrons(b, dc = ctx) {
+  if (!b.electrons) return;
+  const ca = Math.cos(b.angle), sa = Math.sin(b.angle);
+  const BUCKETS = TIER_BUCKETS[_quality] || 6;
 
   dc.save();
   dc.lineCap = 'round';
+  dc.lineJoin = 'round';
 
-  // Trail, tail first: alpha and width both ramp up towards the head
-  for (let k = 0; k < SEGS; k++) {
-    const t0 = k / SEGS, t1 = (k + 1) / SEGS;
-    const alpha = 0.05 + 0.95 * Math.pow(t1, 2.3);
-    dc.strokeStyle = rgba(e.rgb, a(alpha));
-    dc.lineWidth   = lw * (0.5 + 0.5 * t1);
-    dc.beginPath();
-    dc.arc(px, py, R, head - span * (1 - t0), head - span * (1 - t1));
-    dc.stroke();
+  for (const e of b.electrons) {
+    if (e.kind === 'lone' && !showLonePairs) continue;
+    const n = e.n;
+    if (n < 2) continue;
+    const rgb = ELEMENTS[e.el].rgb;
+    // ring buffer -> world
+    const idx = (i) => (e.head - n + i + TRAIL_MAX * 2) % TRAIL_MAX;
+    const wx = (i) => { const j = idx(i); return b.x + e.tx[j] * ca - e.ty[j] * sa; };
+    const wy = (i) => { const j = idx(i); return b.y + e.tx[j] * sa + e.ty[j] * ca; };
+
+    dc.lineWidth = 1.8;
+    dc.strokeStyle = rgba(rgb, 1);
+    for (let q = 0; q < BUCKETS; q++) {
+      const i0 = Math.round(q / BUCKETS * (n - 1));
+      const i1 = Math.round((q + 1) / BUCKETS * (n - 1));
+      if (i1 <= i0) continue;
+      dc.globalAlpha = ((q + 1) / BUCKETS) ** 2 * 0.85;
+      dc.beginPath();
+      dc.moveTo(wx(i0), wy(i0));
+      // midpoint quadratics smooth the polyline without extra sample points
+      if (i1 > i0 + 1) {
+        dc.lineTo((wx(i0) + wx(i0 + 1)) / 2, (wy(i0) + wy(i0 + 1)) / 2);
+        for (let i = i0 + 1; i < i1; i++)
+          dc.quadraticCurveTo(wx(i), wy(i), (wx(i) + wx(i + 1)) / 2, (wy(i) + wy(i + 1)) / 2);
+      }
+      dc.lineTo(wx(i1), wy(i1));
+      dc.stroke();
+    }
+
+    // The arrowhead IS the electron. No dot — the arrow says which way it goes.
+    const hx = wx(n - 1), hy = wy(n - 1);
+    const dx = hx - wx(n - 2), dy = hy - wy(n - 2);
+    const dl = Math.hypot(dx, dy);
+    if (dl > 1e-4) {
+      const nx = dx / dl, ny = dy / dl;
+      const AL = 7, AW = 3.2;
+      dc.globalAlpha = 1;
+      if (_quality === 'hi-res') {
+        const sp = glowSprite(rgb, 9);
+        dc.drawImage(sp, hx - sp.width / 2, hy - sp.height / 2);
+      }
+      dc.fillStyle = rgba(rgb, 1);
+      dc.beginPath();
+      dc.moveTo(hx + nx * AL, hy + ny * AL);
+      dc.lineTo(hx - ny * AW, hy + nx * AW);
+      dc.lineTo(hx + ny * AW, hy - nx * AW);
+      dc.closePath();
+      dc.fill();
+    }
   }
-
-  // Arrowhead, pointing the way it is travelling (the tangent at `head`)
-  const hx = px + R * Math.cos(head), hy = py + R * Math.sin(head);
-  const tx = -Math.sin(head), ty = Math.cos(head);   // direction of travel
-  const nx =  Math.cos(head), ny = Math.sin(head);   // outward normal
-  const L = R * 0.34, Wd = R * 0.21;
-  if (_quality === 'hi-res') {
-    const sp = glowSprite(e.rgb, R);
-    dc.globalAlpha = a(1);
-    dc.drawImage(sp, hx - sp.width / 2, hy - sp.height / 2);
-    dc.globalAlpha = 1;
-  }
-  dc.fillStyle = rgba(e.rgb, a(1));
-  dc.beginPath();
-  dc.moveTo(hx + tx * L, hy + ty * L);
-  dc.lineTo(hx - tx * L * 0.3 + nx * Wd, hy - ty * L * 0.3 + ny * Wd);
-  dc.lineTo(hx - tx * L * 0.3 - nx * Wd, hy - ty * L * 0.3 - ny * Wd);
-  dc.closePath();
-  dc.fill();
-
   dc.restore();
-  drawNucleus(dc, px, py, radiusScale, alphaScale);
-}
-
-function drawAtoms(atoms, radiusScale = 1, drawCtx = ctx) {
-  const dc = drawCtx;
-  // z ascending = back to front, so overlapping trails layer correctly
-  const sorted = [...atoms].sort((a, b) => (a.z || 0) - (b.z || 0));
-  for (const p of sorted) drawAtom(dc, p.x, p.y, p, radiusScale);
 }
 
 // ─── Species ──────────────────────────────────────────────────────────────────
@@ -1298,8 +1521,9 @@ function drawAtoms(atoms, radiusScale = 1, drawCtx = ctx) {
 const SPECIES = {
   H2: { els: ['H', 'H'] },
   O2: { els: ['O', 'O'] },
+  He: { els: ['He'] },        // monatomic: no bond, two lone electrons
 };
-const COMPOSITION_DEFAULT = { H2: 2, O2: 0 };
+const COMPOSITION_DEFAULT = { H2: 2, O2: 0, He: 0 };
 const COMPOSITION_MAX = 6;
 const composition = { ...COMPOSITION_DEFAULT };
 
@@ -1331,7 +1555,7 @@ let running = false;
 // Atomic masses, in units where H = 1. Used for collision impulses and for the
 // kinetic-energy readout, so a bounce off an O2 behaves like a bounce off
 // something 16× heavier per atom.
-const ATOMIC_MASS = { H: 1, O: 16 };
+const ATOMIC_MASS = { H: 1, O: 16, He: 4 };
 
 const world = {
   w: 0, h: 0,          // wrap dimensions
@@ -1390,10 +1614,15 @@ function makeBody(els, x, y, heading, speed, spin, nominal = speed) {
     angle: Math.random() * Math.PI * 2,
     spin,                                              // radians per second
     radius: Math.max(...atoms.map(at => Math.hypot(at.lx, at.ly) + at.r)),
+    electrons: null,        // filled by buildElectrons just below
   };
 }
 
 // World positions of a body's atoms, optionally offset (used to draw wrapped copies)
+// makeBody returns before the bonds list exists on the object it is building,
+// so the valence shell is attached here, once the body is complete.
+function withElectrons(b) { buildElectrons(b); return b; }
+
 function bodyAtoms(b, dx = 0, dy = 0) {
   const ca = Math.cos(b.angle), sa = Math.sin(b.angle);
   return b.atoms.map((at, i) => ({
@@ -1505,11 +1734,11 @@ function spawnWorld() {
     // Try for a spot clear of everything already down; after enough tries take
     // what we can get rather than loop forever in a crowded world.
     for (let attempt = 0; attempt < 400; attempt++) {
-      const b = makeBody(els, 0, 0,
+      const b = withElectrons(makeBody(els, 0, 0,
         Math.random() * Math.PI * 2,
         spreadSpeed(speed),
         truncNormal() * SPIN_SIGMA * 4.8,    // same bell, signed — spin either way
-        speed);
+        speed));
       // Placed clear of the walls, so nothing starts the run already embedded
       // in one and gets shoved out on the first step.
       b.x = b.radius + Math.random() * Math.max(1, world.w - 2 * b.radius);
@@ -2004,7 +2233,8 @@ function drawWorld() {
   for (const b of world.bodies) {
     const atoms = bodyAtoms(b);
     if (showAtoms) {
-      drawAtoms(atoms);                     // drawAtom puts the nucleus in itself
+      drawElectrons(b);
+      for (const p of atoms) drawNucleus(ctx, p.x, p.y);
     } else {
       drawMoleculeOutline(atoms);
       // In outline view the atoms merge into one silhouette, so the nuclei are
@@ -2045,6 +2275,7 @@ function worldLoop(now) {
     // Sub-step so fast molecules cannot pass through one another in one frame
     const steps = Math.max(1, Math.ceil(dt / 0.004));
     for (let k = 0; k < steps; k++) stepWorld(dt / steps);
+    stepElectrons(dt);              // once a frame: the phase logic is per-frame
     sampleEnergy();
     if (++pctTick % Math.round(TIER_FPS[_quality] / 4) === 0) updateEnergyPct();   // ~4 Hz either way
   }
@@ -2274,10 +2505,19 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     '<div style="font-size:9px;letter-spacing:0.08em;text-transform:uppercase;opacity:0.5;">Dev</div>' +
     row('devH2', 'H\u2082 molecules', 0, COMPOSITION_MAX, 1, COMPOSITION_DEFAULT.H2, '#b9c0cd') +
     row('devO2', 'O\u2082 molecules', 0, COMPOSITION_MAX, 1, COMPOSITION_DEFAULT.O2, '#e8382f') +
+    row('devHe', 'He atoms',       0, COMPOSITION_MAX, 1, COMPOSITION_DEFAULT.He, '#7fdbe8') +
     '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
-    row('devTrail', 'Trail length', 0.1, 1, 0.02, ATOM_TRAIL_DEFAULT,  '#ff3a8a') +
-    row('devOrbit', 'Arrow speed',  0.05, 3, 0.05, ATOM_ORBIT_DEFAULT, '#ff3a8a') +
+    '<div style="font-size:9px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.4;margin-top:8px;">' +
+      'Valence electrons</div>' +
+    row('devESpeed', 'Electron speed', 0.02, 0.6, 0.01, 0.20, '#ff3a8a') +
+    row('devETrail', 'Trail length',   0.2,  2,   0.05, 1.0,  '#ff3a8a') +
+    row('devESteer', 'Path steering',  0.02, 1,   0.02, 0.30, '#ff3a8a') +
     row('devNucleus', 'Nucleus size', 0, 24, 1, NUCLEUS_DIAMETER, '#ff80b0') +
+    '<label style="display:flex;align-items:center;gap:7px;margin:9px 0 2px;cursor:pointer;">' +
+      '<input type="checkbox" id="devLone" checked style="margin:0">' +
+      '<span>Lone pairs (non-bonding)</span>' +
+    '</label>' +
+    '<div id="devLoneNote" style="opacity:0.45;font-size:10px;margin-left:21px;"></div>' +
     '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
     '<div style="font-size:9px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.4;margin-top:8px;">' +
       'Energy in fields</div>' +
@@ -2312,8 +2552,10 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   };
   bind('devH2',    v => composition.H2 = v, true);
   bind('devO2',    v => composition.O2 = v, true);
-  bind('devTrail', v => atomTrail      = v, false, v => v.toFixed(2));
-  bind('devOrbit', v => atomOrbitSpeed = v, false, v => v.toFixed(2));
+  bind('devHe',    v => composition.He = v, true);
+  bind('devESpeed', v => eSpeed      = v, false, v => v.toFixed(2));
+  bind('devETrail', v => eTrailScale = v, false, v => v.toFixed(2));
+  bind('devESteer', v => eSteer      = v, false, v => v.toFixed(2));
   bind('devNucleus', v => nucleusDiameter = v, false, v => v + ' px');
   // The field look was dialled in against the picture, so it stays adjustable
   bind('devLobeW',    v => FIELD_WIDTH = v, false, v => v.toFixed(2));
@@ -2335,6 +2577,22 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     syncEquiNote();
     spawnWorld();
     logAction('Equipartition ' + (equipartition ? 'on' : 'off'));
+  });
+
+  // Lone pairs on/off — H2 has none, so this only shows on O2 and water
+  const lone = panel.querySelector('#devLone');
+  const loneNote = panel.querySelector('#devLoneNote');
+  const syncLoneNote = () => {
+    loneNote.textContent = showLonePairs
+      ? 'O\u2082: 4 bonding + 8 lone'
+      : 'Bonding electrons only \u2014 4 per O\u2082';
+  };
+  lone.checked = showLonePairs;
+  syncLoneNote();
+  lone.addEventListener('change', () => {
+    showLonePairs = lone.checked;
+    syncLoneNote();
+    logAction('Lone pairs ' + (showLonePairs ? 'on' : 'off'));
   });
 
   // Speed band on/off — off is the pure elastic result
@@ -2438,7 +2696,7 @@ window.runPerfTest = function (samples = 5) {
   const median = runs.slice().sort((a, b) => a - b)[Math.floor(samples / 2)];
   console.table([
     { metric: 'worst-case frame draw', value: +median.toFixed(2), unit: 'ms',
-      note: BENCH_ATOMS + ' atoms x ' + TIER_SEGMENTS['hi-res'] + ' segments' },
+      note: '6 H2 + 6 O2 = 84 electrons x ' + TIER_BUCKETS['hi-res'] + ' buckets' },
     { metric: 'hi-res threshold',   value: TIER_THRESHOLD_MS['hi-res'],   unit: 'ms', note: 'below this -> hi-res' },
     { metric: 'detailed threshold', value: TIER_THRESHOLD_MS['detailed'], unit: 'ms', note: 'below this -> detailed' },
     { metric: 'frame budget @60fps', value: +(1000 / 60).toFixed(2), unit: 'ms', note: 'one whole frame' },

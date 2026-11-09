@@ -54,14 +54,9 @@ const ELEMENTS = {
 `rScale` is the van der Waals radius relative to hydrogen. There is no charge
 field on an element: see **Energy in fields** below for why.
 
-Atoms render as **a circle drawn by a travelling arrow** (`drawAtom`): an
-arrowhead laps the circle forever, paying out a trail that fades behind it. The
-trail covers most of the circle so the atom keeps a readable silhouette. Driven
-by the wall clock, not sim time, so atoms keep tracing while the sim is paused.
-
-The earlier translucent-shell renderer was dropped — it read as a soap bubble.
-Trail length and arrow speed are dev sliders; the defaults are
-`ATOM_TRAIL_DEFAULT` / `ATOM_ORBIT_DEFAULT`.
+Atoms are not drawn as circles any more. What you see is the **valence
+electrons** tracing their actual paths — see below. The earlier renderers (a
+translucent shell, then an arrow lapping a meaningless circle) are both gone.
 
 Icons (`drawAtomIcon`) stay a plain ring — the arrow is unreadable at icon size.
 
@@ -83,12 +78,82 @@ once is fine. Size is a dev slider.
 Outline mode (`drawMoleculeOutline`) strokes the union silhouette — each atom
 circle only where it is not buried inside another.
 
+## Valence electrons
+
+Ported from the **`bonds` repo's Trails view** (`/Users/jkremer/Projects/bonds`,
+`_drawBondElecTrails` and `_stepMolBondElecOne`). Each valence electron is a
+moving point paying out a fading trail with an arrowhead at its head: **the
+arrow is the electron**, and the trail is where it has just been.
+
+**Only the valence shell is modelled.** Inner shells are ignored entirely — they
+take no part in bonding and would be a crowd of rings around every nucleus.
+
+Two kinds of electron, which is the whole point:
+
+| kind | path |
+|---|---|
+| **bonding** | a lemniscate (figure-8) whose two lobes wrap the two nuclei and whose crossing is the bond midpoint |
+| **lone** | orbits its own nucleus on the valence shell, in a sector facing away from the bond |
+
+```javascript
+const VALENCE    = { H: 1, O: 6, He: 2 };
+const BOND_ORDER = { 'H-H': 1, 'H-O': 1, 'O-O': 2 };   // 2 = double bond
+```
+
+Electrons are derived, never hand-listed: each bond takes `order x 2`, each atom
+keeps `valence - (what it put into bonds)`. That gives, with no special cases:
+
+| | bonding | lone |
+|---|---|---|
+| He | 0 | 2 — a full shell, no bond, free all the way round |
+| H₂ | 2 | 0 |
+| O₂ | 4 (double bond) | 8 |
+| H₂O | 4 | 4 (two lone pairs on the O) |
+
+### The lemniscate
+
+`a = r + d`, where `r` is the atom's valence radius and `d` is half the bond
+separation — so the far edge of each lobe lands exactly on that atom's shell.
+The two "visits" are the two lobes of **one** figure-8 (`t` in `[0,π]` then
+`[π,2π]`), so the electron crosses the midpoint between them.
+
+**The speed is normalised by `d/a`.** Without it, a bond between a big atom and
+a small one runs its two lobes at different speeds and visibly kinks at the
+crossing — the bug recorded in the bond-kink memory. Measured on H–O (lobe radii
+30 and 38): the lobes would run **14.7% apart**; with the fix they are **0.50%
+apart**. This matters for H₂O, before H₂O is even spawnable.
+
+The electron **steers** toward the ideal velocity (`eSteer`) rather than
+snapping to the ideal point, and the lobe amplitude is re-rolled each pass
+(`eWander`, `eRadial`). That lag and wobble is what stops the trail from being a
+perfectly repeated curve.
+
+### Cost
+
+This is the dominant draw cost, so it is bucketed like bonds does it: the trail
+is split into `TIER_BUCKETS` runs and **each is stroked once at its own alpha**,
+rather than one stroke per point. That is ~10 strokes an electron instead of 50.
+
+Measured at the heaviest the sliders allow (6 H₂ + 6 O₂ + 6 He = 96 electrons):
+**2.45 ms for the whole frame** — electrons, field, nuclei and walls together —
+against a 16.7 ms budget. Electrons alone at 6+6 are 1.11 ms at hi-res, 0.81
+detailed, 0.65 simple.
+
+Trails live in **body-local coordinates** and are transformed at draw time, so a
+molecule can translate and spin without smearing or rebuilding them. Each is a
+fixed `Float32Array` ring buffer, so nothing is allocated per frame.
+
+`stepElectrons` runs **once per frame, outside the physics sub-steps** — the
+phase logic is tuned in per-frame units and breaks up with large or uneven dt.
+
+Speed, trail length, steering and a lone-pairs on/off switch are dev controls.
+
 ## What is in the world
 
 ```javascript
-const SPECIES = { H2: { els: ['H','H'] }, O2: { els: ['O','O'] } };
-const composition = { H2: 2, O2: 0 };    // 0–6 of each, both dev sliders
-const ATOMIC_MASS = { H: 1, O: 16 };
+const SPECIES = { H2: { els: ['H','H'] }, O2: { els: ['O','O'] }, He: { els: ['He'] } };
+const composition = { H2: 2, O2: 0, He: 0 };    // 0–6 of each, dev sliders
+const ATOMIC_MASS = { H: 1, O: 16, He: 4 };
 ```
 
 `spawnWorld()` builds a queue from `composition`, shuffles it so a crowded world
@@ -340,8 +405,11 @@ Dormant, kept because the next round of work wants it. None of it is live:
 - No reactions. Molecules bounce; they never break or combine.
 - No internal vibration — a molecule is perfectly rigid, so a collision has only
   translation and rotation to put energy into.
-- Only two counter slots in the toolbar (`sp1`/`sp2`); a third species would not
-  be shown.
+- Only two counter slots in the toolbar (`sp1`/`sp2`), so with H₂, O₂ and He all
+  present one of them is not shown. Three species now exist, so this one is live.
+- `makeBody` lays atoms in a straight row, so an H₂O would come out linear
+  rather than bent at 104.5°. The electron structure is already right (4
+  bonding, 2 lone pairs) — only the geometry is missing.
 
 ## Deployment
 
