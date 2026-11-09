@@ -1111,42 +1111,33 @@ function drawFieldHeatmap(destCtx) {
 }
 
 // ─── Space-filling view ───────────────────────────────────────────────────────
-// The "Outline" mode. Each atom is a shaded sphere at its van der Waals radius,
-// drawn mostly solid so the molecule reads as one object with a shape — the
-// CPK models made of coloured balls — with the nucleus just showing through.
+// The "Outline" mode. Each atom is a flat disc at its van der Waals radius, so
+// a molecule reads as one continuous layer of matter with its nuclei just
+// showing through. No shading and no highlights: nothing here is lit.
 //
 // The spheres go into a scratch layer at full opacity and the WHOLE LAYER is
 // blitted once at `sphereOpacity`. Drawing them straight onto the scene would
 // composite the overlaps twice, so every place two atoms meet would come out
 // darker than the rest and the molecule would look seamed instead of solid.
 
-let sphereOpacity = 0.80;      // 1 = solid; 0.80 is "20% transparent"
-let sphereShade   = 0.55;      // how much lighter the lit side is
+let sphereOpacity = 0.80;      // 1 = solid; 0.80 is "20% transparent\"
 
 const _sphereLayer = document.createElement('canvas');
 const _sphereCtx   = _sphereLayer.getContext('2d');
 
-// rgb string -> a lighter and a darker variant, for the lit/shadow sides
-function _shade(rgb, f) {
-  const [r, g, b] = rgb.split(',').map(Number);
-  return f >= 0
-    ? `rgb(${r + (255 - r) * f | 0},${g + (255 - g) * f | 0},${b + (255 - b) * f | 0})`
-    : `rgb(${r * (1 + f) | 0},${g * (1 + f) | 0},${b * (1 + f) | 0})`;
-}
-
-// One sphere: a radial gradient offset up and left, so a flat circle reads as
-// a ball lit from that direction.
+// One atom: a flat disc of the element's colour. No gradient, no highlight, no
+// shading of any kind — this is a layer of matter, not a lit ball.
+//
+// Flat colour is also what removes the "in front" problem. Two atoms of the
+// same element drawn opaque into the layer merge into one shape with no seam
+// and no edge where one crosses the other, because there is nothing to tell
+// them apart. (Where two DIFFERENT elements overlap there is still a colour
+// boundary — unavoidable, and a boundary between materials rather than one
+// sphere occluding another.)
 function drawSphere(c, p) {
   const e = elemOf(p);
-  const r = ATOM_RADIUS * e.rScale;
-  const g = c.createRadialGradient(
-    p.x - r * 0.38, p.y - r * 0.38, r * 0.04,
-    p.x, p.y, r);
-  g.addColorStop(0,    _shade(e.rgb,  sphereShade));
-  g.addColorStop(0.55, _shade(e.rgb,  0));
-  g.addColorStop(1,    _shade(e.rgb, -0.55));
-  c.fillStyle = g;
-  c.beginPath(); c.arc(p.x, p.y, r, 0, Math.PI * 2); c.fill();
+  c.fillStyle = rgba(e.rgb, 1);
+  c.beginPath(); c.arc(p.x, p.y, ATOM_RADIUS * e.rScale, 0, Math.PI * 2); c.fill();
 }
 
 // A thin rim on the union silhouette — each atom's circle only where it is not
@@ -2570,7 +2561,6 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     row('devLoneS',  'Lone orbit speed',  0.005, 0.2, 0.005, loneSpeed, '#ff3a8a') +
     row('devNucleus', 'Nucleus size', 0, 24, 1, nucleusDiameter, '#ff80b0') +
     row('devSphereA', 'Sphere opacity', 0.15, 1, 0.05, sphereOpacity, '#9fd0ff') +
-    row('devSphereS', 'Sphere shading', 0, 1, 0.05, sphereShade, '#9fd0ff') +
     '<label style="display:flex;align-items:center;gap:7px;margin:9px 0 2px;cursor:pointer;">' +
       '<input type="checkbox" id="devLone" checked style="margin:0">' +
       '<span>Lone pairs (non-bonding)</span>' +
@@ -2618,7 +2608,6 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   bind('devLoneS',  v => loneSpeed   = v, false, v => v.toFixed(3));
   bind('devNucleus', v => nucleusDiameter = v, false, v => v + ' px');
   bind('devSphereA', v => sphereOpacity = v, false, v => v.toFixed(2));
-  bind('devSphereS', v => sphereShade   = v, false, v => v.toFixed(2));
   // The field look was dialled in against the picture, so it stays adjustable
   bind('devLobeW',    v => FIELD_WIDTH = v, false, v => v.toFixed(2));
   bind('devLobeGain', v => FIELD_GAIN  = v, false, v => v.toFixed(1));

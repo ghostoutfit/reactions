@@ -77,13 +77,26 @@ once is fine. Size is a dev slider.
 
 ## Space-filling view
 
-The **Outline** button. Each atom is a shaded sphere at its van der Waals
-radius, mostly solid, with its nucleus just showing through — a CPK model.
+The **Outline** button. Each atom is a **flat disc** at its van der Waals
+radius, so a molecule reads as one continuous layer of matter with its nuclei
+just showing through.
 
 ```javascript
 let sphereOpacity = 0.80;   // 1 = solid; 0.80 is "20% transparent"
-let sphereShade   = 0.55;   // how much lighter the lit side is
 ```
+
+**Nothing here is lit.** No gradient, no highlight, no shading. An earlier
+version gave each atom a radial gradient offset up-and-left to read as a ball,
+and it was wrong twice over: it looked like a reflection, and it made the front
+atom visibly occlude the one behind it.
+
+Flat colour is also what removes the occlusion. Two atoms of the same element
+drawn opaque into the layer merge into one shape with **no seam and no edge**
+where they cross, because there is nothing to tell them apart — measured, the
+colour is identical from one nucleus to the other straight across the overlap.
+Where two *different* elements overlap there is still a colour boundary; that
+is unavoidable, and it is a boundary between materials rather than one sphere
+in front of another.
 
 **The spheres go into a scratch layer at full opacity and the whole layer is
 blitted once at `sphereOpacity`.** Drawing them straight onto the scene would
@@ -102,10 +115,11 @@ outline rather than a pile of rings. It is a thin line, **not a glow**: the old
 version used `shadowBlur`, which is the per-atom cost this project has been
 bitten by before.
 
-Cheaper than the electron view: measured at 18 bodies, **1.13 ms** whole frame
-(0.60 of it the spheres) against 3.01 ms for the electron view.
+Cheaper than the electron view: measured at 18 bodies, **0.73 ms** whole frame
+(0.40 of it the discs) against ~3.0 ms for the electron view. Dropping the
+gradients took it from 1.13.
 
-Opacity and shading are dev sliders.
+Opacity is a dev slider.
 
 ## Valence electrons
 
