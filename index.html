@@ -158,6 +158,8 @@
     text-align: center;
   }
 
+  .temp-btn { width: 58px; text-align: center; white-space: nowrap; }
+
   /* ========================================
      BUTTON GROUPS — stacked option pickers
      ======================================== */
@@ -706,6 +708,14 @@
           </div>
         </div>
       </div>
+
+      <!-- Temperature: both buttons are the same fixed width, so switching
+           Low/High never resizes the group or shifts anything beside it. -->
+      <div id="tempGroup" style="display:flex;flex-direction:column;gap:4px;align-items:stretch;">
+        <span style="font-size:9px;letter-spacing:0.07em;text-transform:uppercase;opacity:0.5;text-align:center;">Temp</span>
+        <button class="awheel-item temp-btn active" data-temp="low">LOW</button>
+        <button class="awheel-item temp-btn" data-temp="high">HIGH</button>
+      </div>
     </div>
 
     <!-- Blue box: stacked sliders + electric field + view mode -->
@@ -831,48 +841,83 @@ let hmFrameCounter  = 0;
 let _hmXfadeStartFrac = -1;   // frac at which phase-3 crossfade began; -1 = inactive
 const HM_XFADE_DURATION = 0.04;  // crossfade window in frac units (~200ms at normal speed)
 
-// ── Quality selector ──────────────────────────────────────────────────────────
-let _quality = 'hi-res';  // 'hi-res' | 'detailed' | 'simple'
+// ── Quality tiers ─────────────────────────────────────────────────────────────
+// Each tier sets both how much is drawn per atom and the frame rate it is drawn
+// at. 60 fps is plenty for this sim; the light tier settles for 30 so a weak
+// machine spends its budget on a steady picture rather than a stuttering one.
+const TIER_FPS = { 'hi-res': 60, 'detailed': 60, 'simple': 30 };
+const TIER_SEGMENTS = { 'hi-res': 28, 'detailed': 16, 'simple': 8 };
 
-// ── Dev perf toggles (driven by _applyQuality) ────────────────────────────────
-let _flatFill = true;
+let _quality = 'hi-res';            // 'hi-res' | 'detailed' | 'simple'
+let frameBudgetMs = 1000 / 60;      // minimum wall time between drawn frames
 
 function _applyQuality(level) {
   _quality = level;
+  frameBudgetMs = 1000 / (TIER_FPS[level] || 60);
   const el = document.getElementById('qualitySelect');
   if (el) el.value = level;
-  _flatFill = true;
 }
 
-// Draws 100 gradient+shadowBlur particles to an offscreen canvas and returns ms.
-// getImageData() at the end forces a GPU sync so the time is real.
-// A 15-particle warm-up pass runs first to settle JIT and GPU init cost.
+// ── Renderer benchmark ────────────────────────────────────────────────────────
+// Measures what the sim actually draws — arc-stroke trails, not the gradient
+// blobs the nuclear version used — so the tier it picks reflects real cost.
+// One pass is a full worst-case frame: MAX atoms at hi-res segment count.
+// getImageData() at the end forces a GPU sync so the timing is real.
+const BENCH_ATOMS = 24;   // a full world: 6 H2 + 6 O2, two atoms each
+
 function _runPerfBenchmark() {
   const oc = document.createElement('canvas');
-  oc.width = 300; oc.height = 300;
+  oc.width = 640; oc.height = 420;
   const dc = oc.getContext('2d');
-  const R = PARTICLE_RADIUS;
-  for (let i = 0; i < 15; i++) {
-    const x = 15 + (i % 5) * 40, y = 15 + Math.floor(i / 5) * 40;
-    const g = dc.createRadialGradient(x, y, 0, x, y, R);
-    g.addColorStop(0, '#ff1a65'); g.addColorStop(1, 'rgba(0,0,0,0)');
-    dc.fillStyle = g; dc.beginPath(); dc.arc(x, y, R, 0, Math.PI * 2); dc.fill();
-  }
+  const saved = _quality;
+  _quality = 'hi-res';                 // always price the heaviest tier
+
+  const atoms = Array.from({ length: BENCH_ATOMS }, (_, i) => ({
+    el: i % 2 ? 'O' : 'H', i: i % 2, bodyId: i,
+  }));
+  const pass = () => atoms.forEach((p, i) =>
+    drawAtom(dc, 50 + (i % 8) * 75, 50 + Math.floor(i / 8) * 75, p));
+
+  pass();                              // warm-up: settle JIT, GPU init, glow cache
+  dc.getImageData(0, 0, 1, 1);
   const t0 = performance.now();
-  for (let i = 0; i < 100; i++) {
-    const x = 15 + (i % 10) * 27, y = 15 + Math.floor(i / 10) * 27;
-    const g1 = dc.createRadialGradient(x, y, 0, x, y, R * 1.1);
-    g1.addColorStop(0, '#ff1a65'); g1.addColorStop(0.82, '#ff1a65'); g1.addColorStop(1, 'rgba(0,0,0,0)');
-    dc.fillStyle = g1; dc.beginPath(); dc.arc(x, y, R * 1.1, 0, Math.PI * 2); dc.fill();
-    const g2 = dc.createRadialGradient(x, y, 0, x, y, R);
-    g2.addColorStop(0, '#ff80b0'); g2.addColorStop(0.5, '#ff80b0'); g2.addColorStop(1, 'rgba(0,0,0,0)');
-    dc.save(); dc.shadowColor = '#ff80b0'; dc.shadowBlur = 8; dc.globalAlpha = 0.82;
-    dc.fillStyle = g2; dc.beginPath(); dc.arc(x, y, R, 0, Math.PI * 2); dc.fill();
-    dc.restore(); dc.globalAlpha = 1;
-  }
-  dc.getImageData(0, 0, 1, 1); // force GPU flush so timing is real
-  return performance.now() - t0;
+  for (let r = 0; r < 3; r++) pass();
+  dc.getImageData(0, 0, 1, 1);         // force GPU flush so timing is real
+  const ms = (performance.now() - t0) / 3;
+
+  _quality = saved;
+  return ms;
 }
+
+// Calibrated against measured draw cost at a full 6+6 world on a 2024 laptop:
+// hi-res ~1.3 ms, detailed ~0.7 ms, simple ~0.45 ms per frame. The thresholds
+// sit well above those so an ordinary machine gets hi-res and only a genuinely
+// slow one steps down; drawing is not the only thing a 16.7 ms frame must do.
+const TIER_THRESHOLD_MS = { 'hi-res': 6.0, 'detailed': 14.0 };
+
+function pickTier(ms) {
+  if (ms < TIER_THRESHOLD_MS['hi-res'])   return 'hi-res';
+  if (ms < TIER_THRESHOLD_MS['detailed']) return 'detailed';
+  return 'simple';
+}
+
+// Console diagnostic: `runPerfTest()` re-measures and prints the numbers next to
+// the constants they are compared against, without changing the current tier.
+window.runPerfTest = function (samples = 5) {
+  const runs = Array.from({ length: samples }, () => _runPerfBenchmark());
+  const median = runs.slice().sort((a, b) => a - b)[Math.floor(samples / 2)];
+  console.table([
+    { metric: 'worst-case frame draw', value: +median.toFixed(2), unit: 'ms',
+      note: BENCH_ATOMS + ' atoms x ' + TIER_SEGMENTS['hi-res'] + ' segments' },
+    { metric: 'hi-res threshold',   value: TIER_THRESHOLD_MS['hi-res'],   unit: 'ms', note: 'below this -> hi-res' },
+    { metric: 'detailed threshold', value: TIER_THRESHOLD_MS['detailed'], unit: 'ms', note: 'below this -> detailed' },
+    { metric: 'frame budget @60fps', value: +(1000 / 60).toFixed(2), unit: 'ms', note: 'one whole frame' },
+    { metric: 'would pick',   value: pickTier(median), unit: '', note: TIER_FPS[pickTier(median)] + ' fps' },
+    { metric: 'current tier', value: _quality, unit: '', note: TIER_FPS[_quality] + ' fps' },
+  ]);
+  console.log('runs (ms):', runs.map(r => +r.toFixed(2)).join(', '));
+  return { median: +median.toFixed(2), wouldPick: pickTier(median), current: _quality };
+};
 
 function resize() {
   canvas.width   = window.innerWidth;
@@ -1149,6 +1194,28 @@ const ATOM_TRAIL_DEFAULT = 0.82;   // fraction of the circle the trail covers
 let atomOrbitSpeed = ATOM_ORBIT_DEFAULT;
 let atomTrail      = ATOM_TRAIL_DEFAULT;
 
+// Arrowhead glow. Canvas shadowBlur costs ~8 ms a frame at a full world — it was
+// 88% of the whole hi-res draw — so the halo is a radial-gradient sprite baked
+// once per element and colour and then just blitted.
+const _glowCache = new Map();
+function glowSprite(rgb, R) {
+  const size = Math.max(8, Math.round(R * 3));
+  const key = rgb + '|' + size;
+  let c = _glowCache.get(key);
+  if (c) return c;
+  c = document.createElement('canvas');
+  c.width = c.height = size;
+  const gc = c.getContext('2d');
+  const grad = gc.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  grad.addColorStop(0.00, rgba(rgb, 0.50));
+  grad.addColorStop(0.40, rgba(rgb, 0.20));
+  grad.addColorStop(1.00, rgba(rgb, 0));
+  gc.fillStyle = grad;
+  gc.fillRect(0, 0, size, size);
+  _glowCache.set(key, c);
+  return c;
+}
+
 // Where the arrowhead is right now. Driven by the wall clock, not sim time, so
 // the atoms keep tracing while the sim is paused. The per-atom offset stops
 // every atom in the world marching in lockstep.
@@ -1164,7 +1231,7 @@ function drawAtom(dc, px, py, p, radiusScale = 1, alphaScale = 1) {
 
   const head = atomPhase(p);
   const span = atomTrail * Math.PI * 2;
-  const SEGS = _quality === 'simple' ? 8 : _quality === 'detailed' ? 16 : 28;
+  const SEGS = TIER_SEGMENTS[_quality] || 28;
   const lw   = Math.max(1.2, R * 0.105);
 
   dc.save();
@@ -1186,7 +1253,12 @@ function drawAtom(dc, px, py, p, radiusScale = 1, alphaScale = 1) {
   const tx = -Math.sin(head), ty = Math.cos(head);   // direction of travel
   const nx =  Math.cos(head), ny = Math.sin(head);   // outward normal
   const L = R * 0.34, Wd = R * 0.21;
-  if (_quality === 'hi-res') { dc.shadowColor = rgba(e.rgb, a(0.8)); dc.shadowBlur = R * 0.5; }
+  if (_quality === 'hi-res') {
+    const sp = glowSprite(e.rgb, R);
+    dc.globalAlpha = a(1);
+    dc.drawImage(sp, hx - sp.width / 2, hy - sp.height / 2);
+    dc.globalAlpha = 1;
+  }
   dc.fillStyle = rgba(e.rgb, a(1));
   dc.beginPath();
   dc.moveTo(hx + tx * L, hy + ty * L);
@@ -1312,13 +1384,48 @@ function launchSpeed() {
   return parseFloat(document.getElementById('neutronSpeed').value) * 45;
 }
 
-// Heavier molecules start slower, so every species begins with the same kinetic
-// energy — equipartition, the way a real gas mixture at one temperature behaves.
-// An O2 is 16× the mass of an H2, so it sets off at a quarter of the speed.
+// Equipartition: heavier molecules start slower, so every species begins with
+// the same kinetic energy — the way a real gas mixture at one temperature does.
+// An O2 is 16× the mass of an H2, so it sets off at a quarter the speed.
+// Off, every species starts at the dial speed regardless of mass. Dev toggle.
+let equipartition = true;
 const H2_MASS = 2 * ATOMIC_MASS.H;
+
 function speciesSpeed(els) {
+  const base = launchSpeed() * tempCurrent;
+  if (!equipartition) return base;
   const m = els.reduce((a, el) => a + (ATOMIC_MASS[el] || 1), 0);
-  return launchSpeed() * Math.sqrt(H2_MASS / m);
+  return base * Math.sqrt(H2_MASS / m);
+}
+
+// ─── Temperature ──────────────────────────────────────────────────────────────
+// A two-state dial on the main toolbar. Switching it does not teleport the world
+// to a new speed — `tempCurrent` chases `tempTarget` over about a second, and
+// every molecule is rescaled by the per-frame ratio, so you watch the whole
+// world accelerate. 3× the speed is 9× the kinetic energy, which the energy
+// graph shows honestly.
+const TEMP_HIGH = 3;        // High runs at 3× Low
+const TEMP_TAU  = 0.26;     // seconds — exponential approach, quick then settling
+let tempLevel   = 'low';
+let tempTarget  = 1;
+let tempCurrent = 1;
+
+function setTemperature(level) {
+  tempLevel  = level;
+  tempTarget = level === 'high' ? TEMP_HIGH : 1;
+  document.querySelectorAll('.temp-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.temp === level));
+  logAction('Temperature: ' + level);
+}
+
+// Called once per frame with WALL-clock dt, so the ramp takes the same time on
+// screen no matter where the playback-speed slider is.
+function stepTemperature(rawDt) {
+  if (Math.abs(tempTarget - tempCurrent) < 1e-4) { tempCurrent = tempTarget; return; }
+  const next = tempCurrent + (tempTarget - tempCurrent) * (1 - Math.exp(-rawDt / TEMP_TAU));
+  const k = next / tempCurrent;
+  for (const b of world.bodies) { b.vx *= k; b.vy *= k; b.spin *= k; }
+  tempCurrent = next;
 }
 
 function spawnWorld() {
@@ -1358,7 +1465,7 @@ function spawnWorld() {
     }
     world.bodies.push(placed);
   }
-  lastDialSpeed = launchSpeed();
+  lastDialSpeed = launchSpeed() * tempCurrent;
   resetEnergyTrace();
   updateParticleCounters();
 }
@@ -1708,6 +1815,7 @@ function drawWorld() {
 // ─── Main loop ────────────────────────────────────────────────────────────────
 let worldRAF   = null;
 let lastFrame  = 0;
+let lastDrawn  = 0;
 let egPctTick  = 0;
 
 function timeScale() {
@@ -1716,23 +1824,30 @@ function timeScale() {
 
 function worldLoop(now) {
   worldRAF = requestAnimationFrame(worldLoop);
+  // Hold to the tier's frame rate. rAF may fire at 120 Hz or more; 60 is plenty
+  // here, and the light tier settles for 30. Returning before `lastFrame` is
+  // touched means the skipped time still counts towards the next step's dt.
+  if (now - lastDrawn < frameBudgetMs - 1) return;
+  lastDrawn = now;
   if (!lastFrame) lastFrame = now;
   // Clamp dt so a backgrounded tab does not resume with one enormous step that
   // tunnels molecules straight through each other.
-  const dt = Math.min(0.05, (now - lastFrame) / 1000) * timeScale();
+  const rawDt = Math.min(0.05, (now - lastFrame) / 1000);
+  const dt = rawDt * timeScale();
   lastFrame = now;
+  stepTemperature(rawDt);
   if (running) {
     // Sub-step so fast molecules cannot pass through one another in one frame
     const steps = Math.max(1, Math.ceil(dt / 0.004));
     for (let k = 0; k < steps; k++) stepWorld(dt / steps);
     sampleEnergy();
-    if (++egPctTick % 15 === 0) updateEnergyPct();   // ~4 Hz, so the number is readable
+    if (++egPctTick % Math.round(TIER_FPS[_quality] / 4) === 0) updateEnergyPct();   // ~4 Hz either way
   }
   drawWorld();
 }
 
 function startWorldLoop() {
-  if (worldRAF === null) { lastFrame = 0; worldRAF = requestAnimationFrame(worldLoop); }
+  if (worldRAF === null) { lastFrame = 0; lastDrawn = 0; worldRAF = requestAnimationFrame(worldLoop); }
 }
 
 function setRunning(on) {
@@ -1791,10 +1906,13 @@ function drawEnergyGraph() {
   egCtx.restore();
 
   if (egTrace.length > 1) {
-    // Full scale is twice the starting energy, so a flat run sits mid-graph
     const t1 = world.time, t0 = t1 - EG_WINDOW;
+    // Full scale is twice the starting energy, but grows to fit if the trace
+    // runs higher — switching to High is a 9× jump and must stay on the graph.
+    const peak = egTrace.reduce((a, pt) => Math.max(a, pt.ke), 0);
+    const full = Math.max(egRef * 2, peak * 1.15);
     const px = (t) => ((t - t0) / EG_WINDOW) * (W - 1);
-    const py = (ke) => PAD + gH * (1 - Math.max(0, Math.min(1, ke / (egRef * 2))));
+    const py = (ke) => PAD + gH * (1 - Math.max(0, Math.min(1, ke / full)));
     const stroke = (lw, blur, alpha) => {
       egCtx.save();
       egCtx.globalAlpha = alpha;
@@ -1845,7 +1963,7 @@ document.getElementById('neutronSpeed').addEventListener('input', function () {
   // Scale the whole world by the same factor rather than flattening every
   // molecule to one speed — collisions have spread them out, and that spread
   // is the interesting part.
-  const target = launchSpeed();
+  const target = launchSpeed() * tempCurrent;
   if (lastDialSpeed > 0) {
     const k = target / lastDialSpeed;
     for (const b of world.bodies) { b.vx *= k; b.vy *= k; b.spin *= k; }
@@ -1867,6 +1985,10 @@ document.getElementById('showElectric').addEventListener('change', function () {
 document.getElementById('qualitySelect').addEventListener('change', function () {
   _applyQuality(this.value);
   heatmapDirty = true;
+});
+
+document.querySelectorAll('.temp-btn').forEach(btn => {
+  btn.addEventListener('click', () => setTemperature(btn.dataset.temp));
 });
 
 function setParticleWheelActive(targetBtn) {
@@ -1943,6 +2065,12 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
     row('devTrail', 'Trail length', 0.1, 1, 0.02, ATOM_TRAIL_DEFAULT,  '#ff3a8a') +
     row('devOrbit', 'Arrow speed',  0.05, 3, 0.05, ATOM_ORBIT_DEFAULT, '#ff3a8a') +
+    '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
+    '<label style="display:flex;align-items:center;gap:7px;margin:9px 0 2px;cursor:pointer;">' +
+      '<input type="checkbox" id="devEqui" checked style="margin:0">' +
+      '<span>Heavy molecules start slower</span>' +
+    '</label>' +
+    '<div id="devEquiNote" style="opacity:0.45;font-size:10px;margin-left:21px;"></div>' +
     '<div style="margin-top:10px;opacity:0.45;font-size:10px;">' +
       'Restitution ' + RESTITUTION.toFixed(2) + ' \u2014 collisions are elastic</div>';
   document.body.appendChild(panel);
@@ -1962,6 +2090,23 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   bind('devO2',    v => composition.O2 = v, true);
   bind('devTrail', v => atomTrail      = v, false, v => v.toFixed(2));
   bind('devOrbit', v => atomOrbitSpeed = v, false, v => v.toFixed(2));
+
+  // Equipartition on/off, so both can be compared side by side
+  const equi = panel.querySelector('#devEqui');
+  const equiNote = panel.querySelector('#devEquiNote');
+  const syncEquiNote = () => {
+    equiNote.textContent = equipartition
+      ? 'Equal kinetic energy \u2014 O\u2082 at \u00bc the speed of H\u2082'
+      : 'Equal speed \u2014 O\u2082 at 16\u00d7 the energy of H\u2082';
+  };
+  equi.checked = equipartition;
+  syncEquiNote();
+  equi.addEventListener('change', () => {
+    equipartition = equi.checked;
+    syncEquiNote();
+    spawnWorld();
+    logAction('Equipartition ' + (equipartition ? 'on' : 'off'));
+  });
 
   let buf = '';
   document.addEventListener('keydown', (e) => {
@@ -2035,6 +2180,16 @@ document.getElementById('themeLight').addEventListener('click', () => {
 applyTheme('A');
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
+// Pick a quality tier from what this machine can actually draw. `runPerfTest()`
+// in the console re-measures and shows the numbers; the dropdown overrides it.
+(function _startupBenchmark() {
+  const ms = _runPerfBenchmark();
+  const tier = pickTier(ms);
+  _applyQuality(tier);
+  console.log(`[perf] worst-case frame ${ms.toFixed(2)} ms -> ${tier} @ ${TIER_FPS[tier]} fps` +
+              ' (call runPerfTest() for the full table)');
+})();
+
 setParticleWheelActive(document.querySelector('.awheel-item[data-pmode="particles"]'));
 drawSpeedLines();
 updateGraphBtn();

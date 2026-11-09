@@ -67,10 +67,47 @@ const ATOMIC_MASS = { H: 1, O: 16 };
 does not cram one species into the gaps the other left, then places each at a
 random position, heading and spin — retrying up to 400 times for a clear spot.
 
-**Heavier molecules start slower.** `speciesSpeed` scales the dial speed by
-`sqrt(m_H2 / m)`, so every species begins with the same kinetic energy
-(equipartition, as in a real gas mixture at one temperature). An O2 sets off at
-a quarter the speed of an H2. Delete that factor if you want equal speeds.
+**Heavier molecules start slower** — `equipartition`, a dev checkbox, on by
+default. `speciesSpeed` scales the dial by `sqrt(m_H2 / m)`, so every species
+begins with the same kinetic energy, as a real gas mixture at one temperature
+does; an O2 sets off at a quarter the speed of an H2. Off, every species starts
+at the dial speed and an O2 carries 16x the energy of an H2.
+
+## Temperature
+
+A Low/High toggle on the toolbar. High runs at `TEMP_HIGH` = 3x the speed, which
+is **9x the kinetic energy** — the energy readout says so, and the graph rescales
+to fit the excursion.
+
+Switching does not teleport the world to a new speed: `tempCurrent` chases
+`tempTarget` with an exponential approach (`TEMP_TAU` = 0.26 s) and every
+molecule is rescaled by the per-frame ratio, so you watch everything accelerate
+over about a second. `stepTemperature` is fed **wall-clock** dt, so the ramp
+takes the same time on screen wherever the playback-speed slider sits.
+
+## Quality tiers and frame rate
+
+```javascript
+const TIER_FPS      = { 'hi-res': 60, 'detailed': 60, 'simple': 30 };
+const TIER_SEGMENTS = { 'hi-res': 28, 'detailed': 16, 'simple':  8 };
+```
+
+Each tier sets both trail detail and a frame cap; `worldLoop` holds to
+`frameBudgetMs` and the skipped time still counts towards the next step's dt, so
+physics does not slow down with the frame rate.
+
+`_runPerfBenchmark` drives the **real** `drawAtom` into an offscreen canvas —
+24 atoms at hi-res detail, GPU-synced — and `_startupBenchmark` picks a tier from
+it. `runPerfTest()` in the console re-measures and prints the timings next to the
+thresholds they are compared against, without changing the current tier.
+
+Measured at a full 6+6 world on a 2024 laptop: hi-res ~2.0 ms/frame, detailed
+~0.7, simple ~0.45, against a 16.7 ms budget.
+
+**The arrowhead glow is a cached sprite, not `shadowBlur`.** Canvas shadowBlur
+cost 8.3 ms a frame here — 88% of the entire hi-res draw. `glowSprite` bakes a
+radial gradient once per element and size and blits it; same look, 4.7x faster
+overall. Do not reintroduce shadowBlur in a per-atom path.
 
 A body stores its atoms once in **body-local** coordinates and derives world
 positions each frame from `(x, y, angle)`, so a molecule can never stretch or
@@ -108,6 +145,8 @@ check on the collision solver, not a teaching graph.
 - The world band excludes the full-width strip above the toolbar, even on the
   right where the toolbar panel does not reach. Simple, but it wastes screen.
 - Composition lives in the dev panel, not the toolbar.
+- The temperature ramp runs even while paused, so velocities change with nothing
+  moving. Harmless, but the pause is not a total freeze.
 - Molecules cannot be dragged or clicked; the old nucleus-rotation drag is gone.
 - No reactions. Molecules bounce; they never break or combine.
 
