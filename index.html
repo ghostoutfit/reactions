@@ -1139,70 +1139,82 @@ function drawMoleculeOutline(atoms, c = ctx) {
   c.restore();
 }
 
-// ─── Atom renderer — semitransparent hollow sphere ───────────────────────────
-// A shell, not a ball: clear through the middle so atoms behind show through,
-// with the colour gathering towards the rim the way a thin spherical surface
-// looks when you see through both its near and far faces. The rim stroke gives
-// the hard silhouette; the specular arc is what makes it read as a sphere
-// rather than a flat ring.
+// ─── Atom renderer — a circle drawn by a travelling arrow ───────────────────
+// Not a surface: an arrowhead laps the circle forever, paying out a trail that
+// fades behind it. The trail covers most of the circle so the atom still has a
+// readable silhouette, while the bright head says which way it is being drawn.
+// (The earlier translucent shell read as a soap bubble.)
+const ATOM_ORBIT_DEFAULT = 0.65;   // laps per second
+const ATOM_TRAIL_DEFAULT = 0.82;   // fraction of the circle the trail covers
+let atomOrbitSpeed = ATOM_ORBIT_DEFAULT;
+let atomTrail      = ATOM_TRAIL_DEFAULT;
+
+// Where the arrowhead is right now. Driven by the wall clock, not sim time, so
+// the atoms keep tracing while the sim is paused. The per-atom offset stops
+// every atom in the world marching in lockstep.
+function atomPhase(p) {
+  const off = (((p.i || 0) * 0.37) + ((p.bodyId || 0) * 0.231)) % 1;
+  return (performance.now() / 1000 * atomOrbitSpeed + off) * Math.PI * 2;
+}
+
 function drawAtom(dc, px, py, p, radiusScale = 1, alphaScale = 1) {
   const e = elemOf(p);
   const R = PARTICLE_RADIUS * e.rScale * radiusScale;
   const a = (v) => Math.min(1, v * alphaScale);
 
-  if (_quality === 'simple') {
-    // Cheap: flat wash + rim, no gradients
-    dc.fillStyle   = rgba(e.rgb, a(0.16));
-    dc.beginPath(); dc.arc(px, py, R, 0, Math.PI * 2); dc.fill();
-    dc.strokeStyle = rgba(e.rgb, a(0.85));
-    dc.lineWidth   = Math.max(1, R * 0.07);
-    dc.stroke();
-    return;
-  }
+  const head = atomPhase(p);
+  const span = atomTrail * Math.PI * 2;
+  const SEGS = _quality === 'simple' ? 8 : _quality === 'detailed' ? 16 : 28;
+  const lw   = Math.max(1.2, R * 0.105);
 
-  // Shell body — almost clear at the centre, densest just inside the rim
-  const shell = dc.createRadialGradient(px, py, 0, px, py, R);
-  shell.addColorStop(0.00, rgba(e.rgb, a(0.05)));
-  shell.addColorStop(0.55, rgba(e.rgb, a(0.09)));
-  shell.addColorStop(0.82, rgba(e.rgb, a(0.22)));
-  shell.addColorStop(0.96, rgba(e.rgb, a(0.46)));
-  shell.addColorStop(1.00, rgba(e.rgb, a(0.30)));
-  dc.fillStyle = shell;
-  dc.beginPath(); dc.arc(px, py, R, 0, Math.PI * 2); dc.fill();
-
-  // Rim — the silhouette
   dc.save();
-  if (_quality === 'hi-res') { dc.shadowColor = rgba(e.rgb, a(0.55)); dc.shadowBlur = R * 0.45; }
-  dc.strokeStyle = rgba(e.rgb, a(0.92));
-  dc.lineWidth   = Math.max(1.2, R * 0.075);
-  dc.beginPath(); dc.arc(px, py, R * 0.985, 0, Math.PI * 2); dc.stroke();
-  dc.restore();
+  dc.lineCap = 'round';
 
-  // Specular highlight — upper-left, reads as a lit curved surface
-  if (_quality === 'hi-res') {
-    dc.save();
-    dc.strokeStyle = `rgba(255,255,255,${a(0.30)})`;
-    dc.lineWidth   = Math.max(1, R * 0.055);
+  // Trail, tail first: alpha and width both ramp up towards the head
+  for (let k = 0; k < SEGS; k++) {
+    const t0 = k / SEGS, t1 = (k + 1) / SEGS;
+    const alpha = 0.05 + 0.95 * Math.pow(t1, 2.3);
+    dc.strokeStyle = rgba(e.rgb, a(alpha));
+    dc.lineWidth   = lw * (0.5 + 0.5 * t1);
     dc.beginPath();
-    dc.arc(px, py, R * 0.80, Math.PI * 1.08, Math.PI * 1.52);
+    dc.arc(px, py, R, head - span * (1 - t0), head - span * (1 - t1));
     dc.stroke();
-    dc.restore();
   }
+
+  // Arrowhead, pointing the way it is travelling (the tangent at `head`)
+  const hx = px + R * Math.cos(head), hy = py + R * Math.sin(head);
+  const tx = -Math.sin(head), ty = Math.cos(head);   // direction of travel
+  const nx =  Math.cos(head), ny = Math.sin(head);   // outward normal
+  const L = R * 0.34, Wd = R * 0.21;
+  if (_quality === 'hi-res') { dc.shadowColor = rgba(e.rgb, a(0.8)); dc.shadowBlur = R * 0.5; }
+  dc.fillStyle = rgba(e.rgb, a(1));
+  dc.beginPath();
+  dc.moveTo(hx + tx * L, hy + ty * L);
+  dc.lineTo(hx - tx * L * 0.3 + nx * Wd, hy - ty * L * 0.3 + ny * Wd);
+  dc.lineTo(hx - tx * L * 0.3 - nx * Wd, hy - ty * L * 0.3 - ny * Wd);
+  dc.closePath();
+  dc.fill();
+
+  dc.restore();
 }
 
 function drawParticles(particles, radiusScale = 1, drawCtx = ctx) {
   const dc = drawCtx;
-  // z ascending = back to front, so the translucent shells layer correctly
+  // z ascending = back to front, so overlapping trails layer correctly
   const sorted = [...particles].sort((a, b) => (a.z || 0) - (b.z || 0));
   for (const p of sorted) drawAtom(dc, p.x, p.y, p, radiusScale);
 }
 
 // ─── Species ──────────────────────────────────────────────────────────────────
-// What kinds of molecule the world is populated with. Give a species a weight > 0
-// and spawnWorld will mix it in; H2 alone for now.
-const SPECIES = [
-  { els: ['H', 'H'], weight: 1 },
-];
+// What the world can be populated with. `composition` says how many of each to
+// spawn — both dials live in the dev panel.
+const SPECIES = {
+  H2: { els: ['H', 'H'] },
+  O2: { els: ['O', 'O'] },
+};
+const COMPOSITION_DEFAULT = { H2: 2, O2: 0 };
+const COMPOSITION_MAX = 6;
+const composition = { ...COMPOSITION_DEFAULT };
 
 // ── Action log (for bug reports) ─────────────────────────────────────────────
 const actionLog = [];
@@ -1225,9 +1237,6 @@ function zoomFromSlider(v) {
 let viewZoom = 1.0;
 let showParticles = true;
 let running = false;
-
-const MOL_COUNT_DEFAULT = 2;
-let molCount = MOL_COUNT_DEFAULT;
 
 // Atomic masses, in units where H = 1. Used for collision impulses and for the
 // kinetic-energy readout, so a bounce off an O2 behaves like a bounce off
@@ -1254,6 +1263,8 @@ function syncWorldBox() {
   return { oldW, oldH };
 }
 
+let nextBodyId = 0;
+
 // Build a rigid body from a list of element symbols. Atom positions are stored
 // once in body-local coordinates; world positions are derived each frame from
 // (x, y, angle), so the molecule can never stretch or come apart.
@@ -1275,6 +1286,7 @@ function makeBody(els, x, y, heading, speed, spin) {
   const inertia = atoms.reduce((a, at) => a + at.m * (at.lx * at.lx + at.ly * at.ly), 0) || 1;
 
   return {
+    id: nextBodyId++,
     els, atoms, mass, inertia,
     x, y,
     vx: Math.cos(heading) * speed,
@@ -1291,38 +1303,51 @@ function bodyAtoms(b, dx = 0, dy = 0) {
   return b.atoms.map((at, i) => ({
     x: b.x + at.lx * ca - at.ly * sa + dx,
     y: b.y + at.lx * sa + at.ly * ca + dy,
-    z: 0, el: at.el, i,
+    z: 0, el: at.el, i, bodyId: b.id,
   }));
 }
 
-function pickSpecies() {
-  const total = SPECIES.reduce((a, sp) => a + sp.weight, 0);
-  let r = Math.random() * total;
-  for (const sp of SPECIES) { r -= sp.weight; if (r <= 0) return sp; }
-  return SPECIES[SPECIES.length - 1];
-}
-
-// Launch speed in px/s, from the speed slider (0.2–8.0 on the dial)
+// Launch speed in px/s for H2, from the speed slider (0.2–8.0 on the dial)
 function launchSpeed() {
   return parseFloat(document.getElementById('neutronSpeed').value) * 45;
 }
 
-function spawnWorld(n = molCount) {
+// Heavier molecules start slower, so every species begins with the same kinetic
+// energy — equipartition, the way a real gas mixture at one temperature behaves.
+// An O2 is 16× the mass of an H2, so it sets off at a quarter of the speed.
+const H2_MASS = 2 * ATOMIC_MASS.H;
+function speciesSpeed(els) {
+  const m = els.reduce((a, el) => a + (ATOMIC_MASS[el] || 1), 0);
+  return launchSpeed() * Math.sqrt(H2_MASS / m);
+}
+
+function spawnWorld() {
   syncWorldBox();
   world.bodies = [];
   world.time = 0;
 
-  for (let i = 0; i < n; i++) {
-    const sp = pickSpecies();
+  // Interleave the species so a crowded world does not end up with all the H2
+  // crammed into whatever space the O2 left over.
+  const queue = [];
+  for (const [key, n] of Object.entries(composition)) {
+    for (let i = 0; i < n; i++) queue.push(SPECIES[key].els);
+  }
+  for (let i = queue.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [queue[i], queue[j]] = [queue[j], queue[i]];
+  }
+
+  for (const els of queue) {
+    const speed = speciesSpeed(els);
     let placed = null;
     // Try for a spot clear of everything already down; after enough tries take
     // what we can get rather than loop forever in a crowded world.
     for (let attempt = 0; attempt < 400; attempt++) {
-      const b = makeBody(sp.els,
+      const b = makeBody(els,
         Math.random() * world.w,
         Math.random() * world.h,
         Math.random() * Math.PI * 2,
-        launchSpeed() * (0.75 + Math.random() * 0.5),
+        speed * (0.75 + Math.random() * 0.5),
         (Math.random() - 0.5) * 2.4);
       const clear = world.bodies.every(o => {
         const [dx, dy] = wrapDelta(o.x - b.x, o.y - b.y);
@@ -1462,12 +1487,12 @@ function updateParticleCounters() {
   }
   const rows = [...tally.entries()];
   const put = (lab, val, [formula, n] = []) => {
-    if (!formula) return false;
+    if (!formula) { lab.textContent = ''; val.textContent = '\u2014'; return false; }
     lab.textContent = '×' + n + '\u00a0';
     val.textContent = formula;
     return true;
   };
-  put(l1, f1, rows[0]);
+  put(l1, f1, rows[0]);                      // slot 1 shows a dash in an empty world
   p2El.style.visibility = put(l2, f2, rows[1]) ? '' : 'hidden';
 }
 
@@ -1513,7 +1538,7 @@ const neutronIconJitter = { x: 0, y: 0 };
 
 function drawNeutronIcon() {
   drawMoleculeIcon(document.getElementById('neutronIconCanvas'),
-                   SPECIES[0].els, neutronIconJitter, 3);
+                   SPECIES.H2.els, neutronIconJitter, 3);
 }
 
 function neutronIconLoop() {
@@ -1530,17 +1555,13 @@ neutronIconLoop();
 function drawAtomIcon(c, px, py, el, R) {
   const e = ELEMENTS[el];
   const r = R * e.rScale;
-  const g = c.createRadialGradient(px, py, 0, px, py, r);
-  g.addColorStop(0.00, rgba(e.rgb, 0.06));
-  g.addColorStop(0.55, rgba(e.rgb, 0.11));
-  g.addColorStop(0.82, rgba(e.rgb, 0.27));
-  g.addColorStop(0.96, rgba(e.rgb, 0.54));
-  g.addColorStop(1.00, rgba(e.rgb, 0.34));
-  c.fillStyle = g;
+  // A plain ring with a faint wash — the scene's travelling arrow is unreadable
+  // at icon size, so the icons just carry the element's colour and relative size.
+  c.fillStyle = rgba(e.rgb, 0.10);
   c.beginPath(); c.arc(px, py, r, 0, Math.PI * 2); c.fill();
   c.strokeStyle = rgba(e.rgb, 0.95);
-  c.lineWidth   = Math.max(1, r * 0.13);
-  c.beginPath(); c.arc(px, py, r * 0.96, 0, Math.PI * 2); c.stroke();
+  c.lineWidth   = Math.max(1, r * 0.14);
+  c.beginPath(); c.arc(px, py, r * 0.95, 0, Math.PI * 2); c.stroke();
 }
 
 // Atom offsets along the molecule axis in units of one H radius, re-centred,
@@ -1628,8 +1649,8 @@ function nucleusIconLoop(now) {
     _iconLast = now;
     wobbleIcon(newBtnIconJitter, 0.7);
     wobbleIcon(miniIconJitter,   0.4);
-    drawMoleculeIcon(document.getElementById('newBtnNucleus'), SPECIES[0].els, newBtnIconJitter, 4);
-    drawMoleculeIcon(document.getElementById('particlesModeIcon'), SPECIES[0].els, miniIconJitter, 1);
+    drawMoleculeIcon(document.getElementById('newBtnNucleus'), SPECIES.H2.els, newBtnIconJitter, 4);
+    drawMoleculeIcon(document.getElementById('particlesModeIcon'), SPECIES.H2.els, miniIconJitter, 1);
   }
   requestAnimationFrame(nucleusIconLoop);
 }
@@ -1685,8 +1706,9 @@ function drawWorld() {
 }
 
 // ─── Main loop ────────────────────────────────────────────────────────────────
-let worldRAF  = null;
-let lastFrame = 0;
+let worldRAF   = null;
+let lastFrame  = 0;
+let egPctTick  = 0;
 
 function timeScale() {
   return parseFloat(document.getElementById('playbackSpeed').value);
@@ -1704,6 +1726,7 @@ function worldLoop(now) {
     const steps = Math.max(1, Math.ceil(dt / 0.004));
     for (let k = 0; k < steps; k++) stepWorld(dt / steps);
     sampleEnergy();
+    if (++egPctTick % 15 === 0) updateEnergyPct();   // ~4 Hz, so the number is readable
   }
   drawWorld();
 }
@@ -1895,34 +1918,50 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
 });
 
 // ─── Dev panel — type "dev" anywhere to open ─────────────────────────────────
+// Composition is here rather than in the toolbar because the toolbar's layout is
+// tight; promote it whenever these stop being experiment knobs.
 (function devPanel() {
   const panel = document.createElement('div');
   panel.id = 'devPanel';
   panel.style.cssText = 'position:fixed;right:14px;bottom:178px;z-index:9000;display:none;' +
     'background:rgba(8,6,24,0.96);border:1px solid rgba(255,45,120,0.35);border-radius:10px;' +
     'padding:10px 12px;font-family:Lexend,sans-serif;font-size:11px;color:rgba(255,255,255,0.8);' +
-    'min-width:190px;box-shadow:0 6px 30px rgba(0,0,0,0.7);';
+    'width:220px;box-shadow:0 6px 30px rgba(0,0,0,0.7);';
+
+  const row = (id, label, min, max, step, value, colour) =>
+    '<label style="display:flex;justify-content:space-between;margin:9px 0 3px;">' +
+      '<span>' + label + '</span>' +
+      '<span id="' + id + 'Val" style="color:' + colour + ';font-weight:700">' + value + '</span>' +
+    '</label>' +
+    '<input type="range" id="' + id + '" min="' + min + '" max="' + max + '" step="' + step +
+      '" value="' + value + '" style="width:100%">';
+
   panel.innerHTML =
-    '<div style="font-size:9px;letter-spacing:0.08em;text-transform:uppercase;opacity:0.5;' +
-         'margin-bottom:8px;">Dev</div>' +
-    '<label style="display:block;margin-bottom:4px;">Molecules: ' +
-      '<span id="devCountVal" style="color:#ff3a8a;font-weight:700">' + MOL_COUNT_DEFAULT + '</span></label>' +
-    '<input type="range" id="devCount" min="1" max="40" step="1" value="' + MOL_COUNT_DEFAULT +
-      '" style="width:100%">' +
-    '<div style="margin-top:8px;opacity:0.45;font-size:10px;">' +
+    '<div style="font-size:9px;letter-spacing:0.08em;text-transform:uppercase;opacity:0.5;">Dev</div>' +
+    row('devH2', 'H\u2082 molecules', 0, COMPOSITION_MAX, 1, COMPOSITION_DEFAULT.H2, '#b9c0cd') +
+    row('devO2', 'O\u2082 molecules', 0, COMPOSITION_MAX, 1, COMPOSITION_DEFAULT.O2, '#e8382f') +
+    '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
+    row('devTrail', 'Trail length', 0.1, 1, 0.02, ATOM_TRAIL_DEFAULT,  '#ff3a8a') +
+    row('devOrbit', 'Arrow speed',  0.05, 3, 0.05, ATOM_ORBIT_DEFAULT, '#ff3a8a') +
+    '<div style="margin-top:10px;opacity:0.45;font-size:10px;">' +
       'Restitution ' + RESTITUTION.toFixed(2) + ' \u2014 collisions are elastic</div>';
   document.body.appendChild(panel);
 
-  const slider = panel.querySelector('#devCount');
-  const label  = panel.querySelector('#devCountVal');
-  slider.addEventListener('input', () => {
-    molCount = parseInt(slider.value, 10);
-    label.textContent = molCount;
-    spawnWorld();
-  });
-
-  // Keep the energy readout live while the panel is open
-  setInterval(() => { if (panel.style.display !== 'none') updateEnergyPct(); }, 250);
+  // Composition sliders respawn the world; the look sliders only change drawing.
+  const bind = (id, apply, respawn, fmt = String) => {
+    const sl  = panel.querySelector('#' + id);
+    const val = panel.querySelector('#' + id + 'Val');
+    sl.addEventListener('input', () => {
+      const v = parseFloat(sl.value);
+      apply(v);
+      val.textContent = fmt(v);
+      if (respawn) spawnWorld();
+    });
+  };
+  bind('devH2',    v => composition.H2 = v, true);
+  bind('devO2',    v => composition.O2 = v, true);
+  bind('devTrail', v => atomTrail      = v, false, v => v.toFixed(2));
+  bind('devOrbit', v => atomOrbitSpeed = v, false, v => v.toFixed(2));
 
   let buf = '';
   document.addEventListener('keydown', (e) => {
@@ -2008,7 +2047,7 @@ function getBugState() {
   return {
     sim:        'reactions',
     running,
-    molCount,
+    composition: { ...composition },
     species:    world.bodies.map(b => formulaOf(b.els)),
     worldTime:  +world.time.toFixed(2),
     keFraction: +(totalKineticEnergy() / egRef).toFixed(4),

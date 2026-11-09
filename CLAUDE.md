@@ -41,22 +41,36 @@ charge in units of e — **both are 0**, so "Show electric field" currently draw
 nothing. Give O a negative `q` and H a positive one to light it up for polar
 bonds; `drawElectricHeatmap` already sums over `elemOf(p).q !== 0`.
 
-Atoms render as **semitransparent hollow spheres** (`drawAtom`): a radial
-gradient that is nearly clear at the centre and gathers towards the rim, plus a
-rim stroke for the silhouette and a specular arc at hi-res. Outline mode
-(`drawMoleculeOutline`) strokes the union silhouette — each atom circle only
-where it is not buried inside another.
+Atoms render as **a circle drawn by a travelling arrow** (`drawAtom`): an
+arrowhead laps the circle forever, paying out a trail that fades behind it. The
+trail covers most of the circle so the atom keeps a readable silhouette. Driven
+by the wall clock, not sim time, so atoms keep tracing while the sim is paused.
+
+The earlier translucent-shell renderer was dropped — it read as a soap bubble.
+Trail length and arrow speed are dev sliders; the defaults are
+`ATOM_TRAIL_DEFAULT` / `ATOM_ORBIT_DEFAULT`.
+
+Icons (`drawAtomIcon`) stay a plain ring — the arrow is unreadable at icon size.
+
+Outline mode (`drawMoleculeOutline`) strokes the union silhouette — each atom
+circle only where it is not buried inside another.
 
 ## What is in the world
 
 ```javascript
-const SPECIES = [ { els: ['H','H'], weight: 1 } ];   // give a species weight > 0 to mix it in
+const SPECIES = { H2: { els: ['H','H'] }, O2: { els: ['O','O'] } };
+const composition = { H2: 2, O2: 0 };    // 0–6 of each, both dev sliders
 const ATOMIC_MASS = { H: 1, O: 16 };
 ```
 
-`spawnWorld(n)` places `n` molecules at random positions, headings and spins,
-retrying up to 400 times per molecule for a spot clear of what is already down.
-Default count is 2; the dev panel slider goes to 40.
+`spawnWorld()` builds a queue from `composition`, shuffles it so a crowded world
+does not cram one species into the gaps the other left, then places each at a
+random position, heading and spin — retrying up to 400 times for a clear spot.
+
+**Heavier molecules start slower.** `speciesSpeed` scales the dial speed by
+`sqrt(m_H2 / m)`, so every species begins with the same kinetic energy
+(equipartition, as in a real gas mixture at one temperature). An O2 sets off at
+a quarter the speed of an H2. Delete that factor if you want equal speeds.
 
 A body stores its atoms once in **body-local** coordinates and derives world
 positions each frame from `(x, y, angle)`, so a molecule can never stretch or
@@ -93,6 +107,7 @@ check on the collision solver, not a teaching graph.
 
 - The world band excludes the full-width strip above the toolbar, even on the
   right where the toolbar panel does not reach. Simple, but it wastes screen.
+- Composition lives in the dev panel, not the toolbar.
 - Molecules cannot be dragged or clicked; the old nucleus-rotation drag is gone.
 - No reactions. Molecules bounce; they never break or combine.
 
