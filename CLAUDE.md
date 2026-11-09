@@ -193,10 +193,45 @@ crossing — the bug recorded in the bond-kink memory. Measured on H–O (lobe r
 30 and 38): the lobes would run **14.7% apart**; with the fix they are **0.50%
 apart**. This matters for H₂O, before H₂O is even spawnable.
 
+### Width: the lobes should be circles
+
+A bare lemniscate is a narrow bow tie. Its widest half-width is `a/(2√2)` —
+**0.354** of the lobe's reach — so the figure-8 read as a pinched ribbon rather
+than as two orbits. `eWidth` stretches it perpendicular to the bond:
+
+```javascript
+let eWidth = 1.45;   // 1 = bare lemniscate; 1.41 makes a lobe exactly round
+```
+
+Measured on H–H: each lobe is **51.6 px long by 53.0 px wide**, a ratio of
+**1.03** — a circle round the nucleus, which is what a bonding pair should look
+like it is doing.
+
+### Pass-to-pass variation
+
 The electron **steers** toward the ideal velocity (`eSteer`) rather than
-snapping to the ideal point, and the lobe amplitude is re-rolled each pass
-(`eWander`, `eRadial`). That lag and wobble is what stops the trail from being a
-perfectly repeated curve.
+snapping to the ideal point. On top of that lag, three wobbles are re-rolled at
+**every lobe**, so no two laps lie on each other and the trail reads as a cloud
+rather than a wire:
+
+```javascript
+let eRadial = 0.26;   // +-: how far the lobe reaches past the nucleus
+let eWander = 0.30;   // +-: how wide the lobe is
+let eTilt   = 0.17;   // +- radians: the whole lobe swings off the bond axis
+let eRoll   = 0.12;   // how fast a re-rolled target is taken up, per frame
+```
+
+Over 40 lobes that gives a reach spanning **13.7 px**, a width range of 0.57,
+and **18.8°** of swing.
+
+An earlier version had almost none of this and it showed. Both jitters were
+multiplied by 0.25 at the point of use, and the width roll was `-random()` —
+**one-sided**, so a lobe could only ever come out slightly narrower than the
+last, never wider. `eRoll` was also 0.08, which over a lobe's ~20 frames only
+reached 81% of the new target before it was re-rolled. The amplitudes are now
+applied at full value, both signs, with `eRoll` at 0.12.
+
+All five are dev sliders.
 
 ### Cost
 
