@@ -1111,9 +1111,11 @@ function drawFieldHeatmap(destCtx) {
 }
 
 // ─── Space-filling view ───────────────────────────────────────────────────────
-// The "Outline" mode. Each atom is a flat disc at its van der Waals radius, so
-// a molecule reads as one continuous layer of matter with its nuclei just
-// showing through. No shading and no highlights: nothing here is lit.
+// The "Outline" mode. Each atom is a sphere at its van der Waals radius, so a
+// molecule reads as one continuous layer of matter with its nuclei just showing
+// through. Two edges are drawn: the molecule's outer silhouette, and the SEAM —
+// the circle where two sphere surfaces actually intersect. Nothing is lit
+// beyond a little limb darkening; there is no highlight.
 //
 // The spheres go into a scratch layer at full opacity and the WHOLE LAYER is
 // blitted once at `sphereOpacity`. Drawing them straight onto the scene would
@@ -1125,15 +1127,12 @@ let sphereOpacity = 0.80;      // 1 = solid; 0.80 is "20% transparent\"
 const _sphereLayer = document.createElement('canvas');
 const _sphereCtx   = _sphereLayer.getContext('2d');
 
-// One atom, as a sphere. Three strokes of work, all of them small:
+// One atom's body: the element's flat colour, then limb darkening — a gentle
+// fade to dark at the rim, centred a little up and left. No specular highlight
+// and no bright side; just enough falloff to say "ball" instead of "disc".
 //
-//   1. the element's flat colour
-//   2. limb darkening — a gentle fade to dark at the rim, centred a little up
-//      and left. No specular highlight and no bright side; just enough falloff
-//      to say "ball" instead of "disc".
-//   3. its own full circle, outlined. This is the bit that makes an overlap
-//      read as a LINE: each atom keeps its own edge, so two atoms meeting show
-//      the arc where they cross instead of melting into one pinched blob.
+// No outline here. The edges are drawn afterwards, per molecule: the outer
+// silhouette once, and then the seam (see `drawSeams`).
 function drawSphere(c, p) {
   const e = elemOf(p);
   const r = ATOM_RADIUS * e.rScale;
@@ -1151,10 +1150,41 @@ function drawSphere(c, p) {
     c.fillStyle = g;
     c.beginPath(); c.arc(p.x, p.y, r, 0, TAU); c.fill();
   }
+}
 
-  c.strokeStyle = `rgba(0,0,0,${(0.30 + 0.25 * sphereDepth).toFixed(3)})`;
-  c.lineWidth   = 1.2;
-  c.beginPath(); c.arc(p.x, p.y, r, 0, TAU); c.stroke();
+// Where two SPHERES meet, their surfaces cross in a CIRCLE — not in the lens
+// the two flat discs make. That circle lies in the plane perpendicular to the
+// bond, so on screen it is an ellipse: full width across the bond, squashed
+// along it by however far the bond is tilted out of the screen.
+//
+//   d  = centre separation           a = (d² + rA² − rB²) / 2d   (A → chord)
+//   h  = √(rA² − a²)                 the circle's true radius
+//
+// A bond lying exactly in the screen plane would project the circle to a bare
+// line, which is the "overlap" look we are trying to get away from, so the view
+// is given a fixed tilt and every seam is drawn at it.
+let seamTilt = 0.34;     // 0 = edge-on (a line); 1 = face-on (a full circle)
+
+function drawSeams(c, circles) {
+  const TAU = Math.PI * 2;
+  for (let i = 0; i < circles.length; i++) {
+    for (let j = i + 1; j < circles.length; j++) {
+      const A = circles[i], B = circles[j];
+      const dx = B.x - A.x, dy = B.y - A.y;
+      const d = Math.hypot(dx, dy);
+      if (d >= A.r + B.r || d <= Math.abs(A.r - B.r) || d === 0) continue;  // apart, or one swallowed
+      const a = (d * d + A.r * A.r - B.r * B.r) / (2 * d);
+      const h2 = A.r * A.r - a * a;
+      if (h2 <= 0) continue;
+      const h = Math.sqrt(h2);
+      const ux = dx / d, uy = dy / d;                 // along the bond
+      const mx = A.x + ux * a, my = A.y + uy * a;     // chord midpoint
+      const rot = Math.atan2(uy, ux);
+      c.beginPath();
+      c.ellipse(mx, my, h * seamTilt, h, rot, 0, TAU);
+      c.stroke();
+    }
+  }
 }
 
 function atomCircles(atoms) {
@@ -1222,9 +1252,17 @@ function drawSpaceFilling() {
     const circles = atomCircles(atoms);
     const runs = silhouetteRuns(circles);
     runsFor.push(runs);
-    // Each atom shades and outlines itself, inside the layer, so all of it is
-    // covered by the same uniform alpha as the matter it belongs to.
+    // Bodies first, then the edges on top of them — all inside the layer, so
+    // every part is covered by the same uniform alpha as the matter it belongs
+    // to. The outer edge is the silhouette only: no arc runs through an
+    // overlap, because what belongs there is the seam circle, not two arcs.
     for (const p of atoms) drawSphere(_sphereCtx, p);
+    _sphereCtx.strokeStyle = `rgba(0,0,0,${(0.30 + 0.25 * sphereDepth).toFixed(3)})`;
+    _sphereCtx.lineWidth   = 1.2;
+    strokeRuns(_sphereCtx, runs);
+    _sphereCtx.strokeStyle = `rgba(0,0,0,${(0.22 + 0.20 * sphereDepth).toFixed(3)})`;
+    _sphereCtx.lineWidth   = 1.0;
+    drawSeams(_sphereCtx, circles);
   }
 
   ctx.save();
@@ -2604,6 +2642,7 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     row('devNucleus', 'Nucleus size', 0, 24, 1, nucleusDiameter, '#ff80b0') +
     row('devSphereA', 'Sphere opacity', 0.15, 1, 0.05, sphereOpacity, '#9fd0ff') +
     row('devSphereD', 'Sphere depth',   0,    1, 0.05, sphereDepth,   '#9fd0ff') +
+    row('devSeamT',   'Seam tilt',      0,    1, 0.02, seamTilt,      '#9fd0ff') +
     '<label style="display:flex;align-items:center;gap:7px;margin:9px 0 2px;cursor:pointer;">' +
       '<input type="checkbox" id="devLone" checked style="margin:0">' +
       '<span>Lone pairs (non-bonding)</span>' +
@@ -2652,6 +2691,7 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   bind('devNucleus', v => nucleusDiameter = v, false, v => v + ' px');
   bind('devSphereA', v => sphereOpacity = v, false, v => v.toFixed(2));
   bind('devSphereD', v => sphereDepth   = v, false, v => v.toFixed(2));
+  bind('devSeamT',   v => seamTilt      = v, false, v => v.toFixed(2));
   // The field look was dialled in against the picture, so it stays adjustable
   bind('devLobeW',    v => FIELD_WIDTH = v, false, v => v.toFixed(2));
   bind('devLobeGain', v => FIELD_GAIN  = v, false, v => v.toFixed(1));
