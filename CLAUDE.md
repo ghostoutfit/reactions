@@ -75,8 +75,37 @@ whole thing — halo, sphere and "+" — is baked once into a sprite by
 went 2.0 → 1.87 ms with it added. The blur happens at bake time, where paying
 once is fine. Size is a dev slider.
 
-Outline mode (`drawMoleculeOutline`) strokes the union silhouette — each atom
-circle only where it is not buried inside another.
+## Space-filling view
+
+The **Outline** button. Each atom is a shaded sphere at its van der Waals
+radius, mostly solid, with its nucleus just showing through — a CPK model.
+
+```javascript
+let sphereOpacity = 0.80;   // 1 = solid; 0.80 is "20% transparent"
+let sphereShade   = 0.55;   // how much lighter the lit side is
+```
+
+**The spheres go into a scratch layer at full opacity and the whole layer is
+blitted once at `sphereOpacity`.** Drawing them straight onto the scene would
+composite every overlap twice, so each place two atoms meet would come out
+darker than the rest and the molecule would look seamed rather than solid.
+`_sphereCtx.setTransform(ctx.getTransform())` copies the world zoom onto the
+layer, so the blit lands exactly where the scene expects it.
+
+Nuclei are drawn **before** the layer, so what shows through each is exactly
+`1 - sphereOpacity`. That is the "slightly visible" part, and it is why the
+order matters.
+
+`drawMoleculeRim` strokes the union silhouette for definition — each atom circle
+only where it is not buried inside another, so overlapping atoms read as one
+outline rather than a pile of rings. It is a thin line, **not a glow**: the old
+version used `shadowBlur`, which is the per-atom cost this project has been
+bitten by before.
+
+Cheaper than the electron view: measured at 18 bodies, **1.13 ms** whole frame
+(0.60 of it the spheres) against 3.01 ms for the electron view.
+
+Opacity and shading are dev sliders.
 
 ## Valence electrons
 

@@ -1110,24 +1110,57 @@ function drawFieldHeatmap(destCtx) {
   destCtx.restore();
 }
 
-// ─── Molecule outline — union silhouette of the atom circles ────────────────
-// Outline mode draws the space-filling shape of the molecule: each atom's circle
-// is stroked only where it is not buried inside another atom, so overlapping
-// atoms read as one outline rather than a pile of rings.
-function drawMoleculeOutline(atoms, c = ctx) {
-  if (!atoms || !atoms.length) return;
-  const circles = atoms.map(p => ({
-    x: p.x, y: p.y, r: ATOM_RADIUS * elemOf(p).rScale,
-  }));
+// ─── Space-filling view ───────────────────────────────────────────────────────
+// The "Outline" mode. Each atom is a shaded sphere at its van der Waals radius,
+// drawn mostly solid so the molecule reads as one object with a shape — the
+// CPK models made of coloured balls — with the nucleus just showing through.
+//
+// The spheres go into a scratch layer at full opacity and the WHOLE LAYER is
+// blitted once at `sphereOpacity`. Drawing them straight onto the scene would
+// composite the overlaps twice, so every place two atoms meet would come out
+// darker than the rest and the molecule would look seamed instead of solid.
 
+let sphereOpacity = 0.80;      // 1 = solid; 0.80 is "20% transparent"
+let sphereShade   = 0.55;      // how much lighter the lit side is
+
+const _sphereLayer = document.createElement('canvas');
+const _sphereCtx   = _sphereLayer.getContext('2d');
+
+// rgb string -> a lighter and a darker variant, for the lit/shadow sides
+function _shade(rgb, f) {
+  const [r, g, b] = rgb.split(',').map(Number);
+  return f >= 0
+    ? `rgb(${r + (255 - r) * f | 0},${g + (255 - g) * f | 0},${b + (255 - b) * f | 0})`
+    : `rgb(${r * (1 + f) | 0},${g * (1 + f) | 0},${b * (1 + f) | 0})`;
+}
+
+// One sphere: a radial gradient offset up and left, so a flat circle reads as
+// a ball lit from that direction.
+function drawSphere(c, p) {
+  const e = elemOf(p);
+  const r = ATOM_RADIUS * e.rScale;
+  const g = c.createRadialGradient(
+    p.x - r * 0.38, p.y - r * 0.38, r * 0.04,
+    p.x, p.y, r);
+  g.addColorStop(0,    _shade(e.rgb,  sphereShade));
+  g.addColorStop(0.55, _shade(e.rgb,  0));
+  g.addColorStop(1,    _shade(e.rgb, -0.55));
+  c.fillStyle = g;
+  c.beginPath(); c.arc(p.x, p.y, r, 0, Math.PI * 2); c.fill();
+}
+
+// A thin rim on the union silhouette — each atom's circle only where it is not
+// buried inside another, so overlapping atoms read as one outline rather than a
+// pile of rings. Definition only, no glow: shadowBlur in a per-atom path is what
+// cost 8.3 ms a frame here.
+function drawMoleculeRim(atoms, c = ctx) {
+  if (!atoms || !atoms.length) return;
+  const circles = atoms.map(p => ({ x: p.x, y: p.y, r: ATOM_RADIUS * elemOf(p).rScale }));
   const LIGHT = document.body.classList.contains('screenshot-mode');
   c.save();
-  c.shadowColor = LIGHT ? 'rgba(0,0,0,0)' : 'rgba(80,160,255,0.9)';
-  c.shadowBlur  = LIGHT ? 0 : 22;
-  c.strokeStyle = LIGHT ? '#333' : 'rgba(160,215,255,1)';
-  c.lineWidth   = LIGHT ? 2.5 : 4;
-
-  const STEPS = 180;
+  c.strokeStyle = LIGHT ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.30)';
+  c.lineWidth   = 1.5;
+  const STEPS = 96;
   for (const a of circles) {
     let runStart = null;
     for (let k = 0; k <= STEPS; k++) {
@@ -1136,15 +1169,38 @@ function drawMoleculeOutline(atoms, c = ctx) {
       // The closing sample is always treated as "inside" so the last run flushes
       const buried = k === STEPS || circles.some(b =>
         b !== a && Math.hypot(px - b.x, py - b.y) < b.r);
-      if (!buried && runStart === null) {
-        runStart = th;
-      } else if (buried && runStart !== null) {
+      if (!buried && runStart === null) runStart = th;
+      else if (buried && runStart !== null) {
         c.beginPath(); c.arc(a.x, a.y, a.r, runStart, th); c.stroke();
         runStart = null;
       }
     }
   }
   c.restore();
+}
+
+function drawSpaceFilling() {
+  // Nuclei first: the sphere layer lands on top of them, so what shows through
+  // is exactly 1 - sphereOpacity of each. That is the "slightly visible" part.
+  for (const b of world.bodies)
+    for (const p of bodyAtoms(b)) drawNucleus(ctx, p.x, p.y);
+
+  if (_sphereLayer.width !== canvas.width || _sphereLayer.height !== canvas.height) {
+    _sphereLayer.width = canvas.width; _sphereLayer.height = canvas.height;
+  }
+  _sphereCtx.setTransform(1, 0, 0, 1, 0, 0);
+  _sphereCtx.clearRect(0, 0, _sphereLayer.width, _sphereLayer.height);
+  _sphereCtx.setTransform(ctx.getTransform());     // match the world zoom/pan
+  for (const b of world.bodies)
+    for (const p of bodyAtoms(b)) drawSphere(_sphereCtx, p);
+
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);              // the layer is already in place
+  ctx.globalAlpha = sphereOpacity;
+  ctx.drawImage(_sphereLayer, 0, 0);
+  ctx.restore();
+
+  for (const b of world.bodies) drawMoleculeRim(bodyAtoms(b));
 }
 
 // ─── Atom glow sprite ─────────────────────────────────────────────────────────
@@ -2224,17 +2280,13 @@ function drawWorld() {
   drawWalls();
   if (document.getElementById('showFields').checked) drawFieldHeatmap(ctx);
 
-  for (const b of world.bodies) {
-    const atoms = bodyAtoms(b);
-    if (showAtoms) {
+  if (showAtoms) {
+    for (const b of world.bodies) {
       drawElectrons(b);
-      for (const p of atoms) drawNucleus(ctx, p.x, p.y);
-    } else {
-      drawMoleculeOutline(atoms);
-      // In outline view the atoms merge into one silhouette, so the nuclei are
-      // what say how many atoms it is made of.
-      for (const p of atoms) drawNucleus(ctx, p.x, p.y);
+      for (const p of bodyAtoms(b)) drawNucleus(ctx, p.x, p.y);
     }
+  } else {
+    drawSpaceFilling();   // all bodies at once: the layer is shared
   }
 
   ctx.restore();
@@ -2517,6 +2569,8 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     row('devLoneR',  'Lone orbit radius', 0.4, 2.2, 0.05, loneRadius, '#ff3a8a') +
     row('devLoneS',  'Lone orbit speed',  0.005, 0.2, 0.005, loneSpeed, '#ff3a8a') +
     row('devNucleus', 'Nucleus size', 0, 24, 1, nucleusDiameter, '#ff80b0') +
+    row('devSphereA', 'Sphere opacity', 0.15, 1, 0.05, sphereOpacity, '#9fd0ff') +
+    row('devSphereS', 'Sphere shading', 0, 1, 0.05, sphereShade, '#9fd0ff') +
     '<label style="display:flex;align-items:center;gap:7px;margin:9px 0 2px;cursor:pointer;">' +
       '<input type="checkbox" id="devLone" checked style="margin:0">' +
       '<span>Lone pairs (non-bonding)</span>' +
@@ -2563,6 +2617,8 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   bind('devLoneR',  v => loneRadius  = v, false, v => v.toFixed(2) + '\u00d7');
   bind('devLoneS',  v => loneSpeed   = v, false, v => v.toFixed(3));
   bind('devNucleus', v => nucleusDiameter = v, false, v => v + ' px');
+  bind('devSphereA', v => sphereOpacity = v, false, v => v.toFixed(2));
+  bind('devSphereS', v => sphereShade   = v, false, v => v.toFixed(2));
   // The field look was dialled in against the picture, so it stays adjustable
   bind('devLobeW',    v => FIELD_WIDTH = v, false, v => v.toFixed(2));
   bind('devLobeGain', v => FIELD_GAIN  = v, false, v => v.toFixed(1));
