@@ -627,6 +627,86 @@ dose per hit and ~3× as many hits: **~27× the pumping rate for 3× the speed**
 That is the entire separation between Low and High, and it is why no
 `tempLevel` test appears anywhere in the mechanism.
 
+#### Energy in fields is its own bucket
+
+`vib` is **not** part of `energyOfMotion()`, and that is deliberate. Real
+vibrational energy sloshes between kinetic (the atoms actually moving) and
+potential (the bond stretched), averaging half and half. These molecules are
+**rigid**, so there is no kinetic half to account for and all of it sits in the
+bond. The rigidity and the accounting agree — if real vibration is ever added,
+this is the split that has to be revisited.
+
+```javascript
+function energyInFields()    // sum of b.vib, scaled back into motion's units
+```
+
+Both buckets are graphed (`energyTrace` carries `{ t, motion, fields }`, which
+is what its original comment was holding room for), both are in the percentage
+readout, and `energySplit()` breaks them down with the leak alongside.
+
+#### Collisions pay for the heat
+
+```javascript
+let fieldConvert = 0.45;   // fraction of a hit that goes into the bonds
+```
+
+Before this, a bond could glow while both molecules bounced off at full speed —
+energy appearing from nowhere, and the exact misconception the sim otherwise
+teaches against. Measured then: vibration rose by 11.10, 4.09, 0.79, 0.70 on
+four separate frames with **ΔKE = 0 every time**.
+
+**It is applied as restitution, which is what makes it exact rather than
+approximate.** A collision with restitution `e` loses `(1 - e²)` of the normal
+centre-of-mass energy, so `e = sqrt(1 - fieldConvert)` removes *precisely* what
+is handed to the bonds. Verified with the speed band off and the decay disabled,
+so nothing could mask an error: **total drift 0% at conversions of 0, 0.45 and
+0.9.** Not approximately — the same digits.
+
+The energy is split between the bonds that can hold it. **A free atom has no
+bond to put it in**, so a hit on one stays perfectly elastic: with nobody to
+take it, converting would just delete it.
+
+**`fieldConvert` 0 means nothing ever breaks.** The energy entering the bond and
+the energy leaving the motion are the same quantity, so switching off the cost
+switches off the heating. That coupling is the point, and the note under the
+slider says so.
+
+#### Not sucking the world dry
+
+Converting every hit drains the world. With the speed band off and the decay
+disabled, motion fell to **4.9%** of spawn in 120 s at conversion 0.45 — a
+world that has stopped moving cannot break anything, and the mechanism would
+have strangled itself.
+
+Two things prevent it, and both have to stay: `VIB_TAU` drains the bonds, and
+the speed band tops molecules back up off their own spin. At the shipped
+defaults, measured over 240 s at High across three seeds, **motion never fell
+below 49%** (49/56/59) — there is always plenty left to break with.
+
+`breakEnergy` was **re-tuned from 26 to 6** for this. Each bond now gets
+`fieldConvert / storers` of a hit rather than the whole thing — about 0.225× —
+so the old capacity put breaking out of reach entirely: 0 breaks in 180 s at
+High. Swept again at conversion 0.45, 3 seeds at High and 2 at Low:
+
+| capacity | High: broke | first | last | Low: breaks |
+|---|---|---|---|---|
+| 3 | 6/6/6 | 0.2–3.7 s | 6.5–8.6 s | 0/0 |
+| 4.5 | 6/6/6 | 1.5–9.7 s | 9.8–18.6 s | 0/0 |
+| **6** | **6/6/6** | **3.8–31.6 s** | **14.6–38.7 s** | **0/0** |
+| 8 | 6/6/6 | 69.7–107.7 s | 82.6–123.5 s | 0/0 |
+
+#### Where the energy actually goes
+
+The deposit is now exact. **The decay is still a leak** — `exp(-dt / VIB_TAU)`
+drops energy out of the world rather than passing it anywhere, and at the
+shipped defaults that is **88–214% of the spawn energy over 240 s at High**.
+It is no longer silent: `fieldsLeaked` counts it and `energySplit()` prints it,
+the way `energyCreated` already counts what the speed band invents.
+
+Physically it should leave as infrared, or to other molecules in later
+collisions. Routing it back is the remaining piece, and it needs the care the
+speed band got, because feeding it back is exactly how a world runs away.
+
 #### Holding and cooling
 
 `b.vib` accumulates and decays as `exp(-dt / VIB_TAU)`. **The decay is what
@@ -801,469 +881,6 @@ is identical under `blue`.
 
 ### Cost
 
-This is the dominant draw cost, so it is bucketed like bonds does it: the trail
-is split into `TIER_BUCKETS` runs and **each is stroked once at its own alpha**,
-rather than one stroke per point. That is ~10 strokes an electron instead of 50.
-
-Measured at the heaviest the sliders allow — 6 H₂ + 6 O₂ + 6 He = **96
-electrons**, trails full at 48 points, hi-res:
-
-| | ms/frame |
-|---|---|
-| electrons alone | 0.45 |
-| whole frame, field off | 0.40 |
-| whole frame, field on | 0.75 |
-
-against a 16.7 ms budget.
-
-**Measure with the trails actually full.** A freshly respawned world reads
-~0.26 ms because every trail is empty, which is not a number worth having.
-
-Trails live in **body-local coordinates** and are transformed at draw time, so a
-molecule can translate and spin without smearing or rebuilding them. Each is a
-fixed `Float32Array` ring buffer, so nothing is allocated per frame.
-
-`stepElectrons` runs **once per frame, outside the physics sub-steps** — the
-phase logic is tuned in per-frame units and breaks up with large or uneven dt.
-
-It also runs **outside the `running` gate**. Pause stops the molecules moving
-and spinning; it does not stop an atom being an atom, and a frozen electron
-reads as a broken picture rather than a paused one. It also means the trails
-are already drawn on page load, before GO is ever pressed.
-
-### Lone electrons
-
-Deliberately the simplest thing that works: a constant angular speed round a
-circle of fixed radius. No jitter, no damping, no sector confinement. An atom's
-lone electrons are spaced evenly and all travel the same way, so they read as
-one ring at one radius instead of a scribble.
-
-```javascript
-let loneRadius = 0.7;     // multiple of the atom's valence radius
-let loneSpeed  = 0.125;   // radians per frame at 60 fps — one lap in 0.84 s
-let loneSpeedFree = 6.0;  // x loneSpeed for an atom with no bonds at all
-```
-
-**A free atom's electrons race.** Nothing is bonded and nothing is paired into a
-shared lobe, and the speed is the tell: 7.16 laps/s against a bonded atom's
-1.19. It is the one thing that says "this came apart" from across the canvas,
-after the trails have faded and the halves have drifted apart. Applies to
-anything with no bonds, so a He reads the same way.
-
-**Free atoms are spaced by the golden angle, not evenly.** An even ring of n
-repeats every `2π/n`, so once the per-frame advance approaches that spacing the
-ring appears to stall or crawl backwards — the wagon-wheel effect. An O has six
-lone electrons, spacing 1.047 rad, so it bites at an advance of only ~0.52.
-Measured at 6×: the ring genuinely turned at 7.16 laps/s and read as going
-**backwards at 0.30 rad/frame**. The golden angle has no k-fold symmetry at all,
-so there is nothing to alias against and the limit becomes half a lap per frame
-— `π` against the 0.75 rad/frame that 6× actually uses, and 1.5 at the top of
-the slider, so the whole range is safe. It still spreads six points well (gaps
-32.5/52.5/85/52.5/85/52.5°, nothing clumped), so the ring stays a ring, just not
-a symmetric one. Bonded atoms keep the even spacing: they are slow, they never
-alias, and the even ring is the cleaner picture.
-
-At `loneRadius` 1.0 the ring sits on the valence shell, which is physically
-where a lone pair belongs — **but that is also how far the bonding lobe reaches
-past each nucleus, so the two overlap and the figure-8 gets hard to pick out.**
-Around **1.7** pushes the ring clear outside it. It ships at **0.7**, which
-solves the same collision the other way: the lone ring is tucked inside the
-bonding lobe rather than fighting it for the same radius. All three are one
-slider apart.
-
-They do pass through the bond region on the way round, which a real lone pair
-would not. The plain circle is the point, not the lobe geometry.
-
-Speed, trail length, steering, lone orbit radius and speed, and a lone-pairs
-on/off switch are all dev controls.
-
-## What is in the world
-
-```javascript
-const SPECIES = { H2: { els: ['H','H'] }, O2: { els: ['O','O'] }, He: { els: ['He'] } };
-const composition = { H2: 4, O2: 2, He: 0 };    // 0–6 of each, dev sliders
-const ATOMIC_MASS = { H: 1, O: 16, He: 4 };
-```
-
-`spawnWorld()` builds a queue from `composition`, shuffles it so a crowded world
-does not cram one species into the gaps the other left, then places each at a
-random position, heading and spin — retrying up to 400 times for a clear spot.
-
-### Spawn speed spread
-
-Speeds come from a standard normal **truncated to ±1σ** (`spreadSpeed`), so the
-fastest and slowest molecules sit one standard deviation either side of the
-peak. Rejection, not clamping — clamping would pile molecules onto the two end
-values, putting bumps exactly where the distribution should be thinnest.
-`SPEED_SIGMA` = 0.25, so the bounds are the mean ±25%. Spin uses the same bell,
-signed.
-
-Note the bounds are ±1σ of the *generating* normal. Truncating at ±1 leaves the
-sample with a realised sd of about 0.54σ, so the bounds sit ~1.84 realised sd
-out. Bounds at exactly 1 realised sd is not achievable by any bell: for support
-±h the sd cannot exceed h, and reaches it only when all the mass is on the two
-endpoints.
-
-**The spawn shape does not last.** Elastic collisions thermalise the world to a
-right-skewed Maxwell–Boltzmann (Rayleigh, in 2D) distribution within about five
-seconds even at 6+6, and it then holds steady — measured cv 0.13 at spawn, 0.48
-at 5 s, 0.52 at 20 s and 60 s. That is the physically correct equilibrium and
-the sim reaches it on its own; the Gaussian is only the initial condition.
-Making the bell persist would need periodic velocity rescaling, which is not
-physical.
-
-`speedHistogram()` in the console prints mean, sd, cv, bounds and an ASCII
-histogram per species — run it right after a spawn and again after a minute.
-
-**Heavier molecules start slower** — `equipartition`, a dev checkbox, on by
-default. `speciesSpeed` scales the dial by `sqrt(m_H2 / m)`, so every species
-begins with the same kinetic energy, as a real gas mixture at one temperature
-does; an O2 sets off at a quarter the speed of an H2. Off, every species starts
-at the dial speed and an O2 carries 16x the energy of an H2.
-
-## Temperature
-
-A Low/High toggle on the toolbar. High runs at `TEMP_HIGH` = 3x the speed, which
-is **9x the kinetic energy** — the energy readout says so, and the graph rescales
-to fit the excursion.
-
-Switching does not teleport the world to a new speed: `tempCurrent` chases
-`tempTarget` with an exponential approach (`TEMP_TAU` = 0.26 s) and every
-molecule is rescaled by the per-frame ratio, so you watch everything accelerate
-over about a second. `stepTemperature` is fed **wall-clock** dt, so the ramp
-takes the same time on screen wherever the playback-speed slider sits.
-
-## Quality tiers and frame rate
-
-```javascript
-const TIER_FPS      = { 'hi-res': 60, 'detailed': 60, 'simple': 30 };
-const TIER_SEGMENTS = { 'hi-res': 28, 'detailed': 16, 'simple':  8 };
-```
-
-Each tier sets both trail detail and a frame cap; `worldLoop` holds to
-`frameBudgetMs` and the skipped time still counts towards the next step's dt, so
-physics does not slow down with the frame rate.
-
-`_runPerfBenchmark` drives the **real** `drawAtom` into an offscreen canvas —
-24 atoms at hi-res detail, GPU-synced — and `_startupBenchmark` picks a tier from
-it. `runPerfTest()` in the console re-measures and prints the timings next to the
-thresholds they are compared against, without changing the current tier.
-
-Measured at a full 6+6 world on a 2024 laptop: hi-res ~2.0 ms/frame, detailed
-~0.7, simple ~0.45, against a 16.7 ms budget.
-
-**The arrowhead glow is a cached sprite, not `shadowBlur`.** Canvas shadowBlur
-cost 8.3 ms a frame here — 88% of the entire hi-res draw. `glowSprite` bakes a
-radial gradient once per element and size and blits it; same look, 4.7x faster
-overall. Do not reintroduce shadowBlur in a per-atom path.
-
-A body stores its atoms once in **body-local** coordinates and derives world
-positions each frame from `(x, y, angle)`, so a molecule can never stretch or
-come apart. `bodyAtoms(b, dx, dy)` is the only way to get world positions.
-
-## Collisions
-
-Atom-against-atom, resolved as a 2D rigid-body impulse with rotation
-(`collidePair`). The rotational terms are what make a glancing hit set a
-molecule spinning instead of just shoving it sideways.
-
-**Rotation is a full energy channel**, and always has been — measured, a
-glancing hit puts 62% of the pair's kinetic energy into spin, an oblique one
-57%, and a perfectly head-on one 0% (no torque arm). Nothing special was needed
-to "add" it.
-
-### Speed band — deliberately not pure
-
-`rebalancePair` holds a molecule leaving a collision inside the same
-±`SPEED_SIGMA` band the spawn uses, so nothing crawls or streaks. Dev toggle
-(`clampSpeeds`), on by default.
-
-Settled across **the pair**, not one body at a time: a slow molecule rarely has
-spin of its own to sell, but the one it just hit is usually the fast one. The
-pair's total energy is measured, translation is pulled into band, and the
-remainder is what the two spins are set to carry — so the pair's energy is
-conserved by construction.
-
-`softBand` applies a **soft knee** rather than a clamp. The outer `KNEE` = 35%
-of each half-band is compressed so speeds approach the limits asymptotically
-and never reach them. A hard clamp parked 40% of the population on exactly the
-floor speed; the knee cuts that to 9% while keeping the bounds exact.
-
-Two places energy genuinely changes, both counted and reported by
-`energySplit()`:
-- **spin cap** (`MAX_SPIN` = 14 rad/s) — rare, a handful of events per minute
-- **floor top-up** — both molecules slow with no spin left to sell, so the
-  shortfall is created from nothing
-
-Net effect, measured at 6+6 over 30 simulated minutes: speeds stay strictly
-within 0.75–1.25 of nominal with 0 violations, rotation settles around 40% of
-the energy, and total energy climbs to roughly 150–180% of spawn and then
-**plateaus** — it oscillates there rather than running away, because the
-ceiling and the spin cap shed what the floor adds.
-
-A tighter `MAX_SPIN` does **not** help the floor (min stayed ~0.65 at every
-value tried from 2 to 25) and bleeds energy badly — −46% at `MAX_SPIN` = 2.
-Do not reach for it as a fix.
-
-With the band on, the energy graph is no longer a conservation check; the note
-under the percentage says so, and switching the toggle rewords it.
-
-```javascript
-const RESTITUTION = 1.0;   // perfectly elastic
-```
-
-Verified: a head-on hit reverses both velocities exactly and induces no spin; a
-glancing hit deflects both and spins them; energy drift and linear-momentum
-drift are both 0 to the precision measured, with 20 molecules over 8 s; atom
-interpenetration never exceeded 0 px.
-
-The loop sub-steps at 4 ms so fast molecules cannot tunnel through each other,
-and clamps `dt` to 50 ms so a backgrounded tab does not resume with one
-enormous step.
-
-### Walls
-
-`collideWalls` tests **every atom against all four walls**, and the contact is at
-the atom, not at the molecule's centre — so the same rigid-body impulse runs as
-for a molecule-molecule hit and a corner-on bounce sets the molecule spinning.
-`WALL_RESTITUTION` = 1.0, so a molecule leaves with exactly the energy it
-arrived with.
-
-b.x moves as each contact resolves, so the atom's world position is recomputed
-for every wall; a molecule in a corner touches two at once.
-
-Verified: a square-on hit reverses velocity exactly (400 → −400 px/s) with zero
-induced spin; an off-centre hit leaves it spinning at 3.15 rad/s with 2.9% of
-its energy in rotation. **Energy drift 0 and wall overlap 0 px over 90
-simulated seconds at 6+6, with nothing ever escaping.** Linear momentum is
-*not* conserved, and should not be — the walls are external.
-
-Wall bounces are settled by `settleBodySpeed`, a single-body version of the
-speed band: a wall cannot take the surplus, so it is paid to and from that
-body's own spin. Measured with the band on, 90 s at 6+6: speeds stayed strictly
-within 0.75–1.25 of nominal, **0 violations in 5400 samples**, 143 floor
-top-ups, energy plateauing at 148% of spawn.
-
-`drawWalls` strokes a faint rectangle at the boundary. At zoom 1 the box lines
-up with the toolbar, the energy bar and the screen edges so it is barely
-visible — but zoomed out there is canvas beyond it, and without the line the
-molecules look like they bounce off nothing.
-
-### Bond breaking
-
-Collisions pump energy into a molecule's bond, the bond holds it for a while,
-and when it holds more than the bond is worth the molecule comes apart.
-**One-way, for now**: the halves drift off as free atoms and nothing puts them
-back, so a hot world gradually comes apart until there is nothing left to break.
-
-```javascript
-let breakBonds  = true;    // dev toggle
-let breakEnergy = 26;      // vibration a bond can hold before it lets go
-let VIB_TAU     = 2.2;     // seconds — how long a bond holds what it was given
-let breakKick   = 0.22;    // separation speed given to the halves, x nominal
-let VIB_GLOW    = 0.7;     // how brightly a loaded bond reads, vs a full flare
-```
-
-#### Why it is energy, and not the hardness of one hit
-
-The first version broke a bond when a single collision exceeded a threshold,
-with hardness measured the way the flare measures it — `jImp / (mass x speed)`.
-That had two faults, both found by measuring rather than by reasoning:
-
-1. **It threw away every hit but the biggest.** In 600 s an O₂ took **190 hits
-   from free H atoms** and not one of them counted for anything.
-2. **A light atom could not satisfy it at all.** The mass in the denominator is
-   the *target's*, so an H (mass 1) hitting an O₂ (mass 32) peaked at **1.50**
-   across those 190 hits, against a threshold of 4.0. Only another O₂ could
-   ever break an O₂ — and since one O₂-on-O₂ collision is hard enough to break
-   *both*, a world either lost both at once or kept two immortal O₂ forever.
-   A part-broken world was a dead end.
-
-The honest quantity is the kinetic energy in the centre-of-mass frame, which is
-what a collision actually has to deposit:
-
-```
-E = ½ · μ · vn²        μ = 1 / invMassSum, the contact's effective mass
-```
-
-`invMassSum` already exists in `collidePair` and includes the rotational terms,
-so a glancing hit that mostly spins the pair deposits correspondingly less.
-
-That alone fixes (2), because **equipartition means a light atom moves fast
-enough to carry as much energy as a heavy one**. Measured at High, dose per hit:
-
-| hit on | by | n | mean | max |
-|---|---|---|---|---|
-| O₂ | H₂ | 436 | 2.46 | 12.84 |
-| O₂ | O₂ | 32 | 3.24 | 16.36 |
-| H₂ | H₂ | 692 | 3.17 | 15.95 |
-
-An H₂ now lands 76% of an O₂'s mean dose on an O₂, where before it managed a
-fortieth of what was needed. **A fast H breaks an O₂ because it genuinely has
-the energy to**, not because anything was special-cased for it.
-
-One dose unit is the kinetic energy of a nominal H₂ at temperature 1, so the
-speed dial cancels out and the temperature does not — deliberately, the same
-way the old measure worked. Energy goes as speed squared, so High is ~9× the
-dose per hit and ~3× as many hits: **~27× the pumping rate for 3× the speed**.
-That is the entire separation between Low and High, and it is why no
-`tempLevel` test appears anywhere in the mechanism.
-
-#### Holding and cooling
-
-`b.vib` accumulates and decays as `exp(-dt / VIB_TAU)`. **The decay is what
-keeps Low safe** — without it every molecule breaks eventually however cold the
-world is, since vibration would only ever go up. Vibration is pumped whether or
-not `breakBonds` is on, so the toggle only decides whether a full bond lets go;
-the heat still shows, and the diagnostics can measure what the world *would*
-have done without changing it.
-
-A single hit big enough to clear the threshold on its own still breaks
-immediately. Accumulation does not replace that case, it contains it.
-
-#### Choosing the capacity
-
-`breakEnergy` is the vibration an O=O can hold; an H–H holds `436/498` of it,
-**22.8 against 26**. Swept against measured behaviour, 3–4 seeds each:
-
-| capacity | High: broke | first break | last break | Low: breaks |
-|---|---|---|---|---|
-| 18 | 6/6/6 | 3.3 s | 8–15 s | 0/0/0 |
-| 22 | 6/6/6/6 | 6–17 s | 18–26 s | — |
-| **26** | **6/6/6/6** | **12–47 s** | **40–64 s** | **0/0/0** |
-| 30 | 6/6/6/6 | 2.6–32 s | 19–54 s | — |
-| 44 | 0/6/0 | — | — | 0/0/0 |
-
-26 gives the longest arc — something to watch rather than a burst — while still
-finishing reliably. 44 is past the edge: two runs in three broke nothing at all.
-
-**Low is clean.** Over 3 × 900 s (45 simulated minutes) at Low: **0 breaks**,
-peak vibration **11.8** against H₂'s capacity of 22.8, a 1.9× margin on the
-worst moment in all of it. Live at High: all six molecules gone by **28.1 s**,
-both O₂ included, no console errors, every body finite.
-
-#### What it looks like
-
-A loaded bond glows, so a molecule about to go is visibly holding energy rather
-than just flashing when hit — `heat = max(flare, VIB_GLOW · vibLoad)`, with
-vibration deliberately reading below a full flare so a collision is still the
-brightest thing that happens to a bond. Measured over the load range, in a box
-around one O₂'s bond: white-core pixels **219 → 810 → 1146 → 1335 → 1440**, and
-total ink +34%. The core *spreads* rather than the lobe simply brightening,
-which is the same effect the flare relies on and for the same reason.
-
-#### Fragments
-
-Each keeps the velocity its atom actually had — the body's velocity plus the
-spin's contribution at that offset, via `pointVel` — so a molecule that was
-spinning fast throws its halves apart harder, with none of it invented. On top
-sits `breakKick` along the outward direction, standing in for the bond energy
-released. A free atom gets `spin = 0`: there is nothing for it to spin about.
-
-The electron structure falls out for free: `buildElectrons` on a one-atom body
-with no bonds makes every valence electron lone, so a free H shows **1** and a
-free O shows **6**. Both are radicals, and both look like it.
-
-**Breaks are applied after the collision pass, never inside it** —
-`world.breaking` queues them and `stepDissociation` splices. Replacing a body
-mid-pass would shift `world.bodies` indices under the loop and let a pair be
-missed or tested twice.
-
-#### runBreakTests()
-
-`runBreakTests(seconds)` in the console reproduces all of it headlessly —
-`stepWorld` is driven directly, so it does not wait on real time or on the GO
-button — and puts the world back as it found it. Three tables: dose per hit
-**split by who was hit and by what**, the vibration that adds up to against each
-bond's capacity, and what that does to the world.
-
-The by-partner split is the one that matters. The old measure looked perfectly
-healthy in aggregate while being impossible for a light atom to satisfy, and
-nothing but a partner breakdown would have shown it.
-
-**A trap worth remembering:** `spawnWorld` already multiplies by `tempCurrent`
-through `speciesSpeed`, so setting the temperature *after* spawning and then
-scaling velocities applies it twice. An early version of this diagnostic did
-exactly that and reported vibration ~50× too high at High. Set the temperature
-first, then spawn.
-
-## Energy in fields
-
-The "Show energy in fields" checkbox draws one **lobe between each pair of
-bonded atoms** — zero at each nucleus, brightest at the midpoint. The single
-idea it has to carry: a bond is two nuclei both pulled toward the space
-between them, because that is where the shared electrons spend their time.
-
-**It is a picture, not a calculation.** There are no partial charges, no test
-probe and no electron cloud, and it deliberately does not feed anything. When
-the energy bar charts arrive they do their own arithmetic — the two are the
-same idea, not the same numbers, and that is on purpose.
-
-```javascript
-const BOND_ENERGY = { 'H-H': 436, 'H-O': 463, 'O-O': 498 };  // kJ/mol
-let FIELD_WIDTH = 0.30;   // lobe half-width as a fraction of bond length
-let FIELD_GAIN  = 1.8;    // value that maps to the top of the colormap
-```
-
-Brightness scales with real bond dissociation energy, so O=O sits a little
-above H–H. **Break mode should read `BOND_ENERGY` too** — it is the number that
-decides what an impact is strong enough to pull apart, and having the glow and
-the threshold disagree would be worse than either being wrong.
-
-Each body carries `bonds` as index pairs. Atoms are laid out in a row and each
-bonds to the previous one, so a diatomic is `[[0,1]]` and water would be
-`[[0,1],[1,2]]` — two lobes off the oxygen, no special casing.
-
-### The flare
-
-Molecules are perfectly rigid, so a bond at rest never changes and the lobe
-would be wallpaper. Instead a collision lights it: `b.flare` is set from the
-impulse (`jImp / (mass × vTarget)`, which is ≈1 for a square hit at the
-species' nominal speed) and decays with `FLARE_TAU` = 0.30 s. `FIELD_GAIN` is
-set so resting bonds sit mid-colormap and leave the top of the range for
-flares. This is the only motion in the view until molecules can vibrate.
-
-`FIELD_WIDTH`, `FIELD_GAIN` and `FLARE_GAIN` are dev sliders — they were dialled
-in against the picture, so they stay adjustable.
-
-### The colour ramp
-
-`FIELD_RAMPS`, picked with the `Colour ramp` dropdown in the dev panel, shipped
-on **`key`**: violet through purple to magenta, matching the "Energy in fields"
-key. `keyGlow` is the same hues with a hot pink-white at the very top; `blue` is
-the original blue-to-white.
-
-**`t` is the accumulated field over `FIELD_GAIN`, so the TOP of the ramp is a
-bond's core and the bottom is its outer fringe** — a resting bond already peaks
-at `t ≈ 1`. Low and High on the key are therefore fringe and core, not two
-different bonds.
-
-**The key's lightness order could not be taken literally.** Drawn with a pale
-low end, the fringe just inside the cull measured **(232,232,243) at alpha 22**
-— a grey haze on a near-black page. The lobe is culled flat at each nucleus
-(`along < 0 || along > L`) and at a box a couple of sigma out, and those
-straight edges are invisible only while the fringe is **darker than the page**.
-A pale fringe turned every bond into a visible grey rectangle. `blue` and
-`keyGlow` measure (5,18,77) and (80,27,122) at that same point — both darker
-than the background, both invisible.
-
-So the bottom of the ramp is a dark violet: the key's *hue* at the low end,
-carrying the key's faintness as **low alpha rather than as pale ink**. That is
-what "low" means on a lobe which fades out to nothing anyway, and it is why the
-alpha column's shape is identical across all three ramps — that falloff is the
-glow, and no ramp is allowed to lose it.
-
-**A pre-existing artifact this made more visible:** the lobe reaches further
-perpendicular to the bond (2.5σ ≈ 41 px on an O=O) than along it (half the bond,
-≈ 27 px), and it is truncated flat at the nuclei, where the `sin` profile climbs
-from 0 to alpha 130 inside about one low-resolution buffer pixel. Axis-aligned
-and at rest it reads as a vertical bar with hard edges. At natural angles it is
-hard to see, and it is identical under `blue` — only the brighter mid-ramp
-purple draws the eye to it. Softening it means easing the alpha in at the bottom
-of the ramp, at some cost to the glow.
-
-### Cost
-
 Measured at a full 6+6 world: **0.29 ms/frame at hi-res**, 0.23 detailed, 0.14
 simple, against a 16.7 ms budget. `fieldTest()` in the console re-measures.
 
@@ -1288,10 +905,19 @@ wall, so `setGraphShown` calls `restretchWorld()` — the same re-fit the window
 resize uses. Without it the world keeps its old box and leaves a gap between
 the bottom wall and the bar.
 
-A scrolling 12-second trace of total kinetic energy (translational +
-rotational), full scale = 2× the energy at spawn, so **a flat line across the
-middle is the correct result**. A visible step means energy leaked — it is a
-check on the collision solver, not a teaching graph.
+A scrolling 12-second trace of **two** series, full scale = 2× the energy at
+spawn (growing to fit, since switching to High is a 9× jump):
+
+- **Energy of motion**, red — translational + rotational.
+- **Energy in fields**, purple — what the bonds are holding. Its sawtooth is the
+  mechanism in one picture: sharp rises as collisions deposit, slow falls as the
+  vibration decays.
+
+With the speed band off and bonds unable to break, motion alone is flat and a
+visible step means the collision solver leaked. With collisions converting into
+bonds, the two **trade**, and it is their sum that should hold — verified at 0%
+drift. The band and the vibration decay then both break that sum, deliberately
+and with both counted; see Bond breaking.
 
 ## What is deliberately left standing
 

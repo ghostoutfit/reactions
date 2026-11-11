@@ -749,6 +749,7 @@
   <div id="energyBarLeft">
     <div id="energyGraphKey">
       <div class="graph-key-motion" style="color:#ff3a6e;text-shadow:0 0 8px rgba(255,45,100,0.8)"><svg width="22" height="4" style="vertical-align:middle;margin-right:5px"><line x1="0" y1="2" x2="22" y2="2" stroke="currentColor" stroke-width="2.5"/></svg>Energy<br>of Motion</div>
+      <div class="graph-key-fields" style="color:#c46cff;text-shadow:0 0 8px rgba(196,108,255,0.8);margin-top:7px"><svg width="22" height="4" style="vertical-align:middle;margin-right:5px"><line x1="0" y1="2" x2="22" y2="2" stroke="currentColor" stroke-width="2.5"/></svg>Energy<br>in Fields</div>
     </div>
     <div id="energyBarClock">
       <div style="display:flex;flex-direction:column;align-items:center;gap:2px;">
@@ -766,8 +767,9 @@
       <div id="energyPercents">
         <div id="energyPctNums">
           <span id="energyPctMotion" style="color:#ff2060;text-shadow:0 0 8px rgba(255,20,80,0.7);">100%</span>
+          <span id="energyPctFields" style="color:#c46cff;text-shadow:0 0 8px rgba(196,108,255,0.7);margin-left:10px;">0%</span>
         </div>
-        <div id="energyPctNote">Total energy of motion, relative to the start</div>
+        <div id="energyPctNote">Motion and fields, relative to the energy at the start</div>
       </div>
       <div id="energyBarButtons">
         <button id="energyGraphToggle" class="btn">HIDE LINE<br>GRAPH</button>
@@ -2148,7 +2150,7 @@ function spawnWorld() {
     }
     world.bodies.push(placed);
   }
-  spinCapHits = 0; floorTopUps = 0; energyCreated = 0;
+  spinCapHits = 0; floorTopUps = 0; energyCreated = 0; fieldsLeaked = 0;
   breakCount = 0; vibPeak = 0;
   lastDialSpeed = launchSpeed() * tempCurrent;
   resetEnergyTrace();
@@ -2157,6 +2159,22 @@ function spawnWorld() {
 
 // ─── Physics ──────────────────────────────────────────────────────────────────
 const RESTITUTION = 1.0;   // 1 = perfectly elastic: total kinetic energy is conserved
+
+// How much of a collision's energy goes into the bonds it lands on, instead of
+// back into the molecules' motion. This is the ONE number that makes heating a
+// bond cost something: at 0 the old behaviour, where a bond could glow while
+// both molecules bounced off at full speed, which is the exact misconception
+// the sim otherwise teaches against.
+//
+// It is applied as restitution, which is what makes it exact rather than
+// approximate. A collision with restitution e loses (1 - e^2) of the normal
+// centre-of-mass energy, so e = sqrt(1 - fieldConvert) removes PRECISELY the
+// amount handed to the bonds. Nothing is created and nothing is rounded.
+//
+// Raising it does not slow the world down as much as it looks like it should,
+// because the speed band tops molecules back up off their own spin — which is
+// energy the band creates, and already counted in `energyCreated`.
+let fieldConvert = 0.45;
 
 function stepWorld(dt) {
   // Move, spin, wrap
@@ -2168,7 +2186,11 @@ function stepWorld(dt) {
     if (b.flare > 1e-4) b.flare *= Math.exp(-dt / FLARE_TAU); else b.flare = 0;
     // A bond that is left alone cools back down. Without this every molecule
     // breaks eventually, however cold the world is, and Low stops being safe.
-    if (b.vib > 1e-4) b.vib *= Math.exp(-dt / VIB_TAU); else b.vib = 0;
+    if (b.vib > 1e-4) {
+      const was = b.vib;
+      b.vib *= Math.exp(-dt / VIB_TAU);
+      fieldsLeaked += (was - b.vib) * doseUnit();   // left the world; see CLAUDE.md
+    } else { fieldsLeaked += b.vib * doseUnit(); b.vib = 0; }
   }
   world.time += dt;
 
@@ -2204,6 +2226,7 @@ function pointVel(b, rx, ry) {
 // not enough spin to buy the speed-up, does any energy actually change.
 let speedBandOn = true;        // dev toggle
 let MAX_SPIN    = 14;          // rad/s — past this it is a blur, not a spin
+let fieldsLeaked = 0;   // energy the vibration decay dropped out of the world
 let spinCapHits = 0;    // diagnostics: times the reservoir could not take it
 let floorTopUps = 0;
 let energyCreated = 0;   // energy conjured to hold the floor
@@ -2383,7 +2406,14 @@ function collidePair(A, B) {
       const rnB = rbx * ny - rby * nx;
       const invMassSum = 1 / A.mass + 1 / B.mass
                        + rnA * rnA / A.inertia + rnB * rnB / B.inertia;
-      const jImp = -(1 + RESTITUTION) * vn / invMassSum;
+
+      // Only a molecule can hold vibration; a free atom has no bond to put it
+      // in, so a hit on one stays perfectly elastic and the pair keeps all of
+      // its motion. With nobody to take it, converting would just delete it.
+      const storers = (A.els.length > 1 ? 1 : 0) + (B.els.length > 1 ? 1 : 0);
+      const conv    = storers ? fieldConvert : 0;
+      const rest    = Math.sqrt(Math.max(0, 1 - conv));
+      const jImp = -(1 + rest) * vn / invMassSum;
 
       A.vx -= jImp * nx / A.mass;  A.vy -= jImp * ny / A.mass;
       B.vx += jImp * nx / B.mass;  B.vy += jImp * ny / B.mass;
@@ -2396,11 +2426,15 @@ function collidePair(A, B) {
       A.flare = Math.min(1, A.flare + jImp / (A.mass * Math.max(1, A.vTarget)));
       B.flare = Math.min(1, B.flare + jImp / (B.mass * Math.max(1, B.vTarget)));
 
-      // Pump both molecules' bonds with this collision's energy. 1/invMassSum
-      // is the contact's effective mass, rotation included, so a glancing hit
-      // that mostly spins the pair deposits correspondingly less.
-      queueIfBroken(A, 1 / invMassSum, vn);
-      queueIfBroken(B, 1 / invMassSum, vn);
+      // Exactly the energy the restitution above took out of the motion,
+      // shared between the bonds that can hold it. 1/invMassSum is the
+      // contact's effective mass, rotation included, so a glancing hit that
+      // mostly spins the pair deposits correspondingly less.
+      if (storers) {
+        const taken = conv * 0.5 * (1 / invMassSum) * vn * vn;
+        queueIfBroken(A, taken / storers);
+        queueIfBroken(B, taken / storers);
+      }
 
       // Push the pair apart so they do not stay interlocked and re-collide
       const overlap = minDist - dist;
@@ -2443,7 +2477,7 @@ function collidePair(A, B) {
 // instead of a fortieth. A fast H can break an O2 now because it genuinely has
 // the energy to, not because anything was special-cased for it.
 let breakBonds  = true;    // dev toggle
-let breakEnergy = 26;      // vibration a bond can hold before it lets go
+let breakEnergy = 6;       // vibration a bond can hold before it lets go
 let VIB_TAU     = 2.2;     // seconds — how long a bond holds what it was given
 let breakKick   = 0.22;    // separation speed given to the halves, x nominal
 let breakCount  = 0;       // diagnostics: molecules broken this run
@@ -2478,12 +2512,12 @@ function vibLoad(b) {
 // Deposit this collision's energy, then break if the bond cannot hold it.
 // A single hit big enough to clear the threshold on its own still breaks
 // immediately — accumulation does not replace that case, it includes it.
-function queueIfBroken(b, muEff, vn) {
+function queueIfBroken(b, energy) {
   if (b.els.length < 2 || b.broken) return;
   // Pumped whether or not breaking is on, so the toggle only decides whether a
   // full bond lets go — the heat still shows, and the diagnostics can measure
   // what the world WOULD have done without changing it.
-  b.vib += 0.5 * muEff * vn * vn / doseUnit();
+  b.vib += energy / doseUnit();
   if (b.vib > vibPeak) vibPeak = b.vib;
   if (!breakBonds || b.vib < breakThreshold(b)) return;
   b.broken = b.vib;                    // collected after the collision pass
@@ -2527,6 +2561,19 @@ function stepDissociation() {
   for (const b of world.breaking) breakBody(b);
   world.breaking.length = 0;
   updateSpeciesCounters();
+}
+
+// Energy held in the bonds, in the same units as energyOfMotion so the two can
+// be added and graphed together. `vib` is carried in dose units (one dose = a
+// nominal H2's kinetic energy at temp 1), so it is scaled back up here.
+//
+// This is deliberately NOT part of energyOfMotion. Real vibrational energy
+// sloshes between kinetic and potential, half each on average — but these
+// molecules are rigid, so there is no kinetic half to account for and all of it
+// sits in the bond. The rigidity and the accounting agree.
+function energyInFields() {
+  const u = doseUnit();
+  return world.bodies.reduce((a, b) => a + b.vib * u, 0);
 }
 
 function energyOfMotion() {
@@ -2834,7 +2881,7 @@ function setRunning(on) {
 // collisions the line should stay flat — a visible step means energy leaked.
 const GRAPH_WINDOW  = 12;     // seconds shown across the graph
 const GRAPH_SAMPLES = 480;
-let energyTrace = [];          // [{ t, motion }] — energy in fields joins this later
+let energyTrace = [];          // [{ t, motion, fields }] — the two buckets
 let energyAtSpawn   = 1;           // energy at spawn, the 100% line
 
 function resetEnergyTrace() {
@@ -2843,7 +2890,7 @@ function resetEnergyTrace() {
 }
 
 function sampleEnergy() {
-  energyTrace.push({ t: world.time, motion: energyOfMotion() });
+  energyTrace.push({ t: world.time, motion: energyOfMotion(), fields: energyInFields() });
   while (energyTrace.length > GRAPH_SAMPLES) energyTrace.shift();
   const cutoff = world.time - GRAPH_WINDOW;
   while (energyTrace.length && energyTrace[0].t < cutoff) energyTrace.shift();
@@ -2858,6 +2905,9 @@ function drawEnergyGraph() {
   const gridCol = LIGHT ? 'rgba(0,0,0,0.10)' : 'rgba(255,255,255,0.06)';
   const axisCol = LIGHT ? 'rgba(0,0,0,0.55)' : 'rgba(0,200,255,0.35)';
   const motionCol   = LIGHT ? '#000'             : '#ff3a6e';
+  // The field series takes the hot end of the lobe ramp, so the line and the
+  // thing it measures are the same colour on screen.
+  const fieldsCol   = LIGHT ? '#8a3fa8'          : '#c46cff';
   const motionGlow  = LIGHT ? 'rgba(0,0,0,0)'    : 'rgba(255,45,100,0.9)';
 
   graphCtx.strokeStyle = gridCol;
@@ -2879,28 +2929,31 @@ function drawEnergyGraph() {
     const t1 = world.time, t0 = t1 - GRAPH_WINDOW;
     // Full scale is twice the starting energy, but grows to fit if the trace
     // runs higher — switching to High is a 9× jump and must stay on the graph.
-    const peak = energyTrace.reduce((a, pt) => Math.max(a, pt.motion), 0);
+    const peak = energyTrace.reduce((a, pt) => Math.max(a, pt.motion, pt.fields), 0);
     const full = Math.max(energyAtSpawn * 2, peak * 1.15);
     const px = (t) => ((t - t0) / GRAPH_WINDOW) * (W - 1);
     const py = (e) => PAD + gH * (1 - Math.max(0, Math.min(1, e / full)));
-    const stroke = (lw, blur, alpha) => {
+    const stroke = (key, col, glow, lw, blur, alpha) => {
       graphCtx.save();
       graphCtx.globalAlpha = alpha;
       graphCtx.shadowBlur = LIGHT ? 0 : blur;
-      graphCtx.shadowColor = motionGlow;
-      graphCtx.strokeStyle = motionCol;
+      graphCtx.shadowColor = glow;
+      graphCtx.strokeStyle = col;
       graphCtx.lineWidth = lw;
       graphCtx.beginPath();
       energyTrace.forEach((pt, k) => {
-        const x = px(pt.t), y = py(pt.motion);
+        const x = px(pt.t), y = py(pt[key]);
         if (k === 0) graphCtx.moveTo(x, y); else graphCtx.lineTo(x, y);
       });
       graphCtx.stroke();
       graphCtx.restore();
     };
-    stroke(8, 28, 0.25);
-    stroke(3, 10, 0.55);
-    stroke(1.5, 0, 1.0);
+    // Fields underneath, so the motion line stays the one that reads first.
+    stroke('fields', fieldsCol, fieldsCol, 6, 20, 0.22);
+    stroke('fields', fieldsCol, fieldsCol, 2, 8,  0.75);
+    stroke('motion', motionCol, motionGlow, 8, 28, 0.25);
+    stroke('motion', motionCol, motionGlow, 3, 10, 0.55);
+    stroke('motion', motionCol, motionGlow, 1.5, 0, 1.0);
   }
 }
 
@@ -2908,6 +2961,8 @@ function updateEnergyPct() {
   const el = document.getElementById('energyPctMotion');
   if (!el) return;
   el.textContent = Math.round(energyOfMotion() / energyAtSpawn * 100) + '%';
+  const fl = document.getElementById('energyPctFields');
+  if (fl) fl.textContent = Math.round(energyInFields() / energyAtSpawn * 100) + '%';
 }
 
 // With the band off the graph is a correctness check — a flat line means the
@@ -2916,9 +2971,12 @@ function updateEnergyPct() {
 function updateEnergyNote() {
   const el = document.getElementById('energyPctNote');
   if (!el) return;
+  // Both buckets, and whichever caveat is currently true. Collisions move
+  // energy from motion into the bonds; the vibration decay then drops it out
+  // of the world entirely, which is why the two do not add to a constant.
   el.textContent = speedBandOn
-    ? 'Speed band on \u2014 energy of motion drifts up, then levels off'
-    : 'Total energy of motion, relative to the start';
+    ? 'Collisions move motion into the bonds. Speed band on \u2014 motion drifts up, then levels off'
+    : 'Collisions move motion into the bonds, exactly. Vibration then decays out of the world';
 }
 
 // ─── Controls ─────────────────────────────────────────────────────────────────
@@ -3047,6 +3105,8 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     row('devH2', 'H\u2082 molecules', 0, COMPOSITION_MAX, 1, COMPOSITION_DEFAULT.H2, '#b9c0cd') +
     row('devO2', 'O\u2082 molecules', 0, COMPOSITION_MAX, 1, COMPOSITION_DEFAULT.O2, '#e8382f') +
     row('devHe', 'He atoms',       0, COMPOSITION_MAX, 1, COMPOSITION_DEFAULT.He, '#7fdbe8') +
+    row('devConv', 'Collision \u2192 bond', 0, 0.9, 0.05, fieldConvert, '#c46cff') +
+    '<div id="devConvNote" style="opacity:0.45;font-size:10px;"></div>' +
     '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
     '<div style="font-size:9px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.4;margin-top:8px;">' +
       'Valence electrons</div>' +
@@ -3134,6 +3194,13 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   bind('devH2',    v => composition.H2 = v, true);
   bind('devO2',    v => composition.O2 = v, true);
   bind('devHe',    v => composition.He = v, true);
+  bind('devConv', v => {
+    fieldConvert = v;
+    const n = panel.querySelector('#devConvNote');
+    if (n) n.textContent = v === 0
+      ? 'Elastic \u2014 nothing heats, so nothing ever breaks'
+      : Math.round(v * 100) + '% of each hit leaves the motion for the bond';
+  }, false, v => Math.round(v * 100) + '%');
   bind('devESpeed', v => eSpeed      = v, false, v => v.toFixed(2));
   bind('devETrail', v => eTrailScale = v, false, v => v.toFixed(2));
   bind('devESteer', v => eSteer      = v, false, v => v.toFixed(2));
@@ -3357,12 +3424,21 @@ window.energySplit = function () {
     if (v < b.vTarget * (1 - SPEED_SIGMA) - 0.5 ||
         v > b.vTarget * (1 + SPEED_SIGMA) + 0.5) outOfBand++;
   }
+  const fields = energyInFields();
   const total = trans + rot;
+  const all = total + fields;
   console.table([
-    { part: 'translation', energy: +trans.toFixed(0), share: +(trans / total * 100).toFixed(1) + '%' },
-    { part: 'rotation',    energy: +rot.toFixed(0),   share: +(rot   / total * 100).toFixed(1) + '%' },
-    { part: 'total',       energy: +total.toFixed(0), share: '100%' },
+    { part: 'translation',      energy: +trans.toFixed(0),  share: +(trans  / all * 100).toFixed(1) + '%' },
+    { part: 'rotation',         energy: +rot.toFixed(0),    share: +(rot    / all * 100).toFixed(1) + '%' },
+    { part: 'motion (sum)',     energy: +total.toFixed(0),  share: +(total  / all * 100).toFixed(1) + '%' },
+    { part: 'fields (bonds)',   energy: +fields.toFixed(0), share: +(fields / all * 100).toFixed(1) + '%' },
+    { part: 'total held',       energy: +all.toFixed(0),    share: '100%' },
+    { part: 'LEAKED by decay',  energy: +fieldsLeaked.toFixed(0),
+      share: +(fieldsLeaked / Math.max(1, energyAtSpawn) * 100).toFixed(1) + '% of spawn' },
   ]);
+  console.log('collision -> bond conversion: ' + Math.round(fieldConvert * 100) + '%' +
+    '  |  the transfer itself is exact (restitution sqrt(1 - conv)); what leaves the' +
+    ' world is the vibration decay, counted above');
   console.log('band ' + (speedBandOn ? 'on' : 'off') +
     ' \u00b1' + Math.round(SPEED_SIGMA * 100) + '%  |  out of band now: ' + outOfBand + '/' + world.bodies.length +
     '  |  spin capped ' + spinCapHits + '\u00d7, floor topped up ' + floorTopUps + '\u00d7' +
