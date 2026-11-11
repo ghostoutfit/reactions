@@ -835,28 +835,42 @@ have done without changing it.
 A single hit big enough to clear the threshold on its own still breaks
 immediately. Accumulation does not replace that case, it contains it.
 
-#### The colour scale is not the break threshold
+#### The colour scale is a fraction of the threshold
 
 ```javascript
 let breakEnergy = 2.5;     // vibration a bond can hold before it lets go
-let colourScale = 4.5;     // vibration that reads as full pink
+let colourFull  = 0.8;     // full pink at this FRACTION of capacity
 ```
 
-These used to be one number, which meant **every change to how easily bonds
-break silently rescaled the colours**: drop the threshold and bonds go pink
-sooner, raise it and they never get there. `vibLoad()` now measures against
-`colourScale`, so the threshold can move without touching a picture that is
-already tuned. Both are scaled by the bond's own energy the same way, so an O=O
-still sits 498/436 above an H–H on both axes.
+These used to be one number, so **every change to how easily bonds break
+silently rescaled the colours**. Splitting them is right, but an *absolute*
+colour scale is not: set it above the threshold and bonds break before the ramp
+runs out, below it and they sit pink for ages. Measured with an absolute scale
+of 4.5 against a threshold of 2.5, bonds broke at a mean colour load of 0.68 and
+the rendered frames only reached 0.44 mean / 0.55 max — the top of the ramp was
+a colour you never saw.
 
-**The consequence, measured:** with the threshold at 2.5 under a colour scale of
-4.5, a bond breaks at a mean colour load of **0.68**, and in the frames actually
-rendered before it goes it only reaches **0.44 mean / 0.55 max** — the final
-dose lands in the same frame as the break. So bonds now run white → lavender →
-purple and break around purple, and **the top of the pink is a colour you will
-rarely see**. Setting `Full-pink at` equal to `Bond capacity` restores "pink
-means about to go", at the cost of the colours moving faster per unit of
-vibration.
+As a **fraction of capacity**, the full white → purple → pink range survives any
+retuning of breaking, which is the point.
+
+**`colourFull` is under 1 on purpose.** At exactly 1 the ramp reaches pink only
+in the same frame the bond breaks — the dose that saturates the colour is the
+dose that breaks it — so the pink is never actually drawn. Measured over 3 runs
+at High, 120 s each:
+
+| `colourFull` | bonds that reach pink | white | purple | pink |
+|---|---|---|---|---|
+| 1.0 | 67% | 34.6% | 56.7% | 8.7% |
+| **0.8** | **94%** | **26.0%** | **43.5%** | **30.4%** |
+| 0.6 | 89% | 41.1% | 31.6% | 27.3% |
+| 0.45 | 94% | 39.9% | 13.1% | 47.0% |
+
+0.8 uses the whole ramp most evenly. Below it purple gets squeezed — at 0.45 a
+bond mostly jumps from white to pink with barely any purple in between.
+
+`colourFull` is **visual only**; it does not appear in `breakThreshold`. Both it
+and the threshold are scaled by the bond's own energy the same way, so an O=O
+still sits 498/436 above an H–H on both axes.
 
 #### Choosing the capacity
 

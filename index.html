@@ -2518,7 +2518,7 @@ function collidePair(A, B) {
 // the energy to, not because anything was special-cased for it.
 let breakBonds  = true;    // dev toggle
 let breakEnergy = 2.5;     // vibration a bond can hold before it lets go
-let colourScale = 4.5;     // vibration that reads as full pink — see vibLoad
+let colourFull  = 0.8;     // full pink at this FRACTION of capacity — see vibLoad
 let VIB_TAU     = 2.2;     // seconds — how long a bond holds what it was given
 let breakKick   = 0.22;    // separation speed given to the halves, x nominal
 
@@ -2568,18 +2568,20 @@ function breakThreshold(b) {
 
 // Fraction of a body's held vibration, 0..1 — what the bond's COLOUR reads.
 //
-// Deliberately measured against `colourScale`, not against the break threshold.
-// They used to be the same number, which meant every change to how easily bonds
-// break silently rescaled the colours too: drop the threshold and bonds go pink
-// sooner, raise it and they never get there. Splitting them lets the threshold
-// move without touching a picture that is already tuned.
+// Measured as a FRACTION of the break threshold, not as an absolute amount of
+// vibration, so the full white-purple-pink range survives any retuning of how
+// easily bonds break. An absolute scale cannot: set it above the threshold and
+// bonds break before the ramp runs out, below it and they sit pink for ages.
 //
-// The consequence is worth knowing: with `colourScale` ABOVE the threshold, a
-// bond breaks before the ramp runs out, so the top of the ramp is a colour you
-// rarely see. Setting the two equal restores "pink means about to go".
+// `colourFull` is under 1 on purpose. At exactly 1 the ramp only reaches pink
+// in the same frame the bond breaks — the dose that saturates the colour is the
+// dose that breaks it — so the pink is never actually drawn. Topping out at 0.8
+// of capacity leaves a real window where the bond is fully pink and still
+// whole, which is the "about to go" the colour is for.
 function vibLoad(b) {
   const f = bondEnergyFactor(b);
-  return f ? Math.min(1, b.vib / (colourScale * f)) : 0;
+  const cap = breakEnergy * colourFull * f;
+  return cap > 0 ? Math.min(1, b.vib / cap) : 0;
 }
 
 // Deposit this collision's energy, then break if the bond cannot hold it.
@@ -3236,7 +3238,7 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     '</label>' +
     '<div id="devBreakNote" style="opacity:0.45;font-size:10px;margin-left:21px;"></div>' +
     row('devBreakH', 'Bond capacity',  0.5, 12, 0.25, breakEnergy,  '#ffc24a') +
-    row('devColScale','Full-pink at',   0.5, 12, 0.25, colourScale,  '#ffc24a') +
+    row('devColFull','Full pink at',    0.3, 1.2, 0.05, colourFull,   '#ffc24a') +
     row('devVibTau', 'Vibration hold',  0.3, 8, 0.1,  VIB_TAU,      '#ffc24a') +
     row('devVibGlow','Heat glow',       0,   1, 0.05, VIB_GLOW,     '#ffc24a') +
     row('devBreakSlow','Fragments slow to', 0.2, 1.2, 0.05, breakSlow,  '#ffc24a') +
@@ -3304,7 +3306,7 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   bind('devETilt',  v => eTilt       = v, false, v => v.toFixed(2));
   bind('devCircR',  v => bondCircleR = v, false, v => v.toFixed(2) + '\u00d7');
   bind('devBreakH', v => breakEnergy = v, false, v => v.toFixed(2));
-  bind('devColScale', v => colourScale = v, false, v => v.toFixed(2));
+  bind('devColFull', v => colourFull = v, false, v => Math.round(v * 100) + '% of cap');
   bind('devVibTau', v => VIB_TAU     = v, false, v => v.toFixed(1) + ' s');
   bind('devVibGlow', v => VIB_GLOW   = v, false, v => v.toFixed(2));
   bind('devBreakSlow', v => breakSlow = v, false,
