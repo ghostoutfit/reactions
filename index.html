@@ -857,6 +857,7 @@ const fieldCtx    = fieldCanvas.getContext('2d');
 
 let fieldW = 0, fieldH = 0;
 let fieldAcc = null;    // Float32Array, the summed lobes
+let fieldLoad = null;   // Float32Array, the same sum weighted by each bond's energy load
 let fieldPix = null;    // Uint8ClampedArray behind fieldImg
 let fieldImg = null;
 
@@ -973,58 +974,94 @@ function buildColorstops(stops, out) {
   }
 }
 
-// The field ramp. `t` is the accumulated field over FIELD_GAIN, so the TOP of
-// the ramp is a bond's core and the bottom is the outer fringe — a resting bond
-// already peaks at t ~= 1 (see FIELD_GAIN). The alpha column is what makes the
-// lobe glow: it fades the fringe out to nothing so the lobe has no edge, and it
-// is kept identical in shape across every ramp here, because that falloff IS
-// the glow and none of these are allowed to lose it.
-const FIELD_RAMPS = {
-  // The key's hues — violet through purple to magenta — with magenta at the
-  // core, which is the key's High. Shipped.
-  //
-  // The key's LIGHTNESS order could not be taken literally. Drawn with a pale
-  // low end, the fringe just inside the cull came out at (232,232,243) on alpha
-  // 22: a grey haze on a near-black page. The lobe is culled flat at each
-  // nucleus and at a box a couple of sigma out, and those straight edges are
-  // invisible only while the fringe is DARKER than the page. A pale fringe
-  // turned every bond into a visible grey rectangle. So the bottom of the ramp
-  // is a dark violet — the key's hue at the low end, carrying the key's
-  // faintness as low alpha rather than as pale ink, which is what "low" means
-  // on a lobe that fades out to nothing anyway.
-  key: [
-    { t: 0.0,  r: 58,  g: 22,  b: 92,  a: 0   },
-    { t: 0.12, r: 96,  g: 44,  b: 156, a: 115 },
-    { t: 0.40, r: 160, g: 68,  b: 212, a: 200 },
-    { t: 0.70, r: 214, g: 70,  b: 214, a: 240 },
-    { t: 1.0,  r: 255, g: 96,  b: 214, a: 255 },
+// The field ramp is TWO dimensional.
+//
+//   `t`    — where a pixel sits on the lobe. The top is a bond's core, the
+//            bottom its outer fringe. A resting bond already peaks at t ~= 1.
+//   `load` — how much energy THAT BOND is holding, 0..1. This is the axis the
+//            "Energy in fields" key describes: an untouched bond is whitish,
+//            a worked-on one goes purple, and a bond near breaking goes pink.
+//
+// So the key is not a gradient across one lobe — it is the sequence one bond
+// moves through over time as it takes hits. Low and High are a cold bond and a
+// hot one, not the fringe and the core.
+//
+// Two rules hold across every stage, and neither may be given up:
+//
+//   The alpha column is identical in all three. That falloff is the glow: it
+//   fades the fringe to nothing so the lobe has no edge.
+//
+//   The fringe stays DARKER than the page. The lobe is culled flat at each
+//   nucleus and at a box a couple of sigma out, and those straight edges are
+//   invisible only while the fringe is darker than what is behind it. A pale
+//   fringe was measured at (232,232,243) on alpha 22 and turned every bond into
+//   a visible grey rectangle. The key's "whitish" belongs at the CORE of a cold
+//   bond, which is where it already was, not at the bottom of the ramp.
+const LOAD_BINS = 17;
+
+const FIELD_STAGES = {
+  // What the key describes. Stage 0 is the original blue-white, unchanged, so
+  // an untouched world looks exactly as it did.
+  energy: [
+    // cold — the bond at rest
+    [ { t: 0.0,  r: 0,   g: 0,   b: 0,   a: 0   },
+      { t: 0.12, r: 10,  g: 35,  b: 170, a: 140 },
+      { t: 0.40, r: 25,  g: 85,  b: 235, a: 210 },
+      { t: 0.70, r: 70,  g: 165, b: 255, a: 245 },
+      { t: 1.0,  r: 210, g: 238, b: 255, a: 255 } ],
+    // working — purple. The core is a real purple, not a white with a purple
+    // cast: the colour IS the signal now, so letting every stage blow out to
+    // near-white at the core would throw away most of the range.
+    [ { t: 0.0,  r: 20,  g: 0,   b: 54,  a: 0   },
+      { t: 0.12, r: 62,  g: 16,  b: 148, a: 140 },
+      { t: 0.40, r: 112, g: 36,  b: 214, a: 210 },
+      { t: 0.70, r: 158, g: 70,  b: 240, a: 245 },
+      { t: 1.0,  r: 196, g: 122, b: 255, a: 255 } ],
+    // hot — pink, a bond near its capacity
+    [ { t: 0.0,  r: 50,  g: 0,   b: 42,  a: 0   },
+      { t: 0.12, r: 146, g: 10,  b: 112, a: 140 },
+      { t: 0.40, r: 220, g: 28,  b: 166, a: 210 },
+      { t: 0.70, r: 248, g: 58,  b: 192, a: 245 },
+      { t: 1.0,  r: 255, g: 92,  b: 208, a: 255 } ],
   ],
-  // The same hues, but with a hot pink-white at the very top, so an over-driven
-  // bond keeps blowing out to a spreading near-white core the way the blue ramp
-  // did. Brighter glow, further from the key's "High is magenta".
-  keyGlow: [
-    { t: 0.0,  r: 58,  g: 22,  b: 92,  a: 0   },
-    { t: 0.12, r: 104, g: 42,  b: 160, a: 120 },
-    { t: 0.40, r: 168, g: 60,  b: 214, a: 200 },
-    { t: 0.70, r: 240, g: 70,  b: 205, a: 240 },
-    { t: 0.90, r: 255, g: 120, b: 220, a: 250 },
-    { t: 1.0,  r: 255, g: 214, b: 245, a: 255 },
-  ],
-  // The original, kept for comparison.
+  // The original, with no colour response to energy at all.
   blue: [
-    { t: 0.0,  r: 0,   g: 0,   b: 0,   a: 0   },
-    { t: 0.12, r: 10,  g: 35,  b: 170, a: 140 },
-    { t: 0.4,  r: 25,  g: 85,  b: 235, a: 210 },
-    { t: 0.7,  r: 70,  g: 165, b: 255, a: 245 },
-    { t: 1.0,  r: 210, g: 238, b: 255, a: 255 },
+    [ { t: 0.0,  r: 0,   g: 0,   b: 0,   a: 0   },
+      { t: 0.12, r: 10,  g: 35,  b: 170, a: 140 },
+      { t: 0.4,  r: 25,  g: 85,  b: 235, a: 210 },
+      { t: 0.7,  r: 70,  g: 165, b: 255, a: 245 },
+      { t: 1.0,  r: 210, g: 238, b: 255, a: 255 } ],
   ],
 };
 
-let fieldRamp = 'key';
-const COLORMAP = new Uint8Array(256 * 4);
+// Where each stage sits on the load axis, and how sharply one gives way to the
+// next. `FIELD_STAGE_GAMMA` above 1 holds the cold stage longer, so a bond has
+// to be properly worked on before it stops looking like an ordinary bond —
+// the "slight separation" between white and purple rather than a smooth wash
+// from one into the other across the whole range.
+let FIELD_STAGE_GAMMA = 1.6;
+
+let fieldRamp = 'energy';
+// LOAD_BINS stacked 256-entry ramps, indexed [bin * 1024 + t * 4].
+const COLORMAP = new Uint8Array(LOAD_BINS * 256 * 4);
+const _rampA = new Uint8Array(256 * 4), _rampB = new Uint8Array(256 * 4);
+
 function setFieldRamp(name) {
-  fieldRamp = FIELD_RAMPS[name] ? name : 'key';
-  buildColorstops(FIELD_RAMPS[fieldRamp], COLORMAP);
+  fieldRamp = FIELD_STAGES[name] ? name : 'energy';
+  const stages = FIELD_STAGES[fieldRamp];
+  for (let bin = 0; bin < LOAD_BINS; bin++) {
+    const load = Math.pow(bin / (LOAD_BINS - 1), FIELD_STAGE_GAMMA);
+    const f  = load * (stages.length - 1);
+    const i0 = Math.min(stages.length - 1, Math.floor(f));
+    const i1 = Math.min(stages.length - 1, i0 + 1);
+    const k  = f - i0;
+    buildColorstops(stages[i0], _rampA);
+    buildColorstops(stages[i1], _rampB);
+    const base = bin * 1024;
+    for (let j = 0; j < 1024; j++) {
+      COLORMAP[base + j] = _rampA[j] + (_rampB[j] - _rampA[j]) * k;
+    }
+  }
 }
 setFieldRamp(fieldRamp);
 
@@ -1079,6 +1116,7 @@ function ensureFieldBuffers(w, h) {
   fieldW = w; fieldH = h;
   fieldCanvas.width = w; fieldCanvas.height = h;
   fieldAcc = new Float32Array(w * h);
+  fieldLoad = new Float32Array(w * h);
   fieldPix = new Uint8ClampedArray(w * h * 4);
   fieldImg = new ImageData(fieldPix, w, h);
 }
@@ -1093,12 +1131,17 @@ function bondSegments() {
     const heat    = Math.max(b.flare, VIB_GLOW * vibLoad(b));
     const bright  = 1 + FLARE_GAIN * heat;
     const squeeze = 1 - FLARE_SQUEEZE * heat;
+    // How loaded this bond is, 0..1 — what COLOURS it. Vibration is the energy
+    // it is holding; flare is the collision that just landed. The larger of the
+    // two, so a hit shows immediately and a bond that has been worked on stays
+    // coloured between hits.
+    const load = Math.min(1, Math.max(b.flare, vibLoad(b)));
     const at = bodyAtoms(b);
     for (const [i, k] of b.bonds) {
       segs.push({
         x1: at[i].x, y1: at[i].y, x2: at[k].x, y2: at[k].y,
         mag: bondEnergy(at[i].el, at[k].el) / BOND_ENERGY_MAX * bright,
-        squeeze,
+        squeeze, load,
       });
     }
   }
@@ -1114,6 +1157,7 @@ function drawFieldHeatmap(destCtx) {
   const h = Math.max(1, Math.ceil(world.h * scale));
   ensureFieldBuffers(w, h);
   fieldAcc.fill(0);
+  fieldLoad.fill(0);
   const inv = 1 / scale;
 
   for (const s of segs) {
@@ -1142,7 +1186,9 @@ function drawFieldHeatmap(destCtx) {
         if (perpSq > cullSq) continue;
         // sin() puts zero at each nucleus and the peak exactly between them
         const lobe = Math.sin(Math.PI * (along / L));
-        fieldAcc[py * w + px] += s.mag * lobe * Math.exp(-perpSq / twoSig);
+        const add = s.mag * lobe * Math.exp(-perpSq / twoSig);
+        fieldAcc[py * w + px]  += add;
+        fieldLoad[py * w + px] += add * s.load;
       }
     }
   }
@@ -1150,10 +1196,15 @@ function drawFieldHeatmap(destCtx) {
   for (let i = 0, n = w * h; i < n; i++) {
     const v = fieldAcc[i];
     if (v <= 0.002) { fieldPix[i * 4 + 3] = 0; continue; }
-    const c = Math.min(255, (v / FIELD_GAIN * 255) | 0) * 4;
-    const d = i * 4;
-    fieldPix[d] = COLORMAP[c]; fieldPix[d + 1] = COLORMAP[c + 1];
-    fieldPix[d + 2] = COLORMAP[c + 2]; fieldPix[d + 3] = COLORMAP[c + 3];
+    // Where this pixel sits on the lobe, and how loaded the bonds that built it
+    // are — the load is contribution-weighted, so where two bonds overlap the
+    // colour follows whichever is putting more field there.
+    const c  = Math.min(255, (v / FIELD_GAIN * 255) | 0) * 4;
+    const ld = Math.min(LOAD_BINS - 1, (fieldLoad[i] / v * (LOAD_BINS - 1) + 0.5) | 0);
+    const m  = ld * 1024 + c;
+    const d  = i * 4;
+    fieldPix[d] = COLORMAP[m]; fieldPix[d + 1] = COLORMAP[m + 1];
+    fieldPix[d + 2] = COLORMAP[m + 2]; fieldPix[d + 3] = COLORMAP[m + 3];
   }
 
   fieldCtx.putImageData(fieldImg, 0, 0);
@@ -3046,10 +3097,11 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
       '<span>Colour ramp</span>' +
       '<select id="devRamp" style="background:#141822;color:#cfe3ff;border:1px solid #2a3344;' +
         'border-radius:4px;font:inherit;font-size:11px;padding:1px 3px;">' +
-        Object.keys(FIELD_RAMPS).map(k =>
+        Object.keys(FIELD_STAGES).map(k =>
           '<option value="' + k + '"' + (k === fieldRamp ? ' selected' : '') + '>' + k + '</option>').join('') +
       '</select>' +
     '</label>' +
+    row('devStageG',  'Cold-stage hold', 0.6,  3,   0.1,  FIELD_STAGE_GAMMA, '#46a5ff') +
     row('devLobeW',   'Lobe width',      0.1,  0.8, 0.02, FIELD_WIDTH, '#46a5ff') +
     row('devLobeGain','Lobe brightness', 0.5,  4,   0.1,  FIELD_GAIN,  '#46a5ff') +
     row('devFlare',   'Flare on impact', 0,    5,   0.1,  FLARE_GAIN,  '#46a5ff') +
@@ -3103,6 +3155,8 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   bind('devSphereD', v => sphereDepth   = v, false, v => v.toFixed(2));
   bind('devSeamT',   v => seamTilt      = v, false, v => v.toFixed(2));
   // The field look was dialled in against the picture, so it stays adjustable
+  bind('devStageG',   v => { FIELD_STAGE_GAMMA = v; setFieldRamp(fieldRamp); },
+       false, v => v.toFixed(1));
   bind('devLobeW',    v => FIELD_WIDTH = v, false, v => v.toFixed(2));
   bind('devLobeGain', v => FIELD_GAIN  = v, false, v => v.toFixed(1));
   bind('devFlare',    v => FLARE_GAIN  = v, false, v => v.toFixed(1));
