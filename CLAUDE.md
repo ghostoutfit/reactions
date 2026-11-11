@@ -570,50 +570,114 @@ molecules look like they bounce off nothing.
 
 ### Bond breaking
 
-A hard enough collision pulls a molecule apart. **One-way, for now**: the halves
-drift off as free atoms and nothing puts them back, so a hot world gradually
-comes apart until there is nothing left to break.
+Collisions pump energy into a molecule's bond, the bond holds it for a while,
+and when it holds more than the bond is worth the molecule comes apart.
+**One-way, for now**: the halves drift off as free atoms and nothing puts them
+back, so a hot world gradually comes apart until there is nothing left to break.
 
 ```javascript
-let breakBonds    = true;   // dev toggle
-let breakHardness = 4.0;    // hits at or above this break a bond, at temp 1 scale
-let breakKick     = 0.22;   // separation speed given to the halves, x nominal
+let breakBonds  = true;    // dev toggle
+let breakEnergy = 26;      // vibration a bond can hold before it lets go
+let VIB_TAU     = 2.2;     // seconds — how long a bond holds what it was given
+let breakKick   = 0.22;    // separation speed given to the halves, x nominal
+let VIB_GLOW    = 0.7;     // how brightly a loaded bond reads, vs a full flare
 ```
 
-**The hardness of a hit is the flare's own measure, with one deliberate
-difference.** The flare uses `jImp / (mass x vTarget)`, about 1 for a square hit
-at the speed that species normally travels — a number that is scale-free in both
-the dial *and* the temperature. That is right for a flare and wrong for
-breaking, which has to care about temperature. So `queueIfBroken` divides by the
-species' speed at **temp 1** (`vTarget / tempCurrent`) instead. The dial still
-cancels; the temperature does not. Dissociation is then a consequence of being
-hot, not a mode switched on with the Temp button.
+#### Why it is energy, and not the hardness of one hit
 
-**The threshold is scaled by the bond's own energy**, straight out of
-`BOND_ENERGY` — so an H-H faces `4.0 x 436/498` = **3.50** and an O=O the full
-**4.00**. That 14% is enough to be visible: run it hot and all four H₂ come
-apart while both O₂ are still whole, with nothing hard-coded to make it happen
-in that order.
+The first version broke a bond when a single collision exceeded a threshold,
+with hardness measured the way the flare measures it — `jImp / (mass x speed)`.
+That had two faults, both found by measuring rather than by reasoning:
 
-**4.0 is measured, not guessed** (`runBreakTests()` in the console reproduces
-it). Over 240 s with breaking off:
+1. **It threw away every hit but the biggest.** In 600 s an O₂ took **190 hits
+   from free H atoms** and not one of them counted for anything.
+2. **A light atom could not satisfy it at all.** The mass in the denominator is
+   the *target's*, so an H (mass 1) hitting an O₂ (mass 32) peaked at **1.50**
+   across those 190 hits, against a threshold of 4.0. Only another O₂ could
+   ever break an O₂ — and since one O₂-on-O₂ collision is hard enough to break
+   *both*, a world either lost both at once or kept two immortal O₂ forever.
+   A part-broken world was a dead end.
 
-| temp | hits | p50 | p90 | p99 | max | over H-H thr | over O=O thr |
-|---|---|---|---|---|---|---|---|
-| 1x | 662 | 0.53 | 1.46 | 2.08 | **2.95** | 0 | 0 |
-| 3x | 1798 | 1.05 | 3.29 | 4.96 | 6.45 | 132 | 65 |
+The honest quantity is the kinetic energy in the centre-of-mass frame, which is
+what a collision actually has to deposit:
 
-Low's hardest hit in four minutes is 2.95, under the 3.50 an H-H would need —
-so **Low breaks nothing** (0 breaks in 240 s, and 0 in a separate 900 s run),
-while High breaks all six, at 0.6 / 4.1 / 8.9 / 8.9 / 27.8 / 27.8 s. That gap
-is the whole design: there is no `tempLevel === 'high'` test anywhere.
+```
+E = ½ · μ · vn²        μ = 1 / invMassSum, the contact's effective mass
+```
 
-**Fragments keep the velocity their atom actually had** — the body's velocity
-plus the spin's contribution at that offset, via `pointVel` — so a molecule that
-was spinning fast throws its halves apart harder, with none of it invented. On
-top sits `breakKick` along the outward direction, standing in for the bond
-energy released. A free atom gets `spin = 0`: there is nothing for it to spin
-about.
+`invMassSum` already exists in `collidePair` and includes the rotational terms,
+so a glancing hit that mostly spins the pair deposits correspondingly less.
+
+That alone fixes (2), because **equipartition means a light atom moves fast
+enough to carry as much energy as a heavy one**. Measured at High, dose per hit:
+
+| hit on | by | n | mean | max |
+|---|---|---|---|---|
+| O₂ | H₂ | 436 | 2.46 | 12.84 |
+| O₂ | O₂ | 32 | 3.24 | 16.36 |
+| H₂ | H₂ | 692 | 3.17 | 15.95 |
+
+An H₂ now lands 76% of an O₂'s mean dose on an O₂, where before it managed a
+fortieth of what was needed. **A fast H breaks an O₂ because it genuinely has
+the energy to**, not because anything was special-cased for it.
+
+One dose unit is the kinetic energy of a nominal H₂ at temperature 1, so the
+speed dial cancels out and the temperature does not — deliberately, the same
+way the old measure worked. Energy goes as speed squared, so High is ~9× the
+dose per hit and ~3× as many hits: **~27× the pumping rate for 3× the speed**.
+That is the entire separation between Low and High, and it is why no
+`tempLevel` test appears anywhere in the mechanism.
+
+#### Holding and cooling
+
+`b.vib` accumulates and decays as `exp(-dt / VIB_TAU)`. **The decay is what
+keeps Low safe** — without it every molecule breaks eventually however cold the
+world is, since vibration would only ever go up. Vibration is pumped whether or
+not `breakBonds` is on, so the toggle only decides whether a full bond lets go;
+the heat still shows, and the diagnostics can measure what the world *would*
+have done without changing it.
+
+A single hit big enough to clear the threshold on its own still breaks
+immediately. Accumulation does not replace that case, it contains it.
+
+#### Choosing the capacity
+
+`breakEnergy` is the vibration an O=O can hold; an H–H holds `436/498` of it,
+**22.8 against 26**. Swept against measured behaviour, 3–4 seeds each:
+
+| capacity | High: broke | first break | last break | Low: breaks |
+|---|---|---|---|---|
+| 18 | 6/6/6 | 3.3 s | 8–15 s | 0/0/0 |
+| 22 | 6/6/6/6 | 6–17 s | 18–26 s | — |
+| **26** | **6/6/6/6** | **12–47 s** | **40–64 s** | **0/0/0** |
+| 30 | 6/6/6/6 | 2.6–32 s | 19–54 s | — |
+| 44 | 0/6/0 | — | — | 0/0/0 |
+
+26 gives the longest arc — something to watch rather than a burst — while still
+finishing reliably. 44 is past the edge: two runs in three broke nothing at all.
+
+**Low is clean.** Over 3 × 900 s (45 simulated minutes) at Low: **0 breaks**,
+peak vibration **11.8** against H₂'s capacity of 22.8, a 1.9× margin on the
+worst moment in all of it. Live at High: all six molecules gone by **28.1 s**,
+both O₂ included, no console errors, every body finite.
+
+#### What it looks like
+
+A loaded bond glows, so a molecule about to go is visibly holding energy rather
+than just flashing when hit — `heat = max(flare, VIB_GLOW · vibLoad)`, with
+vibration deliberately reading below a full flare so a collision is still the
+brightest thing that happens to a bond. Measured over the load range, in a box
+around one O₂'s bond: white-core pixels **219 → 810 → 1146 → 1335 → 1440**, and
+total ink +34%. The core *spreads* rather than the lobe simply brightening,
+which is the same effect the flare relies on and for the same reason.
+
+#### Fragments
+
+Each keeps the velocity its atom actually had — the body's velocity plus the
+spin's contribution at that offset, via `pointVel` — so a molecule that was
+spinning fast throws its halves apart harder, with none of it invented. On top
+sits `breakKick` along the outward direction, standing in for the bond energy
+released. A free atom gets `spin = 0`: there is nothing for it to spin about.
 
 The electron structure falls out for free: `buildElectrons` on a one-atom body
 with no bonds makes every valence electron lone, so a free H shows **1** and a
@@ -623,6 +687,24 @@ free O shows **6**. Both are radicals, and both look like it.
 `world.breaking` queues them and `stepDissociation` splices. Replacing a body
 mid-pass would shift `world.bodies` indices under the loop and let a pair be
 missed or tested twice.
+
+#### runBreakTests()
+
+`runBreakTests(seconds)` in the console reproduces all of it headlessly —
+`stepWorld` is driven directly, so it does not wait on real time or on the GO
+button — and puts the world back as it found it. Three tables: dose per hit
+**split by who was hit and by what**, the vibration that adds up to against each
+bond's capacity, and what that does to the world.
+
+The by-partner split is the one that matters. The old measure looked perfectly
+healthy in aggregate while being impossible for a light atom to satisfy, and
+nothing but a partner breakdown would have shown it.
+
+**A trap worth remembering:** `spawnWorld` already multiplies by `tempCurrent`
+through `speciesSpeed`, so setting the temperature *after* spawning and then
+scaling velocities applies it twice. An early version of this diagnostic did
+exactly that and reported vibration ~50× too high at High. Set the temperature
+first, then spawn.
 
 ## Energy in fields
 
@@ -716,9 +798,12 @@ Dormant, kept because the next round of work wants it. None of it is live:
   moving. Harmless, but the pause is not a total freeze.
 - Molecules cannot be dragged, clicked or selected.
 - Molecules break but never **re-combine**, by design for now — so a hot world
-  only ever runs down to free atoms. Recombination is the other half.
-- No internal vibration — a molecule is perfectly rigid, so a collision has only
-  translation and rotation to put energy into.
+  only ever runs down to free atoms. Recombination is the other half, and the
+  natural next piece: free H and free O are now produced in quantity and have
+  nothing to do with themselves.
+- Internal vibration exists only as a scalar energy store (`b.vib`) that decides
+  when a bond breaks and how it glows. The molecule is still perfectly **rigid**
+  — nothing actually oscillates, so the atoms never move relative to each other.
 - Only two counter slots in the toolbar (`sp1`/`sp2`). Breaking makes this
   worse, not better: a part-broken world holds up to **four** species (H₂, O₂,
   H, O) with two slots to show them in. `updateSpeciesCounters` now sorts by
