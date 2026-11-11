@@ -1089,6 +1089,46 @@ energy at **0.538 r0** on the compression side, so a 0.5 floor put the bottom of
 the drag range inside a dead zone reading a flat "0 kJ/mol" however hard you
 pushed. At 0.6 the wall is steep — 32% left — and still moving.
 
+### Electrons: the bonds repo's Trails view, ported
+
+The valence electrons are drawn the way the **bonds** sim's Trails tab draws
+them, not the way the main tab does. Ported from `~/Projects/bonds`:
+
+- **3D orbital groups.** Each group is a tilted circular orbit whose plane
+  slowly precesses about a random axis (Rodrigues rotation, `_o3Precess`), with
+  electrons pairing two to an orbit. Every electron pushes a 3D point per frame
+  into a trail capped at `ORB_TRAIL_LEN`, projected through one shared
+  azimuth/elevation.
+- **The batched stroke.** One pass per colour split into `nB` alpha buckets, so
+  a trail fades from tail to head, drawn with `quadraticCurveTo` through
+  midpoints, then one filled arrowhead at the head. That arrowhead is what makes
+  a trail read as a direction of travel rather than a smear.
+
+**Only the valence shell is built** — the bonds version drew every occupied
+shell with the inner ones in grey, and reactions has never modelled inner
+electrons, so there is nothing to leave out.
+
+**The bond's own electrons stay reactions'.** They come from a real body built
+with `makeBody`, stepped by `stepBondElectron`, and only *rendered* in the bonds
+style. The two tabs must not disagree about what a bond is. The body's atoms are
+moved to match the drag, so the figure-8 stretches with it — verified, `lx` went
+to ±55 for a 2× stretch of a 54.9 px bond.
+
+Electron counts come out chemically right: H–H 2 bonding and no lone pairs,
+O=O 4 bonding and 4 lone on each atom, O–H 2 bonding with 5 left on the oxygen.
+
+### Nuclei: 3x the MAIN tab's, not 3x this tab's
+
+```javascript
+const BOND_NUC_SCALE = 3;   // x the main tab's 12 px, fixed, not x the view zoom
+```
+
+The other reading was tried and is unusable. This tab's nuclei were already
+scaled by the view zoom, so tripling that put the nucleus radius at **2.08x the
+valence radius** — the orbitals ran *inside* the nucleus and the entire electron
+picture vanished behind it. Fixed at 3x the main tab's 12 px, the nucleus is a
+clear 36 px ball with the valence trails well outside it.
+
 ### Two things the main tab's lobe does that this tab must not
 
 - **It clips.** `FIELD_GAIN` is set so resting bonds sit at the top of the ramp
