@@ -1140,36 +1140,58 @@ There was one. It plotted the old, wrong quantity, and a corrected version would
 have duplicated what the lobe and the kJ/mol readout already say between them.
 Removed rather than fixed.
 
-### Electrons: the bonds repo's### Electrons: the bonds repo's "shells" bond dots, ported
+### Electrons: the bonds repo's shells view, in full
 
-Not an orbit and not a trail. Two dots (four on a double bond) that **wander**
-in the region between the nuclei — jittering, repelling each other, anchored
-loosely to the midpoint in x and to their own side in y, and confined to the
-union of the two valence shells. Straight out of the bonds sim's shells view.
-That is its picture of a shared pair: electrons living in the space between,
-not running a path.
-
-**The shell shading those dots normally sit inside is deliberately not drawn.**
-Only the bonding electrons appear, so nothing competes with them.
+Every electron both atoms have, not just the bonding pair — a gradient band at
+each occupied shell radius and a glowing dot per electron, straight out of the
+bonds shells view. Reactions has never needed inner shells (the main tab is all
+valence), so the configurations live in this tab:
 
 ```javascript
-const BOND_DOT_UD   = 0.012;   // vertical jitter — bonds' values, unchanged
-const BOND_DOT_LR   = 0.005;   // less sideways, so they drift up and down
-const BOND_DOT_DAMP = 0.93;
-const BOND_DOT_CONF = 1.55;    // confinement, x the valence radius
+const ATOM_SHELLS = { H: [1], He: [2], O: [2, 6] };      // electrons per shell
+const SHELL_FRAC  = { H: [1], He: [1], O: [0.149, 1] };  // radius, x valence
 ```
 
-`BOND_DOT_CONF` is the one number that had to be re-derived. In bonds the
-confinement is the outer edge of a thick valence *band*, which measured **1.49x
-the shell radius on O and 1.68x on H**; reactions has no such band, so a single
-1.55 stands in for it.
+Counts verified: H–H is 2 bonding + 0 on shells; **O=O is 4 bonding + 12 on
+shells = 16, two complete oxygens**; O–H is 2 + 7 = 9.
 
-**One dot per bonding electron**, so an O=O shows four where bonds always drew
-two. Reactions knows the bond order and four dots in the gap is the honest
-picture. Verified: H–H 2, O=O 4, O–H 2; none escape confinement over 400 steps
-on any pair; all finite.
+**Inner shells need a clamp.** The lifelike fraction is not enough on its own:
+this tab draws nuclei about 9x life so the nucleons are countable, and at 0.149
+an oxygen's inner shell lands at **13 px inside an 18.6 px nucleus** — its two
+inner electrons buried. bonds hits the same problem and solves it the same way,
+so `shellRadius` clamps any non-outer shell out to **1.4x the nucleus radius**.
+Measured after: nucleus 18.6, inner shell 26.1, valence 89.1.
 
-### Nuclei: the real thing, ported from bonds
+### Colour is per ATOM, not per element
+
+```javascript
+const ATOM_E_COLOUR = ['#4ea8ff', '#ff9a3c'];   // left atom, right atom
+```
+
+An O=O has two oxygens, and the whole point is being able to tell whose
+electrons are whose. So the left atom's are blue and the right atom's amber,
+whatever the elements are; inner shells stay grey.
+
+**The bonding electrons keep their home atom's colour wherever they are**, which
+is what makes pulling the bond apart legible — you watch each one go home.
+
+### Pulling them apart sends the electrons home
+
+```javascript
+const BOND_SHARE_HOLD = 1.4;   // x r0 — fully shared in to here
+const BOND_SHARE_GONE = 3.0;   // x r0 — fully home by here
+```
+
+`bondShare` slides each bonding electron's target from the gap between the atoms
+to a seat on its own atom's outer shell. Its wander is scaled by the same
+number, so a shared electron roams and a returned one settles.
+
+Measured on O=O: at 2.2x every bonding electron is already on its own side of
+the midpoint, and at 3.0x the mean distance from its own nucleus is **89 px
+against a valence radius of 89** — they have arrived exactly on the shell. A
+bond breaking is its electrons going home, and now it looks like it.
+
+### Nuclei: the real thing, ported from bonds### Nuclei: the real thing, ported from bonds
 
 Protons and neutrons packed into a sphere, not a "+" sprite. Bonds' own
 algorithm: rejection-sample points inside a sphere with a minimum separation,

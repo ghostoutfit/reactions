@@ -3967,27 +3967,10 @@ function drawNucleons(c, cx, cy, el, wobble) {
   c.textAlign = 'left'; c.textBaseline = 'alphabetic';
 }
 
-// ── Bond electrons, ported from the bonds repo's "shells" view ──────────────
-// Not an orbit and not a trail: two dots that WANDER in the region between the
-// nuclei, jittering, repelling each other, anchored loosely to the midpoint and
-// confined to the union of the two valence shells. That is bonds' picture of a
-// shared pair — electrons living in the space between, not running a path —
-// and it is the one thing this tab needs to show.
-//
-// Only the bonding electrons. The shell shading those dots normally sit inside
-// is deliberately not drawn, so nothing competes with them.
-const BOND_DOT_UD    = 0.012;   // vertical jitter, bonds' value
-const BOND_DOT_LR    = 0.005;   // horizontal jitter — less, so they drift up and
-                                // down rather than sliding along the bond
-const BOND_DOT_DAMP  = 0.93;    // velocity damping per frame
-const BOND_DOT_CONF  = 1.55;    // confinement radius, x the valence radius.
-                                // In bonds this is the outer edge of the thick
-                                // valence band, which measured 1.49x the shell
-                                // radius on O and 1.68x on H.
 // Where the tab opens, as a multiple of the natural bond length. Not 1.0: at
-// the natural length the two nuclei and their halos nearly touch, there is no
+// the natural length the two nuclei and their shells nearly touch, there is no
 // visible gap for the shared pair to live in, and the first thing the tab says
-// should be "these are two atoms with something between them".
+// should be "two atoms with something between them".
 const BOND_START_MULT = 1.55;
 
 // The lobe is drawn bigger and brighter than a faithful reading would make it
@@ -3995,17 +3978,9 @@ const BOND_START_MULT = 1.55;
 // `BOND_FIELD_SQUEEZE` its width.
 //
 // The cost is real and worth stating: brightness IS the energy reading here, so
-// boosting it means the top of the colour ramp is reached before the bond is
-// whole. Measured at 1.30, the lobe saturates over roughly 0.75x to 1.40x the
-// natural length — a band straddling the bottom of the well, where the bond is
-// 83% whole or better either side. It comes back off saturation below 0.75,
-// because the repulsive wall drops the held energy fast. At the 1.55x opening
-// separation the ramp sits at 0.89, bright but with headroom.
-//
-// So the colour says "as whole as it gets" across that band instead of
-// resolving 83% from 100%. The kJ/mol readout and the Morse curve still
-// separate them exactly; it is only the colour that runs out, and only where
-// the answer is "this bond is fine".
+// boosting it means the top of the colour ramp is reached before the atoms are
+// fully apart. The kJ/mol readout still separates those cases exactly; it is
+// only the colour that runs out.
 const BOND_FIELD_BOOST   = 1.30;
 const BOND_FIELD_SQUEEZE = 0.85;
 
@@ -4013,14 +3988,61 @@ const BOND_FIELD_SQUEEZE = 0.85;
 // energy is zero, and drawing that literally left a blank gap between the two
 // atoms — which says "there is no bond here", the opposite of what a bond at
 // rest is. The floor is the bond simply EXISTING; `work` is then what gets
-// added on top of it by stretching or squeezing.
-//
-// It sits at the bottom of the colour ramp (load 0), so a bond at rest is the
-// plain blue glow, and the purple and pink are what stretching does to it.
+// added on top of it by stretching or squeezing. It sits at the bottom of the
+// colour ramp, so a bond at rest is the plain blue glow.
 const BOND_FIELD_FLOOR = 0.35;
 
-const BOND_DOT_GLOW  = 17;      // px — bonds draws these at electronDotR 16.5
-const BOND_DOT_CORE  = 3;       // px — its core is a sixth of that
+// ── The shells view, ported from the bonds repo ─────────────────────────────
+// Every electron each atom has, on its shell, not just the bonding pair: a
+// gradient band at each occupied shell radius and a glowing dot per electron.
+// Reactions has never needed inner shells — the main tab is all valence — so
+// the configurations live here.
+const ATOM_SHELLS = { H: [1], He: [2], O: [2, 6] };   // electrons per shell
+// Shell radii as a fraction of the atom's valence radius. The inner figure is
+// bonds' own ratio for oxygen: shell 0 at 7 pm against shell 1 at 47.
+const SHELL_FRAC  = { H: [1], He: [1], O: [0.149, 1] };
+
+// Radius of shell `sh` on `el`, in canvas px. The lifelike inner fraction is
+// not enough on its own: this tab draws nuclei about 9x life so the nucleons
+// are countable, and at 0.149 an oxygen's inner shell lands at 13 px inside an
+// 18.6 px nucleus — its two inner electrons buried. bonds hits the same problem
+// and solves it the same way, clamping shell 0 out to 1.4x the nucleus radius.
+function shellRadius(el, sh, z) {
+  const vr = valenceRadius(el) * z;
+  const r = vr * ((SHELL_FRAC[el] || [1])[sh] ?? 1);
+  const last = (ATOM_SHELLS[el] || [1]).length - 1;
+  return sh === last ? r : Math.max(r, bondTabNucleusR(el) * 1.4);
+}
+
+// Colour-coded per ATOM, not per element — an O-O has two oxygens and you still
+// have to be able to tell whose electrons are whose when they separate.
+const ATOM_E_COLOUR = ['#4ea8ff', '#ff9a3c'];   // left atom, right atom
+const INNER_E_COLOUR = '#6e6e7d';               // inner shells, like bonds' grey
+
+// bonds' own wander constants for a shared pair, unchanged.
+const BOND_DOT_UD   = 0.012;   // vertical jitter
+const BOND_DOT_LR   = 0.005;   // less sideways, so they drift up and down
+const BOND_DOT_DAMP = 0.93;    // velocity damping per frame
+const BOND_DOT_CONF = 1.55;    // confinement radius, x the valence radius. In
+                               // bonds this is the outer edge of the thick
+                               // valence band, measured at 1.49x the shell
+                               // radius on O and 1.68x on H.
+
+const BOND_DOT_GLOW = 17;   // px — bonds draws these at electronDotR 16.5
+const BOND_DOT_CORE = 3;    // its core is a sixth of that
+const E_SPIN = 0.22;        // rad/s — the shells slowly turn, so nothing is dead
+
+// How shared the bonding electrons are: 1 sitting between the two atoms, 0 gone
+// home to their own. They let go as the bond is pulled apart, which is the
+// thing worth watching — a bond breaking is its electrons going home.
+const BOND_SHARE_HOLD = 1.4;   // x r0 — fully shared in to here
+const BOND_SHARE_GONE = 3.0;   // x r0 — fully home by here
+function bondShare(r, r0) {
+  const t = (r - BOND_SHARE_HOLD * r0) / ((BOND_SHARE_GONE - BOND_SHARE_HOLD) * r0);
+  if (t <= 0) return 1;
+  if (t >= 1) return 0;
+  return 1 - (t * t * (3 - 2 * t));
+}
 
 const bondTab = {
   on: false,
@@ -4028,8 +4050,10 @@ const bondTab = {
   sep: 0,            // px between the nuclei, measured, not nominal
   r0: 0,             // natural length for this pair
   dragging: false,
-  dots: [],          // the shared pair(s), wandering between the nuclei
+  dots: [],          // the bonding electrons, shared between the nuclei
+  shellE: [],        // every other electron, sitting on its own atom's shell
   wobble: 0,         // drives the nucleons' small per-particle jitter
+  spin: 0,           // the shells turn slowly
 };
 
 function bondTabEls() {
@@ -4056,7 +4080,8 @@ function bondTabReset() {
   const [a, b] = bondTabEls();
   bondTab.r0  = bondLen(a, b);
   bondTab.sep = bondTab.r0 * BOND_START_MULT;
-  initBondDots();
+  bondTab.spin = 0;
+  initBondElectrons();
 }
 
 // The two nuclei, in canvas coordinates, always symmetric about the centre.
@@ -4078,66 +4103,150 @@ function bondTabZoom() {
   return bondTab.r0 > 0 ? span / (bondTab.r0 * 3) : 1;
 }
 
-// One dot per bonding electron, so a double bond shows four. bonds always drew
-// two; reactions knows the bond order, and four dots in the gap is the honest
-// picture of an O=O. They start alternating above and below the axis.
-function initBondDots() {
-  const [a, b] = bondTabEls();
-  const n = bondOrder(a, b) * 2;
-  const A = bondTabAtoms()[0], B = bondTabAtoms()[1];
-  const cx = (A.x + B.x) / 2, cy = A.y;
-  const spread = (valenceRadius(a) + valenceRadius(b)) / 2 * bondTabZoom() * 0.3;
-  bondTab.dots = Array.from({ length: n }, (_, i) => ({
-    x: cx, y: cy + (i % 2 ? spread : -spread) * (1 + Math.floor(i / 2) * 0.6),
-    vx: 0, vy: 0, side: i % 2 ? 1 : -1, tier: Math.floor(i / 2),
-  }));
+// Build every electron on both atoms. Each knows which atom it belongs to, so
+// it keeps that atom's colour wherever it ends up.
+function initBondElectrons() {
+  const [ea, eb] = bondTabEls();
+  const order = bondOrder(ea, eb);
+  bondTab.shellE = [];
+  bondTab.dots = [];
+
+  [ea, eb].forEach((el, side) => {
+    const shells = ATOM_SHELLS[el] || [1];
+    const outer  = shells.length - 1;
+    // The ones this atom puts into the bond come off its outer shell.
+    let toBond = order;
+    shells.forEach((count, sh) => {
+      const spare = (sh === outer) ? Math.max(0, count - toBond) : count;
+      const bonding = (sh === outer) ? count - spare : 0;
+      // Evenly spaced round the shell, the bonding ones taken from the side
+      // that faces the other atom so they do not have to cross the nucleus.
+      for (let i = 0; i < count; i++) {
+        const ang = (i / count) * Math.PI * 2 + (side ? Math.PI / count : 0);
+        const e = { side, shell: sh, outer: sh === outer, ang,
+                    inner: sh !== outer };
+        if (i < bonding) bondTab.dots.push({ ...e, x: 0, y: 0, vx: 0, vy: 0,
+                                             slot: bondTab.dots.length });
+        else bondTab.shellE.push(e);
+      }
+      if (sh === outer) toBond = 0;
+    });
+  });
+
+  // Each bonding electron gets a side of the axis and a tier, so four of them
+  // on a double bond do not pile up.
+  bondTab.dots.forEach((d, i) => { d.dir = i % 2 ? 1 : -1; d.tier = Math.floor(i / 2); });
+  placeBondDots();
+}
+
+// Where a bonding electron would sit if it had gone home: on its own atom's
+// outer shell, at the angle its slot gives it.
+function bondDotHome(d, atoms, z) {
+  const at = atoms[d.side];
+  const R  = valenceRadius(at.el) * z;
+  const ang = d.ang + bondTab.spin;
+  return { x: at.x + Math.cos(ang) * R, y: at.y + Math.sin(ang) * R };
+}
+
+function placeBondDots() {
+  const atoms = bondTabAtoms(), z = bondTabZoom();
+  for (const d of bondTab.dots) {
+    const h = bondDotHome(d, atoms, z);
+    d.x = h.x; d.y = h.y;
+  }
 }
 
 function stepBondDots() {
-  const [A, B] = bondTabAtoms();
+  const atoms = bondTabAtoms();
+  const [A, B] = atoms;
   const z = bondTabZoom();
   const cy = A.y, midX = (A.x + B.x) / 2;
+  const share = bondShare(bondTab.sep, bondTab.r0);
   const confA = valenceRadius(A.el) * z * BOND_DOT_CONF;
   const confB = valenceRadius(B.el) * z * BOND_DOT_CONF;
   const avgConf = (confA + confB) / 2;
   const spread = (valenceRadius(A.el) + valenceRadius(B.el)) / 2 * z * 0.3;
 
-  for (const dot of bondTab.dots) {
-    const yTarget = cy + dot.side * spread * (1 + dot.tier * 0.6);
-    dot.vx += (Math.random() - 0.5) * avgConf * BOND_DOT_LR;
-    dot.vy += (Math.random() - 0.5) * avgConf * BOND_DOT_UD;
-    dot.vx += (midX - dot.x) * 0.025;       // held to the gap
-    dot.vy += (yTarget - dot.y) * 0.08;     // each to its own side
-    for (const other of bondTab.dots) {     // and apart from each other
-      if (other === dot) continue;
-      const dx = dot.x - other.x, dy = dot.y - other.y;
-      const d2 = dx * dx + dy * dy + 1;
-      const rep = avgConf * avgConf * 0.04 / d2;
-      dot.vx += rep * dx / Math.sqrt(d2);
-      dot.vy += rep * dy / Math.sqrt(d2);
-    }
-    dot.vx *= BOND_DOT_DAMP; dot.vy *= BOND_DOT_DAMP;
-    dot.x += dot.vx; dot.y += dot.vy;
+  for (const d of bondTab.dots) {
+    // Target is a blend: shared in the gap, or home on its own shell. `share`
+    // slides it from one to the other as the bond is pulled apart.
+    const home = bondDotHome(d, atoms, z);
+    const tx = midX * share + home.x * (1 - share);
+    const ty = (cy + d.dir * spread * (1 + d.tier * 0.6)) * share + home.y * (1 - share);
 
-    // Confined to the union of the two valence shells: outside BOTH, it is
-    // pulled back to whichever it is nearer. This is what keeps the pair
-    // looking shared rather than escaping down the screen.
-    const dA2 = (dot.x - A.x) ** 2 + (dot.y - cy) ** 2;
-    const dB2 = (dot.x - B.x) ** 2 + (dot.y - cy) ** 2;
+    // bonds' wander, scaled down as the electron settles onto its own atom —
+    // a shared electron roams, a returned one sits on its shell.
+    d.vx += (Math.random() - 0.5) * avgConf * BOND_DOT_LR * share;
+    d.vy += (Math.random() - 0.5) * avgConf * BOND_DOT_UD * share;
+    d.vx += (tx - d.x) * (0.025 + 0.14 * (1 - share));
+    d.vy += (ty - d.y) * (0.08  + 0.10 * (1 - share));
+    for (const o of bondTab.dots) {
+      if (o === d) continue;
+      const dx = d.x - o.x, dy = d.y - o.y, d2 = dx*dx + dy*dy + 1;
+      const rep = avgConf * avgConf * 0.04 / d2 * share;
+      d.vx += rep * dx / Math.sqrt(d2);
+      d.vy += rep * dy / Math.sqrt(d2);
+    }
+    d.vx *= BOND_DOT_DAMP; d.vy *= BOND_DOT_DAMP;
+    d.x += d.vx; d.y += d.vy;
+
+    // Confined to the union of the two valence shells, as in bonds.
+    const dA2 = (d.x - A.x) ** 2 + (d.y - cy) ** 2;
+    const dB2 = (d.x - B.x) ** 2 + (d.y - cy) ** 2;
     if (dA2 > confA * confA && dB2 > confB * confB) {
       const nearA = dA2 < dB2;
       const ax = nearA ? A.x : B.x, conf = nearA ? confA : confB;
-      const d = Math.sqrt(nearA ? dA2 : dB2);
-      dot.x = ax + (dot.x - ax) / d * conf * 0.97;
-      dot.y = cy + (dot.y - cy) / d * conf * 0.97;
-      dot.vx *= 0.2; dot.vy *= 0.2;
+      const dd = Math.sqrt(nearA ? dA2 : dB2);
+      d.x = ax + (d.x - ax) / dd * conf * 0.97;
+      d.y = cy + (d.y - cy) / dd * conf * 0.97;
+      d.vx *= 0.2; d.vy *= 0.2;
     }
   }
 }
 
+// One glowing dot: soft halo, tinted core. Inner-shell electrons are dimmer,
+// the way bonds draws them.
+function drawElectronDot(c, x, y, hex, dim) {
+  const rgb = hex.match(/\w\w/g).map(h => parseInt(h, 16)).join(',');
+  const g = c.createRadialGradient(x, y, 0, x, y, BOND_DOT_GLOW);
+  g.addColorStop(0,    'rgba(' + rgb + ',' + (dim ? 0.26 : 0.55) + ')');
+  g.addColorStop(0.45, 'rgba(' + rgb + ',' + (dim ? 0.10 : 0.22) + ')');
+  g.addColorStop(1,    'rgba(' + rgb + ',0)');
+  c.fillStyle = g;
+  c.beginPath(); c.arc(x, y, BOND_DOT_GLOW, 0, Math.PI * 2); c.fill();
+  c.fillStyle = 'rgba(' + rgb + ',' + (dim ? 0.4 : 0.92) + ')';
+  c.beginPath(); c.arc(x, y, BOND_DOT_CORE, 0, Math.PI * 2); c.fill();
+}
+
+// The shell bands: a gradient ring peaking at each occupied shell radius. The
+// outer shell's band is three times as wide, which is what makes the valence
+// shell read as the thick one the bond happens in.
+function drawShellBands(c, at, side, z) {
+  const shells = ATOM_SHELLS[at.el] || [1];
+  const fracs  = SHELL_FRAC[at.el] || [1];
+  const vr = valenceRadius(at.el) * z;
+  for (let sh = 0; sh < shells.length; sh++) {
+    const isOuter = sh === shells.length - 1;
+    const r = shellRadius(at.el, sh, z);
+    const hwBase = vr * 0.13;
+    const hw = isOuter ? hwBase * 3 : hwBase;
+    const hex = isOuter ? ATOM_E_COLOUR[side] : INNER_E_COLOUR;
+    const rgb = hex.match(/\w\w/g).map(h => parseInt(h, 16)).join(',');
+    const cc = t => 'rgba(' + rgb + ',' + (t * 0.30).toFixed(3) + ')';
+    const g = c.createRadialGradient(at.x, at.y, Math.max(0, r - hw), at.x, at.y, r + hw);
+    g.addColorStop(0.00, cc(0));    g.addColorStop(0.25, cc(0.08));
+    g.addColorStop(0.38, cc(0.65)); g.addColorStop(0.50, cc(1.00));
+    g.addColorStop(0.62, cc(0.65)); g.addColorStop(0.75, cc(0.08));
+    g.addColorStop(1.00, cc(0));
+    c.fillStyle = g;
+    c.beginPath(); c.arc(at.x, at.y, r + hw, 0, Math.PI * 2); c.fill();
+  }
+}
+
 function stepBondTab(dt) {
-  if (!bondTab.dots.length) initBondDots();
+  if (!bondTab.dots.length && !bondTab.shellE.length) initBondElectrons();
   bondTab.wobble += dt;
+  bondTab.spin += E_SPIN * dt;
   stepBondDots();
 }
 
@@ -4178,6 +4287,10 @@ function drawBondTab() {
   }];
   drawFieldHeatmap(ctx, seg, W, H);
 
+  // Shell bands under everything, so the electrons sit on top of their shells.
+  drawShellBands(ctx, A, 0, z);
+  drawShellBands(ctx, B, 1, z);
+
   // The two nuclei. No halo around them: the only glow on this screen should
   // be the bond's. An atom-coloured cloud at the valence radius read as a
   // second field, and the eye could not tell which of the two it was meant to
@@ -4191,19 +4304,20 @@ function drawBondTab() {
     ctx.fillText(at.el, at.x, at.y + r + 20);
   }
 
-  // The shared pair, over everything. A soft halo and a small solid core, the
-  // way bonds draws an electron in its shells view — no path, no trail, just
-  // where it is now.
+  // Every non-bonding electron, on its own atom's shell, in that atom's colour.
+  for (const e of bondTab.shellE) {
+    const at = [A, B][e.side];
+    const r  = shellRadius(at.el, e.shell, z);
+    const ang = e.ang + bondTab.spin;
+    drawElectronDot(ctx, at.x + Math.cos(ang) * r, at.y + Math.sin(ang) * r,
+                    e.inner ? INNER_E_COLOUR : ATOM_E_COLOUR[e.side], e.inner);
+  }
+
+  // The bonding electrons last, over everything. Each keeps the colour of the
+  // atom it came from, wherever on the bond it currently is — which is what
+  // makes pulling them apart legible: you watch each one go home.
   for (const dot of bondTab.dots) {
-    const col = ELEMENTS[(dot.side < 0 ? A : B).el].rgb;
-    const g = ctx.createRadialGradient(dot.x, dot.y, 0, dot.x, dot.y, BOND_DOT_GLOW);
-    g.addColorStop(0,    rgba(col, 0.55));
-    g.addColorStop(0.45, rgba(col, 0.22));
-    g.addColorStop(1,    rgba(col, 0));
-    ctx.fillStyle = g;
-    ctx.beginPath(); ctx.arc(dot.x, dot.y, BOND_DOT_GLOW, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = rgba(col, 0.92);
-    ctx.beginPath(); ctx.arc(dot.x, dot.y, BOND_DOT_CORE, 0, Math.PI * 2); ctx.fill();
+    drawElectronDot(ctx, dot.x, dot.y, ATOM_E_COLOUR[dot.side], false);
   }
 
   // A ring on each nucleus says "this is the handle".
