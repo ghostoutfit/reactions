@@ -1068,28 +1068,64 @@ O–H**; drag either nucleus and **both** move, symmetrically about the centre, 
 the bond stretches about its midpoint rather than one atom chasing the pointer.
 Separation is twice the pointer's distance from the centre.
 
-### Energy against separation is a Morse well
+### What the glow shows: energy STORED, not energy left
 
 ```
 V(r) = D (1 - exp(-a (r - r0)))^2      a = BOND_MORSE_A / r0,  BOND_MORSE_A = 1.5
 ```
 
-so what is still **in** the bond is `D - V`: full at the natural length, falling
-to nothing as it is pulled apart. The asymmetry is the point and comes free —
-stretching has a long tail, squeezing climbs a wall, because `exp(-a(r-r0))`
-runs away below `r0`. A spring would have given a symmetric parabola and said
-something false about short range.
+The glow is `V` — the work done moving the atoms off their natural separation.
+**0 at the natural length, rising toward the full bond energy as they are pulled
+apart.** So the lobe GROWS as you stretch.
 
-`a` scales with `r0`, so the curve has the same shape for every pair and only
-its depth differs, from the real `BOND_ENERGY` table: 436, 498, 463 kJ/mol.
-Measured: 1.00 at `r0`, 0.72 at 1.5, 0.40 at 2.0, 0.10 at 3.0.
+An earlier version had this backwards, drawing `D - V`, the energy still held in
+the bond, which *falls* as you pull. That is a real quantity, but it is not what
+a stretching bond looks like it is doing: the thing that grows as you pull is
+the work, and the glow should grow with it.
 
-**The squeeze floor is 0.6 r0, not 0.5.** The Morse form reaches zero held
-energy at **0.538 r0** on the compression side, so a 0.5 floor put the bottom of
-the drag range inside a dead zone reading a flat "0 kJ/mol" however hard you
-pushed. At 0.6 the wall is steep — 32% left — and still moving.
+The asymmetry comes free: stretching has a long tail, squeezing climbs a wall,
+because `exp(-a(r-r0))` runs away below `r0`. So **compressing stores energy
+too** — measured, 0.6x the natural length reads 337 kJ/mol on an O=O — which is
+right, since you are pushing against repulsion. A spring would have given a
+symmetric parabola and said something false about short range.
 
-### Electrons: the bonds repo's "shells" bond dots, ported
+**At the natural length the stored energy is zero and the lobe is at its
+dimmest.** That follows from the model rather than being a bug: nothing has been
+done to the bond yet.
+
+### ...and then it fades anyway
+
+```javascript
+const BOND_CONTACT_HOLD = 2.2;   // x r0 — full interaction out to here
+const BOND_CONTACT_GONE = 3.2;   // x r0 — nothing left by here
+```
+
+Pulled far enough the two atoms simply do not interact, so there is nothing
+between them to draw — **even though this is exactly where the stored energy is
+greatest.** The glow is the interaction; the number is the energy; they disagree
+at long range, and that disagreement is the point.
+
+| separation | stored | contact | readout | lobe |
+|---|---|---|---|---|
+| 1.0x | 0.00 | 1.0 | 0 kJ/mol | dimmest |
+| 1.55x (opens here) | 0.32 | 1.0 | 157 kJ/mol | blue |
+| 2.0x | 0.60 | 1.0 | 301 kJ/mol | purple |
+| 2.4x | 0.77 | 0.9 | 384 kJ/mol | pink, brightest |
+| 2.7x | 0.85 | 0.5 | 423 kJ/mol | pink, dimming |
+| 3.2x | 0.93 | 0.0 | **462 kJ/mol** | **gone** |
+
+**Colour follows the stored energy, not the fade.** `load: work`, so a
+nearly-broken bond stays pink right up until it stops being drawn, instead of
+washing back through purple to white on its way out — measured (174,40,176) at
+2.7x and (64,9,76) at 3.0x, the same hue at a fifth the brightness.
+
+### No energy-vs-separation graph
+
+There was one. It plotted the old, wrong quantity, and a corrected version would
+have duplicated what the lobe and the kJ/mol readout already say between them.
+Removed rather than fixed.
+
+### Electrons: the bonds repo's### Electrons: the bonds repo's "shells" bond dots, ported
 
 Not an orbit and not a trail. Two dots (four on a double bond) that **wander**
 in the region between the nuclei — jittering, repelling each other, anchored

@@ -773,17 +773,13 @@
     </div>
 
     <div class="ctrl-box-blue" style="align-items:stretch;">
-      <span class="ctrl-box-label ctrl-box-label-blue">ENERGY IN THE BOND</span>
+      <span class="ctrl-box-label ctrl-box-label-blue">ENERGY STORED</span>
       <div style="display:flex;flex-direction:column;gap:5px;justify-content:center;padding:8px 0;min-width:190px;">
-        <span id="bondEnergyVal" style="font-size:22px;font-weight:700;color:#c46cff;text-shadow:0 0 10px rgba(196,108,255,0.7);">436 kJ/mol</span>
-        <span id="bondEnergyPct" style="font-size:11px;opacity:0.6;">100% of a whole H&ndash;H bond</span>
-      </div>
-      <div style="display:flex;flex-direction:column;gap:4px;justify-content:center;padding:8px 0;">
-        <canvas id="bondCurve" width="190" height="74" style="display:block;border-radius:6px;"></canvas>
-        <span style="font-size:9px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.4;text-align:center;">Energy vs separation</span>
+        <span id="bondEnergyVal" style="font-size:22px;font-weight:700;color:#c46cff;text-shadow:0 0 10px rgba(196,108,255,0.7);">0 kJ/mol</span>
+        <span id="bondEnergyPct" style="font-size:11px;opacity:0.6;">of the 436 kJ/mol it takes to break an H&ndash;H</span>
       </div>
       <div style="display:flex;align-items:center;padding:8px 10px;max-width:210px;">
-        <span style="font-size:10px;opacity:0.55;line-height:1.5;">Drag either nucleus. Both move, so the bond stretches about its centre.</span>
+        <span style="font-size:10px;opacity:0.55;line-height:1.5;">Drag either nucleus &mdash; both move, so the bond stretches about its centre. Pull far enough and the glow fades: the energy is still there, but the atoms have stopped interacting.</span>
       </div>
     </div>
   </div>
@@ -3820,17 +3816,35 @@ window.runBreakTests = function (seconds = 180) {
 // drain away. It is the field lobe from the main tab, used as an instrument
 // rather than as scenery.
 //
-// Energy against separation is a Morse well, which is the shape chemistry
-// actually uses:
+// What the glow shows is the energy STORED by moving the atoms off their
+// natural separation — the work you have done pulling them apart to here. It is
+// the Morse potential itself:
 //
-//     V(r) = D (1 - exp(-a (r - r0)))^2        potential, 0 at r0, -> D far out
+//     V(r) = D (1 - exp(-a (r - r0)))^2       0 at r0, rising to D far out
 //
-// so what is still IN the bond is D - V, full at the natural length and falling
-// to nothing as it is pulled apart. The asymmetry is the point and comes free:
-// stretching has a long tail, squeezing climbs a wall, because exp(-a(r-r0))
-// runs away below r0. A spring would have given a symmetric parabola and said
-// something false about short range.
-const BOND_MORSE_A = 1.5;   // x 1/r0 — how quickly the bond gives up when pulled
+// An earlier version had this backwards, showing `D - V`, the energy still held
+// in the bond, which falls as you pull. That is a real quantity but it is not
+// what a stretching bond looks like it is doing: the thing that grows as you
+// pull is the work, and the glow should grow with it.
+//
+// The asymmetry comes free: stretching has a long tail, squeezing climbs a wall,
+// because exp(-a(r-r0)) runs away below r0. So compressing stores energy too,
+// which is right — you are pushing against repulsion. A spring would have given
+// a symmetric parabola and said something false about short range.
+//
+// At the natural length the stored energy is ZERO, and the lobe is at its
+// dimmest. That follows from the model rather than being a bug: nothing has
+// been done to the bond yet.
+const BOND_MORSE_A = 1.5;   // x 1/r0 — how quickly the well opens out
+
+// ...and then it has to fade anyway. Pulled far enough the two atoms simply do
+// not interact, so there is nothing between them to draw, even though this is
+// exactly where the stored energy is greatest. The glow is the INTERACTION; the
+// number is the energy. They disagree at long range and that disagreement is
+// the point — hence `bondContact`, which holds at 1 while the atoms still feel
+// each other and falls to 0 once they do not.
+const BOND_CONTACT_HOLD = 2.2;   // x r0 — full interaction out to here
+const BOND_CONTACT_GONE = 3.2;   // x r0 — nothing left by here
 
 // ── Real nuclei, ported from the bonds repo ─────────────────────────────────
 // Protons and neutrons, packed into a sphere, not a "+" sprite. Same algorithm
@@ -4013,10 +4027,19 @@ function bondTabEls() {
   return [a, b];
 }
 
-// Fraction of this pair's bond energy still held at the current separation.
-function bondHeldFraction(r, r0) {
+// Energy stored by being at r instead of r0, as a fraction of the full bond
+// energy. 0 at the natural length, approaching 1 pulled right apart.
+function bondWorkFraction(r, r0) {
   const x = 1 - Math.exp(-(BOND_MORSE_A / r0) * (r - r0));
-  return Math.max(0, 1 - x * x);
+  return Math.min(1, x * x);
+}
+
+// How much the two atoms still interact at all: 1 close in, smoothly 0 far out.
+function bondContact(r, r0) {
+  const t = (r - BOND_CONTACT_HOLD * r0) / ((BOND_CONTACT_GONE - BOND_CONTACT_HOLD) * r0);
+  if (t <= 0) return 1;
+  if (t >= 1) return 0;
+  return 1 - (t * t * (3 - 2 * t));     // smoothstep out
 }
 
 function bondTabReset() {
@@ -4116,11 +4139,12 @@ function drawBondTab() {
 
   const [A, B] = bondTabAtoms();
   const z = bondTabZoom();
-  const held = bondHeldFraction(bondTab.sep, bondTab.r0);
+  const work    = bondWorkFraction(bondTab.sep, bondTab.r0);
+  const contact = bondContact(bondTab.sep, bondTab.r0);
 
-  // The field lobe, through the same heatmap the main tab uses. `mag` carries
-  // the pair's real bond energy scaled by how much of it survives the stretch,
-  // so the lobe fades as you pull — the whole point of the tab.
+  // The field lobe, through the same heatmap the main tab uses. Brightness is
+  // the stored energy, so the lobe GROWS as you pull — then the contact
+  // envelope takes it away again once the atoms are too far apart to interact.
   const seg = [{
     x1: A.x, y1: A.y, x2: B.x, y2: B.y,
     // Scaled so the strongest bond at its natural length peaks EXACTLY at the
@@ -4128,14 +4152,17 @@ function drawBondTab() {
     // feature — it is what makes a collision flare read as a white core
     // spreading — but here the brightness is the reading, and a clipped core
     // throws away the top of the range just where the bond is most interesting.
-    mag: bondEnergy(A.el, B.el) / BOND_ENERGY_MAX * held * FIELD_GAIN * BOND_FIELD_BOOST,
+    mag: bondEnergy(A.el, B.el) / BOND_ENERGY_MAX * work * contact * FIELD_GAIN * BOND_FIELD_BOOST,
     // Narrower than the main tab's lobe. FIELD_WIDTH is a fraction of the bond
     // LENGTH and the gaussian reaches 2.5 sigma, so a squeeze of 1 gave a lobe
     // reaching ~193 px either side of a 257 px bond — taller than the bond is
     // long, which reads as a blob with two nuclei in it. 0.5 puts the reach at
     // about a third of the length, and the bond is the shape again.
     squeeze: BOND_FIELD_SQUEEZE,
-    load: 1 - held,            // colours it: whole bond white, stretched pink
+    // Colour follows the stored energy, NOT the fade: a nearly-broken bond is
+    // pink right up until it stops being drawn at all, rather than washing back
+    // through purple to white on its way out.
+    load: work,
   }];
   drawFieldHeatmap(ctx, seg, W, H);
 
@@ -4180,48 +4207,17 @@ function drawBondTab() {
   ctx.textAlign = 'left';
 }
 
-// The Morse curve itself, with a dot where the bond currently sits.
-function drawBondCurve() {
-  const cv = document.getElementById('bondCurve');
-  if (!cv || !bondTab.r0) return;
-  const c = cv.getContext('2d');
-  const W = cv.width, H = cv.height, PAD = 6;
-  c.clearRect(0, 0, W, H);
-  c.fillStyle = 'rgba(255,255,255,0.04)';
-  c.fillRect(0, 0, W, H);
-  const rMin = bondTab.r0 * 0.6, rMax = bondTab.r0 * 3.2;
-  const px = r => PAD + (r - rMin) / (rMax - rMin) * (W - PAD * 2);
-  const py = f => H - PAD - f * (H - PAD * 2);
-  c.beginPath();
-  for (let i = 0; i <= 120; i++) {
-    const r = rMin + (rMax - rMin) * (i / 120);
-    const x = px(r), y = py(bondHeldFraction(r, bondTab.r0));
-    if (i === 0) c.moveTo(x, y); else c.lineTo(x, y);
-  }
-  c.strokeStyle = '#c46cff'; c.lineWidth = 1.8;
-  c.shadowBlur = 8; c.shadowColor = '#c46cff';
-  c.stroke(); c.shadowBlur = 0;
-  // the natural length, marked
-  c.strokeStyle = 'rgba(255,255,255,0.18)'; c.lineWidth = 1;
-  c.beginPath(); c.moveTo(px(bondTab.r0), PAD); c.lineTo(px(bondTab.r0), H - PAD); c.stroke();
-  // where we are now
-  const r = Math.min(rMax, Math.max(rMin, bondTab.sep));
-  c.fillStyle = '#fff';
-  c.beginPath(); c.arc(px(r), py(bondHeldFraction(bondTab.sep, bondTab.r0)), 3.5, 0, Math.PI * 2); c.fill();
-}
-
 function updateBondReadout() {
   const [a, b] = bondTabEls();
-  const held = bondHeldFraction(bondTab.sep, bondTab.r0);
+  const work = bondWorkFraction(bondTab.sep, bondTab.r0);
   const full = bondEnergy(a, b);
   const sepEl = document.getElementById('bondSep');
   const valEl = document.getElementById('bondEnergyVal');
   const pctEl = document.getElementById('bondEnergyPct');
   if (sepEl) sepEl.textContent = (bondTab.sep / bondTab.r0).toFixed(2) + '\u00d7 natural';
-  if (valEl) valEl.textContent = Math.round(full * held) + ' kJ/mol';
-  if (pctEl) pctEl.textContent = Math.round(held * 100) + '% of a whole ' +
-    a + '\u2013' + b + ' bond';
-  drawBondCurve();
+  if (valEl) valEl.textContent = Math.round(full * work) + ' kJ/mol';
+  if (pctEl) pctEl.textContent = Math.round(work * 100) + '% of the ' +
+    full + ' kJ/mol it takes to break an ' + a + '\u2013' + b;
 }
 
 // ── Dragging ──────────────────────────────────────────────────────────────────
