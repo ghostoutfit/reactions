@@ -1118,39 +1118,44 @@ two. Reactions knows the bond order and four dots in the gap is the honest
 picture. Verified: H–H 2, O=O 4, O–H 2; none escape confinement over 400 steps
 on any pair; all finite.
 
-### Nuclei: 3x the BONDS sim's, measured
+### Nuclei: the real thing, ported from bonds
+
+Protons and neutrons packed into a sphere, not a "+" sprite. Bonds' own
+algorithm: rejection-sample points inside a sphere with a minimum separation,
+build an adjacency graph, then assign protons to the sites with the **fewest
+proton neighbours first**, so like charges end up spread rather than clumped.
 
 ```javascript
-const BONDS_NUC_FRACTION = { H: 0.0257, O: 0.0328, He: 0.0290 };
-const BOND_NUC_SCALE = 3;
+const NUC_PARTICLE_R = 10;   // bonds' PARTICLE_RADIUS — the packing's own unit
+const NUC_NUCLEON_R  = 6;    // drawn radius in canvas px — the legibility knob
+const NUCLEONS = { H: [1,0], O: [8,8], He: [2,2] };
 ```
 
-Measured in the bonds sim rather than guessed, as a fraction of that atom's
-valence-shell radius — the only scale-free way to carry it across, since the two
-sims use different px-per-pm:
+**Size had to stop being about proportion.** The honest figure — measured in the
+bonds sim — is that a nucleus is **2.6–3.3%** of its valence shell (H 12.31/480,
+O 31.03/945). Even at 3x that an oxygen is 6.1 px across and its sixteen
+nucleons about **1.5 px each**: invisible, which defeats the point of drawing
+them. So the *nucleon* is the fixed size and the nucleus is however big the
+packing makes it. An O lands at **18.6 px of radius** against a ~65 px valence
+shell — roughly 9x life, and you can count the particles.
 
-| | nucleus | valence shell | fraction |
-|---|---|---|---|
-| H | 12.31 | 480 | **0.0257** |
-| O | 31.03 | 945 | **0.0328** |
+| | nucleons | drawn radius |
+|---|---|---|
+| H | 1 p | 7.4 px |
+| He | 2 p + 2 n | 11.7 px |
+| O | 8 p + 8 n | 18.6 px |
 
-A nucleus there is a couple of percent of the shell it sits in, so 3x that is
-still small: **4.8 px radius for H, 6.1 px for O** in this tab. The fraction
-differs by element because bonds builds a nucleus out of nucleons and its radius
-grows as the cube root of their number — an O has 16 to an H's 1, so it is 2.5x
-the ball. Worth keeping: it is what makes an O–H look like what it is.
+Verified: proton/neutron counts correct for all three, minimum separation
+**20.8** against an allowed 20.8 (the packing constraint is tight, not
+violated), and the arrangement is **deterministic** — seeded from the element,
+so switching pairs and back does not reshuffle a diagram.
 
-Two earlier readings of "3x" were tried and rejected, both by looking:
+Each nucleon gets a small per-particle wobble so a nucleus is not a dead
+diagram, and they are drawn back to front by `z` so the ball reads as a ball.
+Cost at the heaviest pair (O=O, 32 nucleons, each a base gradient plus a
+shadow-blurred core): **0.19 ms/frame** against a 16.7 ms budget.
 
-- **3x this tab's own nuclei** put the nucleus radius at 2.08x the *valence*
-  radius. The electrons ran inside the nucleus and the picture vanished.
-- **3x the main tab's 12 px** gave a 36 px ball — workable, but 8.5x the
-  proportion bonds actually uses.
-
-Because the nuclei are now only a few px, the drag hit radius stays at 40 px and
-the grab rings are what you actually aim at.
-
-### Two things the main tab's lobe does that this tab must not
+### Two things the main tab's lobe does that this tab must not### Two things the main tab's lobe does that this tab must not
 
 - **It clips.** `FIELD_GAIN` is set so resting bonds sit at the top of the ramp
   and collisions drive past it, because a flare reading as a white core

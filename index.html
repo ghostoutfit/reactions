@@ -3832,27 +3832,125 @@ window.runBreakTests = function (seconds = 180) {
 // something false about short range.
 const BOND_MORSE_A = 1.5;   // x 1/r0 — how quickly the bond gives up when pulled
 
-// Nuclei at 3x the size the BONDS sim draws them, which is the referent that
-// matters when the rest of this view is ported from there.
+// ── Real nuclei, ported from the bonds repo ─────────────────────────────────
+// Protons and neutrons, packed into a sphere, not a "+" sprite. Same algorithm
+// bonds uses: random rejection-sampled points inside a sphere with a minimum
+// separation, then protons assigned to the sites with the fewest proton
+// neighbours first so like charges end up spread rather than clumped.
 //
-// Measured in the bonds sim rather than guessed, as a fraction of that atom's
-// valence-shell radius — the only scale-free way to carry it across, since the
-// two sims have different px-per-pm:
-//
-//     H   nucleus 12.31 / shell 480  = 0.0257
-//     O   nucleus 31.03 / shell 945  = 0.0328
-//
-// A nucleus there is a couple of percent of the shell it sits in, which is
-// roughly honest: a real one is far smaller still. The ratio differs by element
-// because bonds builds the nucleus out of nucleons and its radius grows as the
-// cube root of their number — an O has 16 to an H's 1, so it is 2.5x the ball.
-// That asymmetry is worth keeping: it is what makes an O-H look like what it is.
-const BONDS_NUC_FRACTION = { H: 0.0257, O: 0.0328, He: 0.0290 };
-const BOND_NUC_SCALE = 3;
+// SIZE. The honest proportion is hopeless here: a nucleus in bonds is 2.6-3.3%
+// of its valence shell, so even at 3x that an oxygen would be 6.1 px across and
+// its sixteen nucleons about 1.5 px each — invisible, which defeats the point
+// of drawing them at all. So the NUCLEON is the fixed size, and the nucleus is
+// however big the packing makes it. An O ends up ~19 px of radius against a
+// ~65 px valence shell, roughly 9x life, and you can count the particles.
+const NUC_PARTICLE_R = 10;    // bonds' PARTICLE_RADIUS, the packing's own unit
+const NUC_NUCLEON_R  = 6;     // drawn radius in canvas px — the legibility knob
+const NUCLEONS = { H: [1, 0], O: [8, 8], He: [2, 2] };   // [protons, neutrons]
 
-// Radius in canvas px for this tab's nuclei.
-function bondTabNucleusR(el, z) {
-  return BOND_NUC_SCALE * (BONDS_NUC_FRACTION[el] || 0.03) * valenceRadius(el) * z;
+const _nucCache = new Map();
+function nucleusFor(el) {
+  if (_nucCache.has(el)) return _nucCache.get(el);
+  const [nP, nN] = NUCLEONS[el] || [1, 0];
+  const n = nP + nN;
+  // Seeded so an element's nucleus is the same arrangement every time — it is
+  // a diagram, and it should not reshuffle when you switch pairs and back.
+  let seed = (el.charCodeAt(0) * 7919 + n) >>> 0;
+  const rand = () => { seed = (seed * 1664525 + 1013904223) & 0xffffffff; return (seed >>> 0) / 0xffffffff; };
+
+  const packFrac = 0.62;
+  const vol = n * (4/3 * Math.PI * NUC_PARTICLE_R ** 3) / packFrac;
+  const sphereR = Math.cbrt(vol * 3 / (4 * Math.PI)) * 1.05;
+  const minDistSq = (NUC_PARTICLE_R * 2.08) ** 2;
+
+  const pts = [];
+  for (let i = 0; i < n; i++) {
+    let placed = false;
+    for (let attempt = 0; attempt < 8000 && !placed; attempt++) {
+      const r = sphereR * Math.cbrt(rand());
+      const th = Math.acos(2 * rand() - 1), phi = 2 * Math.PI * rand();
+      const lx = r*Math.sin(th)*Math.cos(phi), ly = r*Math.sin(th)*Math.sin(phi), lz = r*Math.cos(th);
+      if (pts.every(q => (q.lx-lx)**2 + (q.ly-ly)**2 + (q.lz-lz)**2 >= minDistSq)) {
+        pts.push({ lx, ly, lz }); placed = true;
+      }
+    }
+    if (!placed) {   // rather than stack them at the centre
+      const r = sphereR * 0.6 * rand();
+      const th = Math.acos(2 * rand() - 1), phi = 2 * Math.PI * rand();
+      pts.push({ lx: r*Math.sin(th)*Math.cos(phi), ly: r*Math.sin(th)*Math.sin(phi), lz: r*Math.cos(th) });
+    }
+  }
+
+  // Protons to the least-crowded sites first, the way bonds does it.
+  const adjT2 = (NUC_PARTICLE_R * 2.9) ** 2;
+  const adj = pts.map(() => []);
+  for (let i = 0; i < n; i++) for (let j = i+1; j < n; j++) {
+    const d2 = (pts[i].lx-pts[j].lx)**2 + (pts[i].ly-pts[j].ly)**2 + (pts[i].lz-pts[j].lz)**2;
+    if (d2 < adjT2) { adj[i].push(j); adj[j].push(i); }
+  }
+  const types = new Array(n).fill('neutron');
+  const nbCount = new Array(n).fill(0);
+  const order = Array.from({ length: n }, (_, i) => i).sort(() => rand() - 0.5);
+  let placedP = 0;
+  for (let priority = 0; priority <= 6 && placedP < nP; priority++) {
+    for (const i of order) {
+      if (placedP >= nP) break;
+      if (types[i] === 'proton' || nbCount[i] !== priority) continue;
+      types[i] = 'proton'; placedP++;
+      for (const nb of adj[i]) nbCount[nb]++;
+    }
+  }
+
+  const nuc = { pts: pts.map((q, i) => ({ ...q, type: types[i], i })), sphereR, nP, nN };
+  _nucCache.set(el, nuc);
+  return nuc;
+}
+
+// Radius in canvas px of this tab's nucleus for `el`.
+function bondTabNucleusR(el) {
+  return nucleusFor(el).sphereR / NUC_PARTICLE_R * NUC_NUCLEON_R;
+}
+
+// bonds' particle look: soft-edged base, a glowing core, and a + on protons.
+// Drawn back to front by z so the ball reads as a ball.
+function drawNucleons(c, cx, cy, el, wobble) {
+  const nuc = nucleusFor(el);
+  const k = NUC_NUCLEON_R / NUC_PARTICLE_R;
+  const R = NUC_NUCLEON_R;
+  const sorted = [...nuc.pts].sort((a, b) =>
+    (a.lz - b.lz) || ((a.type === 'proton') - (b.type === 'proton')));
+  for (const p of sorted) {
+    // A little life, so a nucleus is not a dead diagram. Per-particle phase.
+    const jx = Math.sin(wobble * 1.7 + p.i * 2.3) * R * 0.09;
+    const jy = Math.cos(wobble * 1.3 + p.i * 1.7) * R * 0.09;
+    const px = cx + p.lx * k + jx, py = cy + p.ly * k + jy;
+    const isP = p.type === 'proton';
+    const mid  = isP ? '#ff1a65' : '#70707f';
+    const core = isP ? '#ff80b0' : '#b0b0c4';
+
+    const base = c.createRadialGradient(px, py, 0, px, py, R * 1.1);
+    base.addColorStop(0, mid); base.addColorStop(0.82, mid);
+    base.addColorStop(1, 'rgba(0,0,0,0)');
+    c.fillStyle = base;
+    c.beginPath(); c.arc(px, py, R * 1.1, 0, Math.PI * 2); c.fill();
+
+    const inner = c.createRadialGradient(px, py, 0, px, py, R);
+    inner.addColorStop(0, core); inner.addColorStop(0.5, core);
+    inner.addColorStop(1, 'rgba(0,0,0,0)');
+    c.save();
+    c.shadowColor = core; c.shadowBlur = 8; c.globalAlpha = 0.82;
+    c.fillStyle = inner;
+    c.beginPath(); c.arc(px, py, R, 0, Math.PI * 2); c.fill();
+    c.restore();
+
+    if (isP) {
+      c.fillStyle = 'rgba(255,255,255,0.88)';
+      c.font = 'bold ' + Math.max(6, Math.round(11 * R / 10)) + 'px Lexend, sans-serif';
+      c.textAlign = 'center'; c.textBaseline = 'middle';
+      c.fillText('+', px, py + 1);
+    }
+  }
+  c.textAlign = 'left'; c.textBaseline = 'alphabetic';
 }
 
 // ── Bond electrons, ported from the bonds repo's "shells" view ──────────────
@@ -3882,6 +3980,7 @@ const bondTab = {
   r0: 0,             // natural length for this pair
   dragging: false,
   dots: [],          // the shared pair(s), wandering between the nuclei
+  wobble: 0,         // drives the nucleons' small per-particle jitter
 };
 
 function bondTabEls() {
@@ -3980,6 +4079,7 @@ function stepBondDots() {
 
 function stepBondTab(dt) {
   if (!bondTab.dots.length) initBondDots();
+  bondTab.wobble += dt;
   stepBondDots();
 }
 
@@ -4022,9 +4122,7 @@ function drawBondTab() {
     g.addColorStop(1, rgba(ELEMENTS[at.el].rgb, 0));
     ctx.fillStyle = g;
     ctx.beginPath(); ctx.arc(at.x, at.y, r, 0, Math.PI * 2); ctx.fill();
-    // drawNucleus draws a ball of nucleusDiameter x scale, so scale is the
-    // wanted radius over the sprite's own.
-    drawNucleus(ctx, at.x, at.y, bondTabNucleusR(at.el, z) / (nucleusDiameter / 2), 1);
+    drawNucleons(ctx, at.x, at.y, at.el, bondTab.wobble);
     ctx.fillStyle = 'rgba(255,255,255,0.75)';
     ctx.font = '600 ' + Math.round(13 * Math.min(2, z)) + 'px Inter, system-ui, sans-serif';
     ctx.textAlign = 'center';
