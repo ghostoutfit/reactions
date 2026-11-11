@@ -1829,6 +1829,7 @@ const world = {
   w: 0, h: 0,          // wrap dimensions
   top: 0,              // canvas y of the world's top edge
   bodies: [],
+  breaking: [],        // molecules a collision pulled apart, pending replacement
   time: 0,             // seconds of simulated time since the last respawn
 };
 
@@ -1983,6 +1984,7 @@ function spreadSpeed(mean) {
 function spawnWorld() {
   syncWorldBox();
   world.bodies = [];
+  world.breaking.length = 0;
   world.time = 0;
 
   // Interleave the species so a crowded world does not end up with all the H2
@@ -2019,6 +2021,7 @@ function spawnWorld() {
     world.bodies.push(placed);
   }
   spinCapHits = 0; floorTopUps = 0; energyCreated = 0;
+  breakCount = 0; hardnessPeak = 0;
   lastDialSpeed = launchSpeed() * tempCurrent;
   resetEnergyTrace();
   updateSpeciesCounters();
@@ -2044,6 +2047,11 @@ function stepWorld(dt) {
       collidePair(world.bodies[i], world.bodies[j]);
     }
   }
+
+  // Anything the collisions pulled apart is replaced here, after the pass —
+  // never inside it, where splicing world.bodies would shift the loop's indices
+  // out from under it and let a pair be missed or tested twice.
+  stepDissociation();
 }
 
 // Velocity of a point on a rigid body, including its spin.
@@ -2257,6 +2265,10 @@ function collidePair(A, B) {
       A.flare = Math.min(1, A.flare + jImp / (A.mass * Math.max(1, A.vTarget)));
       B.flare = Math.min(1, B.flare + jImp / (B.mass * Math.max(1, B.vTarget)));
 
+      // Hard enough to pull apart? Measured per collision, per molecule.
+      queueIfBroken(A, jImp);
+      queueIfBroken(B, jImp);
+
       // Push the pair apart so they do not stay interlocked and re-collide
       const overlap = minDist - dist;
       const push = overlap / (1 / A.mass + 1 / B.mass) * 0.8;
@@ -2267,6 +2279,94 @@ function collidePair(A, B) {
       return;   // one contact per pair per frame keeps the response stable
     }
   }
+}
+
+// ─── Dissociation ─────────────────────────────────────────────────────────────
+// A hard enough collision pulls a molecule apart. One-way, for now: the halves
+// drift off as free atoms and nothing puts them back, so a hot world gradually
+// comes apart until there is nothing left to break.
+//
+// The hardness of a hit, as the flare already measures it, is
+//     jImp / (mass x nominal speed)
+// which is about 1 for a square hit at the speed that species normally travels.
+// That number is deliberately scale-free — it reads the same at any dial setting
+// AND at any temperature, which is exactly what a flare wants and exactly what
+// breaking must not have. So this divides by the species' speed at temperature
+// 1 instead. The dial still cancels; the temperature does not. At Low the
+// hardness of a hit is the flare's number, around 1; at High everything is
+// moving 3x faster, so the same geometry of hit lands around 3x harder, and
+// `breakHardness` sits in the gap. Dissociation is then a consequence of being
+// hot, not a mode that gets switched on with the Temp button.
+let breakBonds    = true;   // dev toggle
+// 4.0 is set from the measured hit distribution, not guessed. Over 900 s at
+// Low the hardest hit in the whole world was 2.80, and the threshold an H-H
+// actually faces is 4.0 x 436/498 = 3.50 — so Low never breaks anything, with
+// 25% of margin on the worst hit seen in fifteen minutes. Verified: 0 breaks in
+// 900 s at Low. At High the same geometry of hit lands 3x harder and 4 to 6 of
+// the 6 molecules come apart over the first couple of minutes.
+let breakHardness = 4.0;    // hits at or above this break a bond, at temp 1 scale
+let breakKick     = 0.22;   // separation speed given to the halves, x nominal
+let breakCount    = 0;      // diagnostics: molecules broken this run
+let hardnessPeak  = 0;      // diagnostics: hardest hit seen this run
+
+// Bond strength relative to the strongest bond in the table, so an O=O takes a
+// harder hit to break than an H-H — 498 against 436, about 14% more.
+function breakThreshold(b) {
+  if (b.els.length < 2) return Infinity;
+  const weakest = Math.min(...b.bonds.map(([i, k]) =>
+    bondEnergy(b.atoms[i].el, b.atoms[k].el)));
+  return breakHardness * (weakest / BOND_ENERGY_MAX);
+}
+
+function queueIfBroken(b, jImp) {
+  if (!breakBonds || b.els.length < 2 || b.broken) return;
+  // vTarget carries the temperature; dividing it out leaves this species at
+  // temp 1, which is the fixed yardstick the threshold is quoted against.
+  const ref = Math.max(1, b.vTarget / Math.max(0.2, tempCurrent));
+  const hardness = jImp / (b.mass * ref);
+  if (hardness > hardnessPeak) hardnessPeak = hardness;
+  if (hardness < breakThreshold(b)) return;
+  b.broken = hardness;                 // collected after the collision pass
+  world.breaking.push(b);
+}
+
+// Replace one body with one free atom per atom it had. Each fragment keeps the
+// velocity that its own atom actually had at that instant — the body's velocity
+// plus the spin's contribution at that offset — so a molecule that was spinning
+// fast throws its halves apart harder, without any of it being invented.
+function breakBody(b) {
+  const idx = world.bodies.indexOf(b);
+  if (idx < 0) return [];
+  const ca = Math.cos(b.angle), sa = Math.sin(b.angle);
+
+  // Outward unit vector per atom, from the molecule's centre: the direction the
+  // bond was holding it in against.
+  const made = b.atoms.map((at, k) => {
+    const rx = at.lx * ca - at.ly * sa, ry = at.lx * sa + at.ly * ca;
+    const [vx, vy] = pointVel(b, rx, ry);
+    const len = Math.hypot(rx, ry) || 1;
+    const nominal = speciesSpeed([at.el]);
+    const kick = breakKick * nominal;
+
+    const f = withElectrons(makeBody([at.el], b.x + rx, b.y + ry, 0, 0, 0, nominal));
+    f.vx = vx + kick * rx / len;
+    f.vy = vy + kick * ry / len;
+    f.spin = 0;                 // a lone atom has nothing to spin about
+    f.flare = b.flare;
+    f.fromBreak = true;
+    return f;
+  });
+
+  world.bodies.splice(idx, 1, ...made);
+  breakCount++;
+  return made;
+}
+
+function stepDissociation() {
+  if (!world.breaking.length) return;
+  for (const b of world.breaking) breakBody(b);
+  world.breaking.length = 0;
+  updateSpeciesCounters();
 }
 
 function energyOfMotion() {
@@ -2309,7 +2409,12 @@ function updateSpeciesCounters() {
     const f = formulaOf(b.els);
     tally.set(f, (tally.get(f) || 0) + 1);
   }
-  const rows = [...tally.entries()];
+  // Biggest populations first. Before bonds could break there were only ever
+  // two species and the order never mattered; now a broken world can hold four
+  // (H2, O2, H, O) with only two slots to show them in, so the two slots at
+  // least go to the two there are most of, rather than to whichever happens to
+  // sit earliest in world.bodies.
+  const rows = [...tally.entries()].sort((a, b) => b[1] - a[1]);
 
   slots.forEach((slot, k) => {
     const [formula, n] = rows[k] || [];
@@ -2814,6 +2919,16 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     '<div id="devLoneNote" style="opacity:0.45;font-size:10px;margin-left:21px;"></div>' +
     '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
     '<div style="font-size:9px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.4;margin-top:8px;">' +
+      'Bond breaking</div>' +
+    '<label style="display:flex;align-items:center;gap:7px;margin:9px 0 2px;cursor:pointer;">' +
+      '<input type="checkbox" id="devBreak" style="margin:0">' +
+      '<span>Hard hits break bonds</span>' +
+    '</label>' +
+    '<div id="devBreakNote" style="opacity:0.45;font-size:10px;margin-left:21px;"></div>' +
+    row('devBreakH', 'Break threshold', 0.5, 6, 0.1, breakHardness, '#ffc24a') +
+    row('devBreakK', 'Fragment kick',   0,   1, 0.02, breakKick,    '#ffc24a') +
+    '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
+    '<div style="font-size:9px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.4;margin-top:8px;">' +
       'Energy in fields</div>' +
     row('devLobeW',   'Lobe width',      0.1,  0.8, 0.02, FIELD_WIDTH, '#46a5ff') +
     row('devLobeGain','Lobe brightness', 0.5,  4,   0.1,  FIELD_GAIN,  '#46a5ff') +
@@ -2856,6 +2971,8 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   bind('devERad',   v => eRadial     = v, false, v => v.toFixed(2));
   bind('devETilt',  v => eTilt       = v, false, v => v.toFixed(2));
   bind('devCircR',  v => bondCircleR = v, false, v => v.toFixed(2) + '\u00d7');
+  bind('devBreakH', v => breakHardness = v, false, v => v.toFixed(1));
+  bind('devBreakK', v => breakKick     = v, false, v => v.toFixed(2) + '\u00d7');
   bind('devLoneR',  v => loneRadius  = v, false, v => v.toFixed(2) + '\u00d7');
   bind('devLoneS',  v => loneSpeed   = v, false, v => v.toFixed(3));
   bind('devNucleus', v => nucleusDiameter = v, false, v => v + ' px');
@@ -2914,6 +3031,22 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     bondCircles = circles.checked;
     syncCirclesNote();
     logAction('H₂ bond circles ' + (bondCircles ? 'on' : 'off'));
+  });
+
+  // Bond breaking on/off, and how hard a hit has to be
+  const brk = panel.querySelector('#devBreak');
+  const brkNote = panel.querySelector('#devBreakNote');
+  const syncBreakNote = () => {
+    brkNote.textContent = breakBonds
+      ? 'One-way: the halves drift off as free atoms'
+      : 'Molecules survive any hit';
+  };
+  brk.checked = breakBonds;
+  syncBreakNote();
+  brk.addEventListener('change', () => {
+    breakBonds = brk.checked;
+    syncBreakNote();
+    logAction('Bond breaking ' + (breakBonds ? 'on' : 'off'));
   });
 
   // Speed band on/off — off is the pure elastic result
@@ -3114,6 +3247,72 @@ window.speedHistogram = function (bins = 9) {
       (lo + i * w).toFixed(0).padStart(5) + ' |' + '█'.repeat(c)));
   }
   return rows;
+};
+
+// How hard do collisions actually hit, and what does that do to the world?
+// Runs headless — stepWorld is driven directly, so this does not wait on real
+// time or on the GO button — then puts the world back as it found it.
+//
+// The first table is the hit distribution with breaking OFF, which is what the
+// threshold has to be chosen against: `breakHardness` wants to sit above Low's
+// max and inside High's tail. Remember that the threshold a bond actually faces
+// is scaled by its own energy, so an H-H sees breakHardness x 436/498.
+// The second is what that threshold does: when each molecule came apart.
+window.runBreakTests = function (seconds = 180) {
+  const save = { on: breakBonds, t: tempCurrent, tt: tempTarget,
+                 n: breakCount, pk: hardnessPeak };
+  const setTemp = temp => {
+    tempTarget = tempCurrent = temp;
+    for (const b of world.bodies) { b.vx *= temp; b.vy *= temp; b.spin *= temp; b.vTarget *= temp; }
+  };
+
+  // 1. the distribution, unbroken
+  const hs = [];
+  const realQueue = window.queueIfBroken;
+  window.queueIfBroken = (b, jImp) => {
+    if (b.els.length < 2) return;
+    hs.push(jImp / (b.mass * Math.max(1, b.vTarget / Math.max(0.2, tempCurrent))));
+  };
+  breakBonds = false;
+  const dist = [1, TEMP_HIGH].map(temp => {
+    spawnWorld(); setTemp(temp); hs.length = 0;
+    for (let i = 0; i < seconds * 60; i++) stepWorld(1 / 60);
+    const s = hs.slice().sort((a, b) => a - b);
+    const q = p => +(s[Math.min(s.length - 1, Math.floor(p * s.length))] || 0).toFixed(2);
+    return { temp: temp + '×', hits: s.length, p50: q(0.5), p90: q(0.9), p99: q(0.99),
+             max: +(s[s.length - 1] || 0).toFixed(2),
+             'over H-H thr': s.filter(v => v >= breakHardness * 436 / BOND_ENERGY_MAX).length,
+             'over O=O thr': s.filter(v => v >= breakHardness).length };
+  });
+  window.queueIfBroken = realQueue;
+
+  // 2. what the threshold does
+  breakBonds = true;
+  const runs = [1, TEMP_HIGH].map(temp => {
+    spawnWorld(); setTemp(temp);
+    const started = world.bodies.length;
+    const at = []; let seen = 0;
+    for (let i = 0; i < seconds * 60; i++) {
+      stepWorld(1 / 60);
+      while (seen < breakCount) { at.push(+(i / 60).toFixed(1)); seen++; }
+    }
+    return { temp: temp + '×', 'of': started, broke: breakCount,
+             'still whole': world.bodies.filter(b => b.els.length > 1).length,
+             'broke at (s)': at.join(' ') || '—' };
+  });
+
+  console.log('hit hardness over ' + seconds + 's, breaking off ' +
+              '(threshold ' + breakHardness.toFixed(1) + ': H-H ' +
+              (breakHardness * 436 / BOND_ENERGY_MAX).toFixed(2) + ', O=O ' +
+              breakHardness.toFixed(2) + ')');
+  console.table(dist);
+  console.log('what that threshold does, over ' + seconds + 's');
+  console.table(runs);
+
+  breakBonds = save.on; tempCurrent = save.t; tempTarget = save.tt;
+  spawnWorld();
+  breakCount = save.n; hardnessPeak = save.pk;
+  return { dist, runs };
 };
 
 // ─── Init ─────────────────────────────────────────────────────────────────────

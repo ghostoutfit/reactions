@@ -548,6 +548,62 @@ up with the toolbar, the energy bar and the screen edges so it is barely
 visible — but zoomed out there is canvas beyond it, and without the line the
 molecules look like they bounce off nothing.
 
+### Bond breaking
+
+A hard enough collision pulls a molecule apart. **One-way, for now**: the halves
+drift off as free atoms and nothing puts them back, so a hot world gradually
+comes apart until there is nothing left to break.
+
+```javascript
+let breakBonds    = true;   // dev toggle
+let breakHardness = 4.0;    // hits at or above this break a bond, at temp 1 scale
+let breakKick     = 0.22;   // separation speed given to the halves, x nominal
+```
+
+**The hardness of a hit is the flare's own measure, with one deliberate
+difference.** The flare uses `jImp / (mass x vTarget)`, about 1 for a square hit
+at the speed that species normally travels — a number that is scale-free in both
+the dial *and* the temperature. That is right for a flare and wrong for
+breaking, which has to care about temperature. So `queueIfBroken` divides by the
+species' speed at **temp 1** (`vTarget / tempCurrent`) instead. The dial still
+cancels; the temperature does not. Dissociation is then a consequence of being
+hot, not a mode switched on with the Temp button.
+
+**The threshold is scaled by the bond's own energy**, straight out of
+`BOND_ENERGY` — so an H-H faces `4.0 x 436/498` = **3.50** and an O=O the full
+**4.00**. That 14% is enough to be visible: run it hot and all four H₂ come
+apart while both O₂ are still whole, with nothing hard-coded to make it happen
+in that order.
+
+**4.0 is measured, not guessed** (`runBreakTests()` in the console reproduces
+it). Over 240 s with breaking off:
+
+| temp | hits | p50 | p90 | p99 | max | over H-H thr | over O=O thr |
+|---|---|---|---|---|---|---|---|
+| 1x | 662 | 0.53 | 1.46 | 2.08 | **2.95** | 0 | 0 |
+| 3x | 1798 | 1.05 | 3.29 | 4.96 | 6.45 | 132 | 65 |
+
+Low's hardest hit in four minutes is 2.95, under the 3.50 an H-H would need —
+so **Low breaks nothing** (0 breaks in 240 s, and 0 in a separate 900 s run),
+while High breaks all six, at 0.6 / 4.1 / 8.9 / 8.9 / 27.8 / 27.8 s. That gap
+is the whole design: there is no `tempLevel === 'high'` test anywhere.
+
+**Fragments keep the velocity their atom actually had** — the body's velocity
+plus the spin's contribution at that offset, via `pointVel` — so a molecule that
+was spinning fast throws its halves apart harder, with none of it invented. On
+top sits `breakKick` along the outward direction, standing in for the bond
+energy released. A free atom gets `spin = 0`: there is nothing for it to spin
+about.
+
+The electron structure falls out for free: `buildElectrons` on a one-atom body
+with no bonds makes every valence electron lone, so a free H shows **1** and a
+free O shows **6**. Both are radicals, and both look like it.
+
+**Breaks are applied after the collision pass, never inside it** —
+`world.breaking` queues them and `stepDissociation` splices. Replacing a body
+mid-pass would shift `world.bodies` indices under the loop and let a pair be
+missed or tested twice.
+
 ## Energy in fields
 
 The "Show energy in fields" checkbox draws one **lobe between each pair of
@@ -623,8 +679,8 @@ check on the collision solver, not a teaching graph.
 Dormant, kept because the next round of work wants it. None of it is live:
 
 - **`#speedDialWrap.bounce-warn`** — the red flash on the dial, commented out in
-  the stylesheet. It was fission's "this neutron is too slow" warning; break
-  mode wants the same signal for "too slow to break a bond".
+  the stylesheet. It was fission's "this neutron is too slow" warning; breaking
+  now exists and could use exactly that signal for "too slow to break a bond".
 - **`z` on atoms** is always 0 but `drawAtoms` already sorts by it, so a molecule
   that is not a flat row has a draw order waiting.
 - **`formulaOf`** does full Hill ordering, so it already prints H₂O correctly.
@@ -639,11 +695,15 @@ Dormant, kept because the next round of work wants it. None of it is live:
 - The temperature ramp runs even while paused, so velocities change with nothing
   moving. Harmless, but the pause is not a total freeze.
 - Molecules cannot be dragged, clicked or selected.
-- No reactions. Molecules bounce; they never break or combine.
+- Molecules break but never **re-combine**, by design for now — so a hot world
+  only ever runs down to free atoms. Recombination is the other half.
 - No internal vibration — a molecule is perfectly rigid, so a collision has only
   translation and rotation to put energy into.
-- Only two counter slots in the toolbar (`sp1`/`sp2`), so with H₂, O₂ and He all
-  present one of them is not shown. Three species now exist, so this one is live.
+- Only two counter slots in the toolbar (`sp1`/`sp2`). Breaking makes this
+  worse, not better: a part-broken world holds up to **four** species (H₂, O₂,
+  H, O) with two slots to show them in. `updateSpeciesCounters` now sorts by
+  count so the two slots go to the two largest populations rather than to
+  whichever sat earliest in `world.bodies`, but it is still lossy.
 - `makeBody` lays atoms in a straight row, so an H₂O would come out linear
   rather than bent at 104.5°. The electron structure is already right (4
   bonding, 2 lone pairs) — only the geometry is missing.
