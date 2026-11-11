@@ -1056,6 +1056,58 @@ between *every* charged pair, which here would be 276 pairs over a 57k-pixel
 grid, about 15M iterations a frame. If you ever add intermolecular lobes, cull
 them hard by distance or that number comes back.
 
+## The One Bond tab
+
+A second tab, using fission's tab bar unchanged — same shape, same glow, where
+it used to carry a "Temperature" tab beside the main one. `applyTab` swaps which
+`toolbar-row` is shown and sets `bondTab.on`; the world loop returns early and
+calls `drawBondTab()` instead, so no physics runs and no electrons step.
+
+One bond, big, with nothing else on screen. A dropdown picks **H–H, O–O or
+O–H**; drag either nucleus and **both** move, symmetrically about the centre, so
+the bond stretches about its midpoint rather than one atom chasing the pointer.
+Separation is twice the pointer's distance from the centre.
+
+### Energy against separation is a Morse well
+
+```
+V(r) = D (1 - exp(-a (r - r0)))^2      a = BOND_MORSE_A / r0,  BOND_MORSE_A = 1.5
+```
+
+so what is still **in** the bond is `D - V`: full at the natural length, falling
+to nothing as it is pulled apart. The asymmetry is the point and comes free —
+stretching has a long tail, squeezing climbs a wall, because `exp(-a(r-r0))`
+runs away below `r0`. A spring would have given a symmetric parabola and said
+something false about short range.
+
+`a` scales with `r0`, so the curve has the same shape for every pair and only
+its depth differs, from the real `BOND_ENERGY` table: 436, 498, 463 kJ/mol.
+Measured: 1.00 at `r0`, 0.72 at 1.5, 0.40 at 2.0, 0.10 at 3.0.
+
+**The squeeze floor is 0.6 r0, not 0.5.** The Morse form reaches zero held
+energy at **0.538 r0** on the compression side, so a 0.5 floor put the bottom of
+the drag range inside a dead zone reading a flat "0 kJ/mol" however hard you
+pushed. At 0.6 the wall is steep — 32% left — and still moving.
+
+### Two things the main tab's lobe does that this tab must not
+
+- **It clips.** `FIELD_GAIN` is set so resting bonds sit at the top of the ramp
+  and collisions drive past it, because a flare reading as a white core
+  *spreading* is the whole effect. Here brightness **is** the reading, and a
+  clipped core throws away the top of the range exactly where the bond is most
+  interesting. `mag` is scaled by `FIELD_GAIN` so the strongest bond at its
+  natural length peaks at the top and never clips. Measured centre pixel across
+  the drag: (142,198,251) at `r0`, (76,27,159) at 2×, (55,7,67) at 2.8× —
+  smooth, never pinned.
+- **It is wide.** `FIELD_WIDTH` is a fraction of the bond *length* and the
+  gaussian reaches 2.5σ, so at this scale a squeeze of 1 gave a lobe reaching
+  ~193 px either side of a 257 px bond — taller than the bond is long, which
+  reads as a blob with two nuclei in it. `squeeze: 0.5` puts the reach at about
+  a third of the length and the bond is the shape again.
+
+`drawFieldHeatmap` grew optional `segs`, `boxW` and `boxH` arguments for this;
+with none it behaves exactly as before.
+
 ## Energy graph
 
 **Hidden by default** — SHOW LINE GRAPH on the energy bar brings it back,
