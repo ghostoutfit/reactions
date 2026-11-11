@@ -2236,19 +2236,7 @@ function stepWorld(dt) {
       // was left alone long enough to decay that far — small, but it is the
       // "energy goes nowhere" this whole mechanism exists to not do.
       b.vib = b.vib > 1e-4 ? b.vib * Math.exp(-dt / VIB_TAU) : 0;
-      const back = (was - b.vib) * doseUnit();
-      if (back > 0) {
-        const ke = 0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy);
-        if (ke > 1e-9) {
-          const k = Math.sqrt((ke + back) / ke);
-          b.vx *= k; b.vy *= k;
-        } else {
-          // Nothing to scale — a molecule at a dead stop. Spin is the only
-          // other place it can go, and it is still motion.
-          b.spin = Math.sign(b.spin || 1) * Math.sqrt(b.spin * b.spin + 2 * back / b.inertia);
-        }
-        fieldsReturned += back;
-      }
+      returnFieldEnergy(b, (was - b.vib) * doseUnit());
     }
   }
   world.time += dt;
@@ -2413,7 +2401,11 @@ function wallImpulse(b, rx, ry, nx, ny, depth) {
     b.vx += jImp * nx / b.mass;
     b.vy += jImp * ny / b.mass;
     b.spin += rn * jImp / b.inertia;
-    b.flare = Math.min(1, b.flare + jImp / (b.mass * Math.max(1, b.vTarget)));
+    // A wall does NOT touch the bond. It deposits no energy into it (walls
+    // never call queueIfBroken), so it must not light it up either: `flare`
+    // feeds the colour's load, and a bond flashing towards pink off a wall
+    // would read as the wall having put energy into it. The wall is scenery,
+    // not a molecule — it changes where this one is going, nothing else.
     settleBodySpeed(b);
   }
   b.x += nx * depth;                        // lift clear so it cannot stick
@@ -2538,7 +2530,7 @@ function collidePair(A, B) {
 // instead of a fortieth. A fast H can break an O2 now because it genuinely has
 // the energy to, not because anything was special-cased for it.
 let breakBonds  = true;    // dev toggle
-let breakEnergy = 2.5;     // vibration a bond can hold before it lets go
+let breakEnergy = 1.5;     // vibration a bond can hold before it lets go
 let colourFull  = 0.8;     // full pink at this FRACTION of capacity — see vibLoad
 let VIB_TAU     = 2.2;     // seconds — how long a bond holds what it was given
 let breakKick   = 0.22;    // separation speed given to the halves, x nominal
@@ -2608,20 +2600,60 @@ function vibLoad(b) {
 // Deposit this collision's energy, then break if the bond cannot hold it.
 // A single hit big enough to clear the threshold on its own still breaks
 // immediately — accumulation does not replace that case, it includes it.
+// Hand energy from a bond back to the molecule it belongs to. Energy goes as
+// v^2, hence the square root. A body at a dead stop has no velocity to scale,
+// so it goes to spin instead — still motion, and nothing is dropped.
+function returnFieldEnergy(b, amount) {
+  if (!(amount > 0)) return;
+  const ke = 0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy);
+  if (ke > 1e-9) {
+    const k = Math.sqrt((ke + amount) / ke);
+    b.vx *= k; b.vy *= k;
+  } else {
+    b.spin = Math.sign(b.spin || 1) * Math.sqrt(b.spin * b.spin + 2 * amount / b.inertia);
+  }
+  fieldsReturned += amount;
+}
+
+// A bond holds at most ONE collision's worth of energy.
+//
+// Every collision resolves whatever the bond was already carrying: together
+// with the new dose it either breaks the bond, or it is handed straight back to
+// the molecule's motion on the way out of the collision and the bond restarts
+// from the new dose alone. Energy never rides along through three or four hits
+// waiting to add up.
+//
+// That is a deliberate simplification, and it is the one that makes the picture
+// readable: what a glowing bond shows is the hit that just happened, not a
+// running total nobody can see the history of. It also means a bond breaks
+// because ONE collision was nearly enough and the bond was already loaded —
+// which is a story you can watch — rather than because a sixth mild knock
+// happened to tip a hidden accumulator over.
 function queueIfBroken(b, energy) {
   if (b.els.length < 2 || b.broken) return;
   // Record how big a bite this was out of THIS body's motion, so the band lets
   // it run slow for a moment instead of buying the speed back off its spin.
   const ke = 0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy);
   b.sag = Math.min(1, b.sag + energy / Math.max(1e-6, ke + energy));
-  // Pumped whether or not breaking is on, so the toggle only decides whether a
-  // full bond lets go — the heat still shows, and the diagnostics can measure
-  // what the world WOULD have done without changing it.
-  b.vib += energy / doseUnit();
-  if (b.vib > vibPeak) vibPeak = b.vib;
-  if (!breakBonds || b.vib < breakThreshold(b)) return;
-  b.broken = b.vib;                    // collected after the collision pass
-  world.breaking.push(b);
+
+  const dose = energy / doseUnit();
+  const sum  = b.vib + dose;
+  if (sum > vibPeak) vibPeak = sum;
+
+  // Enough, together, to pull the bond apart. Pumped whether or not breaking is
+  // on, so the toggle only decides whether a full bond lets go — the heat still
+  // shows, and the diagnostics can measure what the world WOULD have done.
+  if (breakBonds && sum >= breakThreshold(b)) {
+    b.vib = sum;
+    b.broken = sum;                    // collected after the collision pass
+    world.breaking.push(b);
+    return;
+  }
+
+  // Not enough: whatever the bond was already holding goes back into the
+  // motion leaving this collision, and the bond starts again from this hit.
+  returnFieldEnergy(b, b.vib * doseUnit());
+  b.vib = dose;
 }
 
 // Replace one body with one free atom per atom it had. Each fragment keeps the
