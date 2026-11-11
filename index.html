@@ -287,47 +287,6 @@
     gap: 6px;
   }
 
-  /* ── Launch-speed dial ─────────────────────────────────────────────────── */
-  #speedDialWrap { position: relative; display: flex; align-items: center; }
-
-  /* Nothing sets .bounce-warn any more — it was the fission warning that the
-     neutron was too slow to split anything. Kept because break mode will want
-     the same red flash on the dial when the speed is too low to break a bond. */
-  /*
-  #speedDialWrap.bounce-warn::before {
-    content: '←';
-    position: absolute;
-    top: -24px;
-    left: 50%;
-    transform: translateX(-50%);
-    font-size: 20px;
-    font-weight: 700;
-    color: #ff2626;
-    text-shadow:
-      0 0 6px #ff2626,
-      0 0 16px rgba(255,38,38,0.9),
-      0 0 32px rgba(255,38,38,0.6);
-    pointer-events: none;
-    animation: speedWarnPulse 0.75s ease-in-out infinite;
-    white-space: nowrap;
-    line-height: 1;
-  }
-  #speedDialWrap.bounce-warn::after {
-    content: '';
-    position: absolute;
-    inset: -10px;
-    background: rgba(255, 38, 38, 0.72);
-    border-radius: 10px;
-    filter: blur(18px);
-    z-index: -1;
-    pointer-events: none;
-    animation: speedWarnPulse 0.75s ease-in-out infinite;
-  }
-  @keyframes speedWarnPulse {
-    0%, 100% { opacity: 0.3; }
-    50%       { opacity: 1.0; }
-  }
-  */
   /* ── Control boxes ─────────────────────────────────────────────────────── */
   .ctrl-box-pink {
     display: flex;
@@ -687,12 +646,16 @@
         </button>
       </div>
       <div style="display:flex;flex-direction:column;gap:5px;align-items:stretch;">
-        <div class="slider-group">
-          <div style="display:flex;align-items:center;gap:1px">
-            <canvas id="speedLinesCanvas" width="50" height="46" style="display:block;flex-shrink:0;image-rendering:pixelated"></canvas>
-            <canvas id="speedDialIconCanvas" width="46" height="46" style="display:block;flex-shrink:0;image-rendering:pixelated"></canvas>
+        <!-- Temperature, where the speed dial used to be. Three buttons of
+             equal width, so switching never resizes the group or shifts the
+             counters under it. -->
+        <div id="tempGroup" style="display:flex;flex-direction:column;gap:4px;align-items:stretch;">
+          <span style="font-size:9px;letter-spacing:0.07em;text-transform:uppercase;opacity:0.5;text-align:center;">Temp</span>
+          <div style="display:flex;gap:4px;">
+            <button class="awheel-item temp-btn" data-temp="low" style="flex:1 1 0;min-width:0;">LOW</button>
+            <button class="awheel-item temp-btn" data-temp="med" style="flex:1 1 0;min-width:0;">MED</button>
+            <button class="awheel-item temp-btn active" data-temp="high" style="flex:1 1 0;min-width:0;">HIGH</button>
           </div>
-          <div id="speedDialWrap"><input type="range" id="speedDial" min="0.2" max="12.0" step="0.1" value="8.0"></div>
         </div>
         <div id="speciesCounters" style="display:flex;gap:5px;justify-content:center;">
           <div style="flex:1;background:rgba(255,255,255,0.05);border-radius:6px;padding:3px 5px;text-align:center;font-size:11px;color:var(--text-dim);line-height:1.5;white-space:nowrap;">
@@ -704,13 +667,6 @@
         </div>
       </div>
 
-      <!-- Temperature: both buttons are the same fixed width, so switching
-           Low/High never resizes the group or shifts anything beside it. -->
-      <div id="tempGroup" style="display:flex;flex-direction:column;gap:4px;align-items:stretch;">
-        <span style="font-size:9px;letter-spacing:0.07em;text-transform:uppercase;opacity:0.5;text-align:center;">Temp</span>
-        <button class="awheel-item temp-btn" data-temp="low">LOW</button>
-        <button class="awheel-item temp-btn active" data-temp="high">HIGH</button>
-      </div>
     </div>
 
     <!-- Blue box: stacked sliders + electric field + view mode -->
@@ -1518,7 +1474,7 @@ let eSteer      = 0.10;   // how hard the electron is pulled onto the ideal path
 let eCrossSlow  = 0.50;   // speed multiplier at the bond midpoint crossing
 let eTrailScale = 1.0;    // multiplies the tier's trail length
 let showLonePairs = true; // non-bonding valence electrons on/off
-let lonePairsOnBonded = false;  // a bonded atom draws only its bonding electrons
+let lonePairsOnBonded = true;   // false: a bonded atom draws only its bonding electrons
 
 // A bare lemniscate is a narrow bow tie: its widest half-width is a/(2*sqrt 2),
 // about 0.354 of the lobe's reach. `eWidth` stretches it across the bond, and
@@ -1680,9 +1636,13 @@ function buildElectrons(b) {
     for (let q = 0; q < lone; q++) {
       const e = makeElectron('lone', at.el);
       e.i = i;
+      // Whether this atom has bonds is fixed for the life of the body, so it is
+      // settled here rather than searched for on every electron every frame.
+      e.bonded = anyBond[i];
       e.angle = facing + q * Math.PI * 2 * (free ? GOLDEN : 1 / lone);
-      e.x = at.lx + valenceRadius(at.el) * Math.cos(e.angle);
-      e.y = at.ly + valenceRadius(at.el) * Math.sin(e.angle);
+      const r0 = valenceRadius(at.el) * loneRadius * (e.bonded ? loneRadiusBonded : 1);
+      e.x = at.lx + r0 * Math.cos(e.angle);
+      e.y = at.ly + r0 * Math.sin(e.angle);
       list.push(e);
     }
   }
@@ -1696,6 +1656,12 @@ function buildElectrons(b) {
 // They do pass through the bond region on the way round, which a real lone pair
 // would not; the plain circle is the point here, not the lobe geometry.
 let loneRadius = 0.9;     // multiple of the atom's valence radius
+// A bonded atom's lone pairs ride closer in. At the full radius they sit right
+// where the bonding lobes are and the molecule reads as one tangle of rings;
+// pulled in, they are clearly a second, inner shell and the bond stays the
+// thing you look at. Free atoms are unaffected — nothing is competing for the
+// space out there, so they keep the honest radius.
+let loneRadiusBonded = 0.6;   // x loneRadius, for an atom that has bonds
 let loneSpeed  = 0.125;   // radians per frame at 60 fps
 let loneSpeedFree = 6.0;  // x loneSpeed for an atom with no bonds at all
 
@@ -1832,7 +1798,7 @@ function stepBondCircle(e, b, k) {
 // each step so the dev slider moves the ring live.
 function stepLoneElectron(e, b, k) {
   const at = b.atoms[e.i];
-  const r = valenceRadius(at.el) * loneRadius;
+  const r = valenceRadius(at.el) * loneRadius * (e.bonded ? loneRadiusBonded : 1);
   // A free atom's electrons race. Nothing is bonded, nothing is paired off into
   // a shared lobe, and the speed is the tell: a loose atom reads as unsettled
   // and looking for a partner, against the steady orbits of an intact molecule.
@@ -2051,17 +2017,21 @@ function bodyAtoms(b, dx = 0, dy = 0) {
   }));
 }
 
-// Launch speed in px/s for H2, from the speed slider (0.2–12.0 on the dial).
+// Launch speed in px/s for H2. Fixed, since the speed dial is gone: temperature
+// is the only speed control now, which is the honest one — a gas does not have
+// a speed knob separate from how hot it is.
 //
-// The default sits at 8, not in the middle, because the world has to START
-// fast enough to break its own bonds. The dose a hit deposits is scale-free in
-// this dial by design — the threshold means the same at any setting — but the
-// collision RATE is not, and `VIB_TAU` is fixed in seconds, so the pumping rate
-// (dose x hits per second) scales with speed. Measured at capacity 3.5: dial 2
-// broke 3/6/4 of six, dial 4 took 24–85 s, dial 8 took 34–45 s. The ceiling was
-// raised from 8 to 12 so the default is not pinned to the end of the slider.
+// 360 is what the dial shipped at (8.0 of 12 x 45), chosen because the world
+// has to START fast enough to break its own bonds.
+//
+// The dose a hit deposits is scale-free in this number by design — the break
+// threshold means the same whatever it is — but the collision RATE is not, and
+// `VIB_TAU` is fixed in seconds, so the pumping rate (dose x hits per second)
+// scales with it. Measured at capacity 3.5, in the old dial's units: 2 broke
+// 3/6/4 of six, 4 took 24–85 s, 8 took 34–45 s.
+const LAUNCH_SPEED = 360;
 function launchSpeed() {
-  return parseFloat(document.getElementById('speedDial').value) * 45;
+  return LAUNCH_SPEED;
 }
 
 // Equipartition: heavier molecules start slower, so every species begins with
@@ -2085,6 +2055,9 @@ function speciesSpeed(els) {
 // world accelerate. 3× the speed is 9× the kinetic energy, which the energy
 // graph shows honestly.
 const TEMP_HIGH = 3;        // High runs at 3× Low
+const TEMP_MED  = 2;        // Medium between them. Energy goes as speed squared,
+                            // so Low/Med/High is 1x / 4x / 9x the kinetic energy.
+const TEMP_LEVELS = { low: 1, med: TEMP_MED, high: TEMP_HIGH };
 const TEMP_TAU  = 0.26;     // seconds — exponential approach, quick then settling
 // Starts HIGH. The sim's subject is what collisions do to bonds, and at Low
 // nothing breaks at all — that is the measured, deliberate design of the
@@ -2096,7 +2069,7 @@ let tempCurrent = TEMP_HIGH;
 
 function setTemperature(level) {
   tempLevel  = level;
-  tempTarget = level === 'high' ? TEMP_HIGH : 1;
+  tempTarget = TEMP_LEVELS[level] || 1;
   document.querySelectorAll('.temp-btn').forEach(b =>
     b.classList.toggle('active', b.dataset.temp === level));
   logAction('Temperature: ' + level);
@@ -2184,7 +2157,6 @@ function spawnWorld() {
   }
   spinCapHits = 0; floorTopUps = 0; energyCreated = 0; fieldsReturned = 0;
   breakCount = 0; vibPeak = 0; breakCostPaid = 0;
-  lastDialSpeed = launchSpeed() * tempCurrent;
   resetEnergyTrace();
   updateSpeciesCounters();
 }
@@ -2797,42 +2769,6 @@ function updateSpeciesCounters() {
   });
 }
 
-// ─── Speed lines — the dash marks beside the launch-speed dial ──────────────
-function drawSpeedLines() {
-  const canvas = document.getElementById('speedLinesCanvas');
-  if (!canvas) return;
-  const c = canvas.getContext('2d');
-  const w = canvas.width, h = canvas.height;
-  const slider = document.getElementById('speedDial');
-  const min = parseFloat(slider.min), max = parseFloat(slider.max);
-  const t   = (parseFloat(slider.value) - min) / (max - min);  // 0..1
-
-  c.clearRect(0, 0, w, h);
-
-  // 3 right-aligned horizontal lines; lengths scale with slider
-  const maxLen  = w - 2;
-  const scales  = [0.65, 1.0, 0.80];
-  const ys      = [h * 0.25, h * 0.5, h * 0.75];
-
-  scales.forEach((scale, i) => {
-    const tFloor = 0.18 + 0.82 * t;  // minimum ~18% even at slider min
-    const len = tFloor * maxLen * scale;
-    const x = w - len;
-    const y = Math.round(ys[i]);
-
-    // outer glow
-    c.save();
-    c.strokeStyle = 'rgba(180,180,210,0.25)';
-    c.lineWidth = 4;
-    c.beginPath(); c.moveTo(x, y); c.lineTo(w, y); c.stroke();
-
-    // core
-    c.strokeStyle = 'rgba(210,210,230,0.85)';
-    c.lineWidth = 1.5;
-    c.beginPath(); c.moveTo(x, y); c.lineTo(w, y); c.stroke();
-    c.restore();
-  });
-}
 
 // ─── Molecule icons (NEW button, speed dial, Atoms mode button) ─────────────
 // Same hollow-shell look as drawAtom, at icon scale and independent of the
@@ -2926,7 +2862,6 @@ function drawOutlineIcon() {
 // loop of its own at the full frame rate, for an icon 46 px across.)
 const ICON_CANVASES = [
   { id: 'newBtnMolecule',      pad: 4, wobble: 0.7, jitter: { x: 0, y: 0 } },   // respawn button
-  { id: 'speedDialIconCanvas', pad: 3, wobble: 0.7, jitter: { x: 0, y: 0 } },   // beside the speed dial
   { id: 'atomsModeIcon',       pad: 1, wobble: 0.4, jitter: { x: 0, y: 0 } },   // Atoms view button
 ];
 
@@ -3161,20 +3096,6 @@ document.getElementById('newBtn').addEventListener('click', () => {
   logAction('Respawned molecules');
 });
 
-let lastDialSpeed = 0;
-document.getElementById('speedDial').addEventListener('input', function () {
-  drawSpeedLines();
-  // Scale the whole world by the same factor rather than flattening every
-  // molecule to one speed — collisions have spread them out, and that spread
-  // is the interesting part.
-  const target = launchSpeed() * tempCurrent;
-  if (lastDialSpeed > 0) {
-    const k = target / lastDialSpeed;
-    for (const b of world.bodies) { b.vx *= k; b.vy *= k; b.spin *= k; b.vTarget *= k; }
-  }
-  lastDialSpeed = target;
-  resetEnergyTrace();
-});
 
 document.getElementById('zoomSlider').addEventListener('input', function () {
   viewZoom = zoomFromSlider(parseFloat(this.value));
@@ -3294,6 +3215,7 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     '<div id="devCirclesNote" style="opacity:0.45;font-size:10px;margin-left:21px;"></div>' +
     row('devCircR',  'H₂ ring radius', 0.5, 1.8, 0.05, bondCircleR, '#ff3a8a') +
     row('devLoneR',  'Lone orbit radius', 0.4, 2.2, 0.05, loneRadius, '#ff3a8a') +
+    row('devLoneRB', 'Bonded lone radius', 0.2, 1.2, 0.05, loneRadiusBonded, '#ff3a8a') +
     row('devLoneS',  'Lone orbit speed',  0.005, 0.2, 0.005, loneSpeed, '#ff3a8a') +
     row('devLoneSF', 'Free-atom speed',   1,    12,  0.5,  loneSpeedFree, '#ff3a8a') +
     row('devNucleus', 'Nucleus size', 0, 24, 1, nucleusDiameter, '#ff80b0') +
@@ -3306,7 +3228,7 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     '</label>' +
     '<div id="devLoneNote" style="opacity:0.45;font-size:10px;margin-left:21px;"></div>' +
     '<label style="display:flex;align-items:center;gap:7px;margin:9px 0 2px;cursor:pointer;">' +
-      '<input type="checkbox" id="devLoneBonded" style="margin:0">' +
+      '<input type="checkbox" id="devLoneBonded" checked style="margin:0">' +
       '<span>\u2026also on bonded atoms</span>' +
     '</label>' +
     '<div id="devLoneBondedNote" style="opacity:0.45;font-size:10px;margin-left:21px;"></div>' +
@@ -3394,6 +3316,8 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
        v => v.toFixed(2) + '\u00d7 (' + (v * Math.SQRT2).toFixed(2) + '\u00d7 parent)');
   bind('devBreakK', v => breakKick     = v, false, v => v.toFixed(2) + '\u00d7');
   bind('devLoneR',  v => loneRadius  = v, false, v => v.toFixed(2) + '\u00d7');
+  bind('devLoneRB', v => loneRadiusBonded = v, false,
+       v => Math.round(v * 100) + '% of lone r');
   bind('devLoneS',  v => loneSpeed   = v, false, v => v.toFixed(3));
   bind('devLoneSF', v => loneSpeedFree = v, false, v => v.toFixed(1) + '\u00d7');
   bind('devNucleus', v => nucleusDiameter = v, false, v => v + ' px');
@@ -3809,7 +3733,6 @@ window.runBreakTests = function (seconds = 180) {
 })();
 
 setViewModeActive(document.querySelector('.awheel-item[data-view="atoms"]'));
-drawSpeedLines();
 updateGraphBtn();
 updateEnergyNote();
 document.getElementById('energyBar').classList.add('visible');

@@ -277,27 +277,28 @@ applied at full value, both signs, with `eRoll` at 0.12.
 
 All five are dev sliders.
 
-### A bonded atom shows only its bonding electrons
+### A bonded atom's lone pairs ride closer in
 
 ```javascript
-let lonePairsOnBonded = false;   // dev toggle
+let lonePairsOnBonded = true;   // dev toggle; false drops them entirely
+let loneRadiusBonded  = 0.6;    // x loneRadius, for an atom that has bonds
 ```
 
-An O₂'s four lone pairs drew as two rings of circling dots around the figure-8,
-and with the bond itself now a pair of round lobes they read as the same kind of
-mark — four rings on one molecule, only two of which say anything about the
-bond. The picture is the bond, so the rest comes off. An O₂ is **4 bonding
-electrons and nothing else**.
+At the full radius an O₂'s four lone pairs sat right where the bonding lobes
+are, and the molecule read as one tangle of rings — four rings, only two of
+which say anything about the bond. Pulled in to **60%**, they are clearly a
+second, inner shell and the bond stays the thing you look at. Measured: 20.6 px
+against the 34.3 px they would otherwise sit at.
 
-**Scoped to bonded atoms, not to oxygen.** A free atom keeps its full shell,
-which is what makes a broken-off O look like a radical carrying six where the O₂
-it came from showed four. Verified: O₂ 4 bonding / 0 lone, H₂ 2 bonding, free O
-still 6.
+**Free atoms are unaffected**, which matters: nothing is competing for the space
+out there, and the full shell is what makes a broken-off O read as a radical
+carrying six. `e.bonded` is settled once in `buildElectrons` rather than
+searched for per electron per frame. Verified: O₂ 4 bonding + 8 lone at 20.6 px,
+free O 6 electrons at the full radius.
 
-**This is a real chemical omission.** An O₂ does have lone pairs, and an H₂O's
-bent shape is usually explained by the two on its oxygen. When water arrives
-that explanation needs them back — the toggle turns them on again, and
-`buildElectrons` re-runs on every body when it changes.
+`lonePairsOnBonded` false drops them from bonded atoms altogether — which is a
+real chemical omission, since H₂O's bent shape is usually explained by the two
+on its oxygen. `buildElectrons` re-runs on every body when either changes.
 
 ### Two overlapping circles — how an H₂ bond runs
 
@@ -468,6 +469,14 @@ does; an O2 sets off at a quarter the speed of an H2. Off, every species starts
 at the dial speed and an O2 carries 16x the energy of an H2.
 
 ## Temperature
+
+**Three levels, and no speed dial.** `TEMP_LEVELS` is `{ low: 1, med: 2,
+high: 3 }`, and since energy goes as speed squared that is **1× / 4× / 9×** the
+kinetic energy. The launch-speed slider is gone — temperature is the only speed
+control now, which is the honest one, since a gas has no speed knob separate
+from how hot it is. `launchSpeed()` returns the constant `LAUNCH_SPEED` = 360,
+what the dial shipped at. The buttons sit where the dial was, three of equal
+width so switching never resizes the group or shifts the counters beneath it.
 
 **The sim opens at High.** At Low nothing breaks at all — that is the measured,
 deliberate design of the threshold, not a shortfall — so a world that opened at
