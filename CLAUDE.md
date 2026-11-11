@@ -278,22 +278,21 @@ runs a closed circle around **its own** nucleus instead of the pair sharing one
 curve, so an H₂ reads as two overlapping rings — the shape an O₂ already shows,
 where each O carries a ring of its own lone electrons.
 
-**Off by default, now that `eRound` exists.** It was briefly the default, and
-`eRound` made that unnecessary: at roundness 1 the figure-8's own lobes already
-*are* two overlapping circles, without leaving the one-path shape that an O=O
-has to use anyway. This stays as the way to see genuinely independent rings —
-one closed curve per nucleus — rather than two lobes of one curve meeting at
-the bond midpoint.
+**On by default.** `eRound` 1 makes the figure-8's own lobes circular too, so
+the two look close — but only this gives each H a ring genuinely of its own, one
+closed curve per nucleus, rather than two lobes of one curve meeting at the bond
+midpoint. That is the picture an O₂'s lone pairs already show.
 
 ```javascript
-let bondCircles = false;  // on: a ring per atom, instead of the figure-8
-let bondCircleR = 1.3;    // ring radius, multiple of the atom's valence radius
+let bondCircles = true;   // off: the figure-8
+let bondCircleR = 0.85;   // ring radius, multiple of the atom's valence radius
 ```
 
 They overlap because a bond is shorter than two valence radii: H–H sits
-`2 × 30 × BOND_OVERLAP` = **43.2 px** apart while each ring is `30 × 1.3` =
-**39 px**, so the rings cross and share a **34.8 px** lens over the bond. That
-lens is the picture — it is where both electrons are, which is what the
+`2 × 30 × BOND_OVERLAP` = **43.2 px** apart while each ring is `30 × 0.85` =
+**25.5 px**, so the rings cross and share a **7.8 px** lens over the bond. They
+stop overlapping at all below `bondCircleR` = 0.72, where the ring radius drops
+under half the bond. That lens is the picture — it is where both electrons are, which is what the
 figure-8's crossing says with one line instead of two.
 
 **Scoped to H–H**, because "two circles" only describes a single bond. An O=O
@@ -744,6 +743,42 @@ flares. This is the only motion in the view until molecules can vibrate.
 
 `FIELD_WIDTH`, `FIELD_GAIN` and `FLARE_GAIN` are dev sliders — they were dialled
 in against the picture, so they stay adjustable.
+
+### The colour ramp
+
+`FIELD_RAMPS`, picked with the `Colour ramp` dropdown in the dev panel, shipped
+on **`key`**: violet through purple to magenta, matching the "Energy in fields"
+key. `keyGlow` is the same hues with a hot pink-white at the very top; `blue` is
+the original blue-to-white.
+
+**`t` is the accumulated field over `FIELD_GAIN`, so the TOP of the ramp is a
+bond's core and the bottom is its outer fringe** — a resting bond already peaks
+at `t ≈ 1`. Low and High on the key are therefore fringe and core, not two
+different bonds.
+
+**The key's lightness order could not be taken literally.** Drawn with a pale
+low end, the fringe just inside the cull measured **(232,232,243) at alpha 22**
+— a grey haze on a near-black page. The lobe is culled flat at each nucleus
+(`along < 0 || along > L`) and at a box a couple of sigma out, and those
+straight edges are invisible only while the fringe is **darker than the page**.
+A pale fringe turned every bond into a visible grey rectangle. `blue` and
+`keyGlow` measure (5,18,77) and (80,27,122) at that same point — both darker
+than the background, both invisible.
+
+So the bottom of the ramp is a dark violet: the key's *hue* at the low end,
+carrying the key's faintness as **low alpha rather than as pale ink**. That is
+what "low" means on a lobe which fades out to nothing anyway, and it is why the
+alpha column's shape is identical across all three ramps — that falloff is the
+glow, and no ramp is allowed to lose it.
+
+**A pre-existing artifact this made more visible:** the lobe reaches further
+perpendicular to the bond (2.5σ ≈ 41 px on an O=O) than along it (half the bond,
+≈ 27 px), and it is truncated flat at the nuclei, where the `sin` profile climbs
+from 0 to alpha 130 inside about one low-resolution buffer pixel. Axis-aligned
+and at rest it reads as a vertical bar with hard edges. At natural angles it is
+hard to see, and it is identical under `blue` — only the brighter mid-ramp
+purple draws the eye to it. Softening it means easing the alpha in at the bottom
+of the ramp, at some cost to the glow.
 
 ### Cost
 

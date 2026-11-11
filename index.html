@@ -973,14 +973,60 @@ function buildColorstops(stops, out) {
   }
 }
 
+// The field ramp. `t` is the accumulated field over FIELD_GAIN, so the TOP of
+// the ramp is a bond's core and the bottom is the outer fringe — a resting bond
+// already peaks at t ~= 1 (see FIELD_GAIN). The alpha column is what makes the
+// lobe glow: it fades the fringe out to nothing so the lobe has no edge, and it
+// is kept identical in shape across every ramp here, because that falloff IS
+// the glow and none of these are allowed to lose it.
+const FIELD_RAMPS = {
+  // The key's hues — violet through purple to magenta — with magenta at the
+  // core, which is the key's High. Shipped.
+  //
+  // The key's LIGHTNESS order could not be taken literally. Drawn with a pale
+  // low end, the fringe just inside the cull came out at (232,232,243) on alpha
+  // 22: a grey haze on a near-black page. The lobe is culled flat at each
+  // nucleus and at a box a couple of sigma out, and those straight edges are
+  // invisible only while the fringe is DARKER than the page. A pale fringe
+  // turned every bond into a visible grey rectangle. So the bottom of the ramp
+  // is a dark violet — the key's hue at the low end, carrying the key's
+  // faintness as low alpha rather than as pale ink, which is what "low" means
+  // on a lobe that fades out to nothing anyway.
+  key: [
+    { t: 0.0,  r: 58,  g: 22,  b: 92,  a: 0   },
+    { t: 0.12, r: 96,  g: 44,  b: 156, a: 115 },
+    { t: 0.40, r: 160, g: 68,  b: 212, a: 200 },
+    { t: 0.70, r: 214, g: 70,  b: 214, a: 240 },
+    { t: 1.0,  r: 255, g: 96,  b: 214, a: 255 },
+  ],
+  // The same hues, but with a hot pink-white at the very top, so an over-driven
+  // bond keeps blowing out to a spreading near-white core the way the blue ramp
+  // did. Brighter glow, further from the key's "High is magenta".
+  keyGlow: [
+    { t: 0.0,  r: 58,  g: 22,  b: 92,  a: 0   },
+    { t: 0.12, r: 104, g: 42,  b: 160, a: 120 },
+    { t: 0.40, r: 168, g: 60,  b: 214, a: 200 },
+    { t: 0.70, r: 240, g: 70,  b: 205, a: 240 },
+    { t: 0.90, r: 255, g: 120, b: 220, a: 250 },
+    { t: 1.0,  r: 255, g: 214, b: 245, a: 255 },
+  ],
+  // The original, kept for comparison.
+  blue: [
+    { t: 0.0,  r: 0,   g: 0,   b: 0,   a: 0   },
+    { t: 0.12, r: 10,  g: 35,  b: 170, a: 140 },
+    { t: 0.4,  r: 25,  g: 85,  b: 235, a: 210 },
+    { t: 0.7,  r: 70,  g: 165, b: 255, a: 245 },
+    { t: 1.0,  r: 210, g: 238, b: 255, a: 255 },
+  ],
+};
+
+let fieldRamp = 'key';
 const COLORMAP = new Uint8Array(256 * 4);
-buildColorstops([
-  { t: 0.0,  r: 0,   g: 0,   b: 0,   a: 0   },
-  { t: 0.12, r: 10,  g: 35,  b: 170, a: 140 },
-  { t: 0.4,  r: 25,  g: 85,  b: 235, a: 210 },
-  { t: 0.7,  r: 70,  g: 165, b: 255, a: 245 },
-  { t: 1.0,  r: 210, g: 238, b: 255, a: 255 },
-], COLORMAP);
+function setFieldRamp(name) {
+  fieldRamp = FIELD_RAMPS[name] ? name : 'key';
+  buildColorstops(FIELD_RAMPS[fieldRamp], COLORMAP);
+}
+setFieldRamp(fieldRamp);
 
 // ─── Energy in fields — the lobe between two bonded atoms ───────────────────
 // Deliberately a picture, not a calculation. The reasoning it has to carry is
@@ -1472,13 +1518,13 @@ let eRoll       = 0.12;   // how fast a re-rolled target is taken up (per frame)
 // Scoped to H-H because "two circles" only describes a single bond. An O=O has
 // four bonding electrons and would come out as four stacked rings, so it keeps
 // the figure-8; widening this is the element test in bondIsCircled().
-// Off by default again, now that eRound exists: at eRound 1 the figure-8's own
-// lobes ARE circles, so an H2 already reads as two overlapping rings without
-// leaving the one-path shape that an O=O also has to use. This stays as the way
-// to see true independent rings, one per nucleus, rather than two lobes of one
-// curve meeting at the bond midpoint.
-let bondCircles = false;  // on: a ring per atom, instead of the figure-8 above
-let bondCircleR = 1.3;    // ring radius, multiple of the atom's valence radius
+// On by default: an H2 reads as two genuinely independent rings, one closed
+// curve per nucleus, rather than two lobes of one curve meeting at the bond
+// midpoint. eRound 1 makes the figure-8's own lobes circular too, so the two
+// look close — but only this gives each H a ring of its own, which is the
+// picture an O2's lone pairs already show.
+let bondCircles = true;   // off: the figure-8 above
+let bondCircleR = 0.85;   // ring radius, multiple of the atom's valence radius
 
 function valenceRadius(el) { return ATOM_RADIUS * ELEMENTS[el].rScale; }
 
@@ -2996,6 +3042,14 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
     '<div style="font-size:9px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.4;margin-top:8px;">' +
       'Energy in fields</div>' +
+    '<label style="display:flex;justify-content:space-between;align-items:center;margin:9px 0 3px;">' +
+      '<span>Colour ramp</span>' +
+      '<select id="devRamp" style="background:#141822;color:#cfe3ff;border:1px solid #2a3344;' +
+        'border-radius:4px;font:inherit;font-size:11px;padding:1px 3px;">' +
+        Object.keys(FIELD_RAMPS).map(k =>
+          '<option value="' + k + '"' + (k === fieldRamp ? ' selected' : '') + '>' + k + '</option>').join('') +
+      '</select>' +
+    '</label>' +
     row('devLobeW',   'Lobe width',      0.1,  0.8, 0.02, FIELD_WIDTH, '#46a5ff') +
     row('devLobeGain','Lobe brightness', 0.5,  4,   0.1,  FIELD_GAIN,  '#46a5ff') +
     row('devFlare',   'Flare on impact', 0,    5,   0.1,  FLARE_GAIN,  '#46a5ff') +
@@ -3100,6 +3154,13 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     bondCircles = circles.checked;
     syncCirclesNote();
     logAction('H₂ bond circles ' + (bondCircles ? 'on' : 'off'));
+  });
+
+  // Which colour ramp the field lobes use
+  const ramp = panel.querySelector('#devRamp');
+  ramp.addEventListener('change', () => {
+    setFieldRamp(ramp.value);
+    logAction('Field ramp ' + fieldRamp);
   });
 
   // Bond breaking on/off, and how hard a hit has to be
