@@ -1535,10 +1535,26 @@ function buildElectrons(b) {
     // Start angle only — which way the atom faces no longer confines anything,
     // it just stops every atom's ring starting from the same place.
     const facing = (awayX !== 0 || awayY !== 0) ? Math.atan2(awayY, awayX) : 0;
+    // Evenly spaced round the circle — EXCEPT on a free atom, which runs its
+    // ring many times faster. An even ring of n repeats every 2pi/n, so once
+    // the per-frame advance approaches that spacing the whole ring appears to
+    // stall or crawl backwards: the wagon-wheel effect, and on an O (six lone
+    // electrons, spacing 1.047 rad) it bites at a per-frame advance of only
+    // about 0.52. Measured: at 6x the ring genuinely turns at 7.16 laps/s and
+    // reads as going BACKWARDS at 0.30 rad/frame.
+    //
+    // The golden angle has no k-fold symmetry at all, so there is no repeat to
+    // alias against and the only limit left is half a lap per frame, which no
+    // setting on the slider reaches. It still spreads six points well — that is
+    // what the golden angle is for — so the ring stays a ring, just not a
+    // symmetric one. Bonded atoms keep the even spacing: they are slow, they
+    // never alias, and the even ring is the cleaner picture.
+    const GOLDEN = 0.6180339887498949;
+    const free = b.bonds.length === 0;
     for (let q = 0; q < lone; q++) {
       const e = makeElectron('lone', at.el);
       e.i = i;
-      e.angle = facing + q / lone * Math.PI * 2;   // evenly spaced round the circle
+      e.angle = facing + q * Math.PI * 2 * (free ? GOLDEN : 1 / lone);
       e.x = at.lx + valenceRadius(at.el) * Math.cos(e.angle);
       e.y = at.ly + valenceRadius(at.el) * Math.sin(e.angle);
       list.push(e);
@@ -1555,6 +1571,7 @@ function buildElectrons(b) {
 // would not; the plain circle is the point here, not the lobe geometry.
 let loneRadius = 0.7;     // multiple of the atom's valence radius
 let loneSpeed  = 0.125;   // radians per frame at 60 fps
+let loneSpeedFree = 6.0;  // x loneSpeed for an atom with no bonds at all
 
 // Ideal position for a bond electron, in body-local coordinates.
 // `a = r + d` puts the far edge of each lobe exactly on that atom's valence
@@ -1690,7 +1707,12 @@ function stepBondCircle(e, b, k) {
 function stepLoneElectron(e, b, k) {
   const at = b.atoms[e.i];
   const r = valenceRadius(at.el) * loneRadius;
-  e.angle += loneSpeed * k;
+  // A free atom's electrons race. Nothing is bonded, nothing is paired off into
+  // a shared lobe, and the speed is the tell: a loose atom reads as unsettled
+  // and looking for a partner, against the steady orbits of an intact molecule.
+  // It is the one thing on screen that says "this came apart" from across the
+  // canvas, after the trails have faded and the halves have drifted away.
+  e.angle += loneSpeed * k * (b.bonds.length === 0 ? loneSpeedFree : 1);
   e.x = at.lx + r * Math.cos(e.angle);
   e.y = at.ly + r * Math.sin(e.angle);
 }
@@ -2908,6 +2930,7 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     row('devCircR',  'H₂ ring radius', 0.5, 1.8, 0.05, bondCircleR, '#ff3a8a') +
     row('devLoneR',  'Lone orbit radius', 0.4, 2.2, 0.05, loneRadius, '#ff3a8a') +
     row('devLoneS',  'Lone orbit speed',  0.005, 0.2, 0.005, loneSpeed, '#ff3a8a') +
+    row('devLoneSF', 'Free-atom speed',   1,    12,  0.5,  loneSpeedFree, '#ff3a8a') +
     row('devNucleus', 'Nucleus size', 0, 24, 1, nucleusDiameter, '#ff80b0') +
     row('devSphereA', 'Sphere opacity', 0.15, 1, 0.05, sphereOpacity, '#9fd0ff') +
     row('devSphereD', 'Sphere depth',   0,    1, 0.05, sphereDepth,   '#9fd0ff') +
@@ -2975,6 +2998,7 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   bind('devBreakK', v => breakKick     = v, false, v => v.toFixed(2) + '\u00d7');
   bind('devLoneR',  v => loneRadius  = v, false, v => v.toFixed(2) + '\u00d7');
   bind('devLoneS',  v => loneSpeed   = v, false, v => v.toFixed(3));
+  bind('devLoneSF', v => loneSpeedFree = v, false, v => v.toFixed(1) + '\u00d7');
   bind('devNucleus', v => nucleusDiameter = v, false, v => v + ' px');
   bind('devSphereA', v => sphereOpacity = v, false, v => v.toFixed(2));
   bind('devSphereD', v => sphereDepth   = v, false, v => v.toFixed(2));

@@ -360,7 +360,27 @@ one ring at one radius instead of a scribble.
 ```javascript
 let loneRadius = 0.7;     // multiple of the atom's valence radius
 let loneSpeed  = 0.125;   // radians per frame at 60 fps — one lap in 0.84 s
+let loneSpeedFree = 6.0;  // x loneSpeed for an atom with no bonds at all
 ```
+
+**A free atom's electrons race.** Nothing is bonded and nothing is paired into a
+shared lobe, and the speed is the tell: 7.16 laps/s against a bonded atom's
+1.19. It is the one thing that says "this came apart" from across the canvas,
+after the trails have faded and the halves have drifted apart. Applies to
+anything with no bonds, so a He reads the same way.
+
+**Free atoms are spaced by the golden angle, not evenly.** An even ring of n
+repeats every `2π/n`, so once the per-frame advance approaches that spacing the
+ring appears to stall or crawl backwards — the wagon-wheel effect. An O has six
+lone electrons, spacing 1.047 rad, so it bites at an advance of only ~0.52.
+Measured at 6×: the ring genuinely turned at 7.16 laps/s and read as going
+**backwards at 0.30 rad/frame**. The golden angle has no k-fold symmetry at all,
+so there is nothing to alias against and the limit becomes half a lap per frame
+— `π` against the 0.75 rad/frame that 6× actually uses, and 1.5 at the top of
+the slider, so the whole range is safe. It still spreads six points well (gaps
+32.5/52.5/85/52.5/85/52.5°, nothing clumped), so the ring stays a ring, just not
+a symmetric one. Bonded atoms keep the even spacing: they are slow, they never
+alias, and the even ring is the cleaner picture.
 
 At `loneRadius` 1.0 the ring sits on the valence shell, which is physically
 where a lone pair belongs — **but that is also how far the bonding lobe reaches
