@@ -3970,6 +3970,31 @@ const BOND_DOT_CONF  = 1.55;    // confinement radius, x the valence radius.
                                 // In bonds this is the outer edge of the thick
                                 // valence band, which measured 1.49x the shell
                                 // radius on O and 1.68x on H.
+// Where the tab opens, as a multiple of the natural bond length. Not 1.0: at
+// the natural length the two nuclei and their halos nearly touch, there is no
+// visible gap for the shared pair to live in, and the first thing the tab says
+// should be "these are two atoms with something between them".
+const BOND_START_MULT = 1.55;
+
+// The lobe is drawn bigger and brighter than a faithful reading would make it
+// at that opening separation. `BOND_FIELD_BOOST` multiplies its magnitude and
+// `BOND_FIELD_SQUEEZE` its width.
+//
+// The cost is real and worth stating: brightness IS the energy reading here, so
+// boosting it means the top of the colour ramp is reached before the bond is
+// whole. Measured at 1.30, the lobe saturates over roughly 0.75x to 1.40x the
+// natural length — a band straddling the bottom of the well, where the bond is
+// 83% whole or better either side. It comes back off saturation below 0.75,
+// because the repulsive wall drops the held energy fast. At the 1.55x opening
+// separation the ramp sits at 0.89, bright but with headroom.
+//
+// So the colour says "as whole as it gets" across that band instead of
+// resolving 83% from 100%. The kJ/mol readout and the Morse curve still
+// separate them exactly; it is only the colour that runs out, and only where
+// the answer is "this bond is fine".
+const BOND_FIELD_BOOST   = 1.30;
+const BOND_FIELD_SQUEEZE = 0.85;
+
 const BOND_DOT_GLOW  = 17;      // px — bonds draws these at electronDotR 16.5
 const BOND_DOT_CORE  = 3;       // px — its core is a sixth of that
 
@@ -3997,7 +4022,7 @@ function bondHeldFraction(r, r0) {
 function bondTabReset() {
   const [a, b] = bondTabEls();
   bondTab.r0  = bondLen(a, b);
-  bondTab.sep = bondTab.r0;
+  bondTab.sep = bondTab.r0 * BOND_START_MULT;
   initBondDots();
 }
 
@@ -4103,13 +4128,13 @@ function drawBondTab() {
     // feature — it is what makes a collision flare read as a white core
     // spreading — but here the brightness is the reading, and a clipped core
     // throws away the top of the range just where the bond is most interesting.
-    mag: bondEnergy(A.el, B.el) / BOND_ENERGY_MAX * held * FIELD_GAIN,
+    mag: bondEnergy(A.el, B.el) / BOND_ENERGY_MAX * held * FIELD_GAIN * BOND_FIELD_BOOST,
     // Narrower than the main tab's lobe. FIELD_WIDTH is a fraction of the bond
     // LENGTH and the gaussian reaches 2.5 sigma, so a squeeze of 1 gave a lobe
     // reaching ~193 px either side of a 257 px bond — taller than the bond is
     // long, which reads as a blob with two nuclei in it. 0.5 puts the reach at
     // about a third of the length, and the bond is the shape again.
-    squeeze: 0.5,
+    squeeze: BOND_FIELD_SQUEEZE,
     load: 1 - held,            // colours it: whole bond white, stretched pink
   }];
   drawFieldHeatmap(ctx, seg, W, H);

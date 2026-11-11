@@ -1155,7 +1155,59 @@ diagram, and they are drawn back to front by `z` so the ball reads as a ball.
 Cost at the heaviest pair (O=O, 32 nucleons, each a base gradient plus a
 shadow-blurred core): **0.19 ms/frame** against a 16.7 ms budget.
 
-### Two things the main tab's lobe does that this tab must not### Two things the main tab's lobe does that this tab must not
+### It opens stretched, and the lobe is boosted to suit
+
+```javascript
+const BOND_START_MULT    = 1.55;   // opening separation, x natural
+const BOND_FIELD_BOOST   = 1.30;   // lobe magnitude
+const BOND_FIELD_SQUEEZE = 0.85;   // lobe width
+```
+
+**Not 1.0.** At the natural length the two nuclei and their halos nearly touch,
+there is no visible gap for the shared pair to live in, and the first thing the
+tab says should be "two atoms with something between them". At 1.55 every pair
+opens with a clear **100–124 px** gap between the nucleus balls.
+
+The lobe is then drawn bigger and brighter than a faithful reading would make it
+there — which has a real cost, since **brightness is the energy reading**.
+Measured at a boost of 1.30, the lobe saturates over roughly **0.75x to 1.40x**
+the natural length: a band straddling the bottom of the well, where the bond is
+83% whole or better either side. It comes back *off* saturation below 0.75,
+because the repulsive wall drops the held energy fast. At the 1.55x opening the
+ramp sits at **0.89** — bright, with headroom.
+
+So across that band the colour says "as whole as it gets" rather than resolving
+83% from 100%. The kJ/mol readout and the Morse curve still separate them
+exactly; it is only the colour that runs out, and only where the answer is
+"this bond is fine".
+
+### Two things the main tab's lobe does that this tab must not### It opens stretched, and the lobe is boosted to suit
+
+```javascript
+const BOND_START_MULT    = 1.55;   // opening separation, x natural
+const BOND_FIELD_BOOST   = 1.30;   // lobe magnitude
+const BOND_FIELD_SQUEEZE = 0.85;   // lobe width
+```
+
+**Not 1.0.** At the natural length the two nuclei and their halos nearly touch,
+there is no visible gap for the shared pair to live in, and the first thing the
+tab says should be "two atoms with something between them". At 1.55 every pair
+opens with a clear **100–124 px** gap between the nucleus balls.
+
+The lobe is then drawn bigger and brighter than a faithful reading would make it
+there — which has a real cost, since **brightness is the energy reading**.
+Measured at a boost of 1.30, the lobe saturates over roughly **0.75x to 1.40x**
+the natural length: a band straddling the bottom of the well, where the bond is
+83% whole or better either side. It comes back *off* saturation below 0.75,
+because the repulsive wall drops the held energy fast. At the 1.55x opening the
+ramp sits at **0.89** — bright, with headroom.
+
+So across that band the colour says "as whole as it gets" rather than resolving
+83% from 100%. The kJ/mol readout and the Morse curve still separate them
+exactly; it is only the colour that runs out, and only where the answer is
+"this bond is fine".
+
+### Two things the main tab's lobe does that this tab must not
 
 - **It clips.** `FIELD_GAIN` is set so resting bonds sit at the top of the ramp
   and collisions drive past it, because a flare reading as a white core
