@@ -733,6 +733,54 @@ motion floor 41–57%. Capacity was re-checked at 4.5, 5 and 6 and all three bre
 noise, not capacity, so 6 stands. Once the first bond goes the rest follow
 within 5–20 s, because free atoms are fast and keep hitting.
 
+#### Breaking is endothermic
+
+```javascript
+let breakSlow = 0.5;   // a fragment's nominal speed, x what equipartition gives
+```
+
+Breaking a bond **absorbs** energy — 436 kJ/mol for an H–H — so a dissociated
+gas is colder than the one it came from. The sim used to say the opposite.
+Equipartition gives a fragment `sqrt(2) ×` its parent's nominal speed because it
+has half the mass, and `breakKick` added more on top, so **a fully broken world
+ran 1.45× faster** than the intact one (motion energy 2.12×). Exactly backwards.
+
+**It has to change the nominal speed, not just scale the velocities**, because
+the speed band would pull a slowed fragment straight back up to whatever
+`vTarget` says. `breakBody` now scales both: the nominal, so the band holds it
+there, and the inherited velocity, so the drop lands at the instant the bond
+goes. 0.5 against equipartition's `sqrt(2)` leaves a free atom at **0.71 ×** its
+parent's nominal — the same proportion for H and for O, so the world slows
+together rather than changing shape.
+
+Measured end to end at the shipped defaults:
+
+| | mean speed before | after | |
+|---|---|---|---|
+| H₂ → H | 506 | **343** | −32% |
+| O₂ → O | 158 | **97** | −39% |
+
+with total motion ending at **0.43×** and the dissociation cost — the kinetic
+energy absorbed plus the vibration spent — counted in `breakCostPaid` at 73% of
+the spawn energy.
+
+**This trades directly against being able to break anything**, and the trade is
+sharp. Slower fragments pump less energy, and the last O₂ is the bond that
+depends on them:
+
+| `breakSlow` | High: broke | speed after |
+|---|---|---|
+| 1.0 | 6/6/**0** | 1.45× (faster!) |
+| 0.7 | 6/6/6 | 0.84–0.97× (barely) |
+| 0.5 | 5/5/6 | 0.70× |
+| 0.35 | 5/3/**0** | — never finishes |
+
+At 0.5 the last bond often never broke. The fix was to drop `breakEnergy` from
+6 to **3.5** so bonds give way more readily in a colder world — which restores
+**6/6/6 at High and 0/0 at Low**, with the last break landing at 54–138 s. Both
+knobs are dev sliders, and they have to be moved together: making fragments
+slower without lowering capacity leaves bonds that can never break.
+
 #### Where the energy actually goes
 
 The deposit is now exact. **The decay is still a leak** — `exp(-dt / VIB_TAU)`

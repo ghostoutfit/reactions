@@ -2152,7 +2152,7 @@ function spawnWorld() {
     world.bodies.push(placed);
   }
   spinCapHits = 0; floorTopUps = 0; energyCreated = 0; fieldsLeaked = 0;
-  breakCount = 0; vibPeak = 0;
+  breakCount = 0; vibPeak = 0; breakCostPaid = 0;
   lastDialSpeed = launchSpeed() * tempCurrent;
   resetEnergyTrace();
   updateSpeciesCounters();
@@ -2509,9 +2509,26 @@ function collidePair(A, B) {
 // instead of a fortieth. A fast H can break an O2 now because it genuinely has
 // the energy to, not because anything was special-cased for it.
 let breakBonds  = true;    // dev toggle
-let breakEnergy = 6;       // vibration a bond can hold before it lets go
+let breakEnergy = 3.5;     // vibration a bond can hold before it lets go
 let VIB_TAU     = 2.2;     // seconds — how long a bond holds what it was given
 let breakKick   = 0.22;    // separation speed given to the halves, x nominal
+
+// How much slower a free atom runs than equipartition alone would have it.
+//
+// Breaking a bond ABSORBS energy — 436 kJ/mol for an H-H — so a gas that has
+// dissociated is colder than the one it came from. Without this the sim says
+// the opposite: equipartition gives a fragment sqrt(2) x its parent's nominal
+// speed, because it has half the mass, so both species sped UP by about 41% on
+// breaking and `breakKick` added more on top. A fully broken world ran faster
+// than an intact one, which is exactly backwards.
+//
+// The speed band is why this has to be a change of NOMINAL speed and not just
+// a one-off scaling of the velocities: the band would pull a slowed fragment
+// straight back up to whatever vTarget says. 0.5 against equipartition's
+// sqrt(2) leaves a free atom at 0.71 x its parent's nominal — a ~29% drop, the
+// same for H and for O, so the whole world slows together.
+let breakSlow   = 0.5;
+let breakCostPaid = 0;     // energy the dissociation absorbed, for the books
 let breakCount  = 0;       // diagnostics: molecules broken this run
 let vibPeak     = 0;       // diagnostics: most vibration held this run
 
@@ -2575,17 +2592,28 @@ function breakBody(b) {
     const rx = at.lx * ca - at.ly * sa, ry = at.lx * sa + at.ly * ca;
     const [vx, vy] = pointVel(b, rx, ry);
     const len = Math.hypot(rx, ry) || 1;
-    const nominal = speciesSpeed([at.el]);
+    // Both the nominal AND the inherited velocity are slowed. The nominal is
+    // what the speed band will hold it at from now on; the scaling is what
+    // makes the drop happen at the instant the bond goes rather than over the
+    // next few collisions.
+    const nominal = speciesSpeed([at.el]) * breakSlow;
     const kick = breakKick * nominal;
 
     const f = withElectrons(makeBody([at.el], b.x + rx, b.y + ry, 0, 0, 0, nominal));
-    f.vx = vx + kick * rx / len;
-    f.vy = vy + kick * ry / len;
+    f.vx = vx * breakSlow + kick * rx / len;
+    f.vy = vy * breakSlow + kick * ry / len;
     f.spin = 0;                 // a lone atom has nothing to spin about
     f.flare = b.flare;
     f.fromBreak = true;
     return f;
   });
+
+  // What the dissociation took out of the world, counted the way the speed
+  // band's invention and the vibration leak are.
+  const keBefore = 0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy)
+                 + 0.5 * b.inertia * b.spin * b.spin;
+  const keAfter = made.reduce((a, f) => a + 0.5 * f.mass * (f.vx * f.vx + f.vy * f.vy), 0);
+  breakCostPaid += Math.max(0, keBefore - keAfter) + b.vib * doseUnit();
 
   world.bodies.splice(idx, 1, ...made);
   breakCount++;
@@ -3186,6 +3214,7 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     row('devBreakH', 'Bond capacity',  4,  80,  1,    breakEnergy,  '#ffc24a') +
     row('devVibTau', 'Vibration hold',  0.3, 8, 0.1,  VIB_TAU,      '#ffc24a') +
     row('devVibGlow','Heat glow',       0,   1, 0.05, VIB_GLOW,     '#ffc24a') +
+    row('devBreakSlow','Fragments slow to', 0.2, 1.2, 0.05, breakSlow,  '#ffc24a') +
     row('devBreakK', 'Fragment kick',   0,   1, 0.02, breakKick,    '#ffc24a') +
     '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
     '<div style="font-size:9px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.4;margin-top:8px;">' +
@@ -3252,6 +3281,8 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   bind('devBreakH', v => breakEnergy = v, false, v => v.toFixed(0));
   bind('devVibTau', v => VIB_TAU     = v, false, v => v.toFixed(1) + ' s');
   bind('devVibGlow', v => VIB_GLOW   = v, false, v => v.toFixed(2));
+  bind('devBreakSlow', v => breakSlow = v, false,
+       v => v.toFixed(2) + '\u00d7 (' + (v * Math.SQRT2).toFixed(2) + '\u00d7 parent)');
   bind('devBreakK', v => breakKick     = v, false, v => v.toFixed(2) + '\u00d7');
   bind('devLoneR',  v => loneRadius  = v, false, v => v.toFixed(2) + '\u00d7');
   bind('devLoneS',  v => loneSpeed   = v, false, v => v.toFixed(3));
