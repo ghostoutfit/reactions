@@ -692,7 +692,7 @@
             <canvas id="speedLinesCanvas" width="50" height="46" style="display:block;flex-shrink:0;image-rendering:pixelated"></canvas>
             <canvas id="speedDialIconCanvas" width="46" height="46" style="display:block;flex-shrink:0;image-rendering:pixelated"></canvas>
           </div>
-          <div id="speedDialWrap"><input type="range" id="speedDial" min="0.2" max="8.0" step="0.1" value="4.0"></div>
+          <div id="speedDialWrap"><input type="range" id="speedDial" min="0.2" max="12.0" step="0.1" value="8.0"></div>
         </div>
         <div id="speciesCounters" style="display:flex;gap:5px;justify-content:center;">
           <div style="flex:1;background:rgba(255,255,255,0.05);border-radius:6px;padding:3px 5px;text-align:center;font-size:11px;color:var(--text-dim);line-height:1.5;white-space:nowrap;">
@@ -2032,7 +2032,15 @@ function bodyAtoms(b, dx = 0, dy = 0) {
   }));
 }
 
-// Launch speed in px/s for H2, from the speed slider (0.2–8.0 on the dial)
+// Launch speed in px/s for H2, from the speed slider (0.2–12.0 on the dial).
+//
+// The default sits at 8, not in the middle, because the world has to START
+// fast enough to break its own bonds. The dose a hit deposits is scale-free in
+// this dial by design — the threshold means the same at any setting — but the
+// collision RATE is not, and `VIB_TAU` is fixed in seconds, so the pumping rate
+// (dose x hits per second) scales with speed. Measured at capacity 3.5: dial 2
+// broke 3/6/4 of six, dial 4 took 24–85 s, dial 8 took 34–45 s. The ceiling was
+// raised from 8 to 12 so the default is not pinned to the end of the slider.
 function launchSpeed() {
   return parseFloat(document.getElementById('speedDial').value) * 45;
 }
@@ -2509,7 +2517,7 @@ function collidePair(A, B) {
 // instead of a fortieth. A fast H can break an O2 now because it genuinely has
 // the energy to, not because anything was special-cased for it.
 let breakBonds  = true;    // dev toggle
-let breakEnergy = 3.5;     // vibration a bond can hold before it lets go
+let breakEnergy = 4.5;     // vibration a bond can hold before it lets go
 let VIB_TAU     = 2.2;     // seconds — how long a bond holds what it was given
 let breakKick   = 0.22;    // separation speed given to the halves, x nominal
 

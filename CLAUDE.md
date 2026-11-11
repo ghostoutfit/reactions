@@ -775,11 +775,38 @@ depends on them:
 | 0.5 | 5/5/6 | 0.70× |
 | 0.35 | 5/3/**0** | — never finishes |
 
-At 0.5 the last bond often never broke. The fix was to drop `breakEnergy` from
-6 to **3.5** so bonds give way more readily in a colder world — which restores
-**6/6/6 at High and 0/0 at Low**, with the last break landing at 54–138 s. Both
-knobs are dev sliders, and they have to be moved together: making fragments
-slower without lowering capacity leaves bonds that can never break.
+At 0.5 the last bond often never broke. **The fix is that the world starts
+faster, not that bonds are made flimsy.**
+
+The speed dial's default went from 4 to **8** (of a ceiling raised 8 → 12, so
+the default is not pinned to the end of the slider), and `breakEnergy` sits at
+**4.5**.
+
+Why the dial helps at all is worth stating, because the obvious reasoning says
+it should not. The dose a hit deposits **is** scale-free in the dial — that is
+deliberate, so the threshold means the same at any setting. But the collision
+**rate** is not, and `VIB_TAU` is fixed in seconds, so the pumping rate
+(dose × hits per second) scales with speed. Measured at capacity 3.5:
+
+| dial | High: broke | last break |
+|---|---|---|
+| 2 | 3/6/4 | 132–259 s |
+| 4 | 6/6/6 | 24–85 s |
+| 8 | 6/6/6 | 34–45 s |
+
+Raising the dial does **not** buy sturdier bonds, though — at dial 6–8,
+capacities of 8 and 11 broke **nothing at all** (0/0/0). `vibDrag` is a negative
+feedback: a molecule that just gave energy to its bond runs slower, so it pumps
+less. Capacity has to stay in the 3.5–5.5 band regardless of how fast the world
+starts.
+
+Shipped at dial 8 / capacity 4.5: **6/6/6 at High, 0/0 at Low** over 900 s, with
+breaks spread across 2–90 s. H₂ 1126 → H **734** and O₂ 288 → O **185**, both
+about −35%, and total motion ending at **0.40–0.43×**.
+
+All of these are dev sliders, and they interact: making fragments slower without
+either lowering capacity or starting faster leaves bonds that nothing can
+break.
 
 #### Where the energy actually goes
 
