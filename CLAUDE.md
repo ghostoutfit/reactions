@@ -1089,45 +1089,66 @@ energy at **0.538 r0** on the compression side, so a 0.5 floor put the bottom of
 the drag range inside a dead zone reading a flat "0 kJ/mol" however hard you
 pushed. At 0.6 the wall is steep — 32% left — and still moving.
 
-### Electrons: the bonds repo's Trails view, ported
+### Electrons: the bonds repo's "shells" bond dots, ported
 
-The valence electrons are drawn the way the **bonds** sim's Trails tab draws
-them, not the way the main tab does. Ported from `~/Projects/bonds`:
+Not an orbit and not a trail. Two dots (four on a double bond) that **wander**
+in the region between the nuclei — jittering, repelling each other, anchored
+loosely to the midpoint in x and to their own side in y, and confined to the
+union of the two valence shells. Straight out of the bonds sim's shells view.
+That is its picture of a shared pair: electrons living in the space between,
+not running a path.
 
-- **3D orbital groups.** Each group is a tilted circular orbit whose plane
-  slowly precesses about a random axis (Rodrigues rotation, `_o3Precess`), with
-  electrons pairing two to an orbit. Every electron pushes a 3D point per frame
-  into a trail capped at `ORB_TRAIL_LEN`, projected through one shared
-  azimuth/elevation.
-- **The batched stroke.** One pass per colour split into `nB` alpha buckets, so
-  a trail fades from tail to head, drawn with `quadraticCurveTo` through
-  midpoints, then one filled arrowhead at the head. That arrowhead is what makes
-  a trail read as a direction of travel rather than a smear.
-
-**Only the valence shell is built** — the bonds version drew every occupied
-shell with the inner ones in grey, and reactions has never modelled inner
-electrons, so there is nothing to leave out.
-
-**The bond's own electrons stay reactions'.** They come from a real body built
-with `makeBody`, stepped by `stepBondElectron`, and only *rendered* in the bonds
-style. The two tabs must not disagree about what a bond is. The body's atoms are
-moved to match the drag, so the figure-8 stretches with it — verified, `lx` went
-to ±55 for a 2× stretch of a 54.9 px bond.
-
-Electron counts come out chemically right: H–H 2 bonding and no lone pairs,
-O=O 4 bonding and 4 lone on each atom, O–H 2 bonding with 5 left on the oxygen.
-
-### Nuclei: 3x the MAIN tab's, not 3x this tab's
+**The shell shading those dots normally sit inside is deliberately not drawn.**
+Only the bonding electrons appear, so nothing competes with them.
 
 ```javascript
-const BOND_NUC_SCALE = 3;   // x the main tab's 12 px, fixed, not x the view zoom
+const BOND_DOT_UD   = 0.012;   // vertical jitter — bonds' values, unchanged
+const BOND_DOT_LR   = 0.005;   // less sideways, so they drift up and down
+const BOND_DOT_DAMP = 0.93;
+const BOND_DOT_CONF = 1.55;    // confinement, x the valence radius
 ```
 
-The other reading was tried and is unusable. This tab's nuclei were already
-scaled by the view zoom, so tripling that put the nucleus radius at **2.08x the
-valence radius** — the orbitals ran *inside* the nucleus and the entire electron
-picture vanished behind it. Fixed at 3x the main tab's 12 px, the nucleus is a
-clear 36 px ball with the valence trails well outside it.
+`BOND_DOT_CONF` is the one number that had to be re-derived. In bonds the
+confinement is the outer edge of a thick valence *band*, which measured **1.49x
+the shell radius on O and 1.68x on H**; reactions has no such band, so a single
+1.55 stands in for it.
+
+**One dot per bonding electron**, so an O=O shows four where bonds always drew
+two. Reactions knows the bond order and four dots in the gap is the honest
+picture. Verified: H–H 2, O=O 4, O–H 2; none escape confinement over 400 steps
+on any pair; all finite.
+
+### Nuclei: 3x the BONDS sim's, measured
+
+```javascript
+const BONDS_NUC_FRACTION = { H: 0.0257, O: 0.0328, He: 0.0290 };
+const BOND_NUC_SCALE = 3;
+```
+
+Measured in the bonds sim rather than guessed, as a fraction of that atom's
+valence-shell radius — the only scale-free way to carry it across, since the two
+sims use different px-per-pm:
+
+| | nucleus | valence shell | fraction |
+|---|---|---|---|
+| H | 12.31 | 480 | **0.0257** |
+| O | 31.03 | 945 | **0.0328** |
+
+A nucleus there is a couple of percent of the shell it sits in, so 3x that is
+still small: **4.8 px radius for H, 6.1 px for O** in this tab. The fraction
+differs by element because bonds builds a nucleus out of nucleons and its radius
+grows as the cube root of their number — an O has 16 to an H's 1, so it is 2.5x
+the ball. Worth keeping: it is what makes an O–H look like what it is.
+
+Two earlier readings of "3x" were tried and rejected, both by looking:
+
+- **3x this tab's own nuclei** put the nucleus radius at 2.08x the *valence*
+  radius. The electrons ran inside the nucleus and the picture vanished.
+- **3x the main tab's 12 px** gave a 36 px ball — workable, but 8.5x the
+  proportion bonds actually uses.
+
+Because the nuclei are now only a few px, the drag hit radius stays at 40 px and
+the grab rings are what you actually aim at.
 
 ### Two things the main tab's lobe does that this tab must not
 
