@@ -708,8 +708,8 @@
            Low/High never resizes the group or shifts anything beside it. -->
       <div id="tempGroup" style="display:flex;flex-direction:column;gap:4px;align-items:stretch;">
         <span style="font-size:9px;letter-spacing:0.07em;text-transform:uppercase;opacity:0.5;text-align:center;">Temp</span>
-        <button class="awheel-item temp-btn active" data-temp="low">LOW</button>
-        <button class="awheel-item temp-btn" data-temp="high">HIGH</button>
+        <button class="awheel-item temp-btn" data-temp="low">LOW</button>
+        <button class="awheel-item temp-btn active" data-temp="high">HIGH</button>
       </div>
     </div>
 
@@ -2067,9 +2067,13 @@ function speciesSpeed(els) {
 // graph shows honestly.
 const TEMP_HIGH = 3;        // High runs at 3× Low
 const TEMP_TAU  = 0.26;     // seconds — exponential approach, quick then settling
-let tempLevel   = 'low';
-let tempTarget  = 1;
-let tempCurrent = 1;
+// Starts HIGH. The sim's subject is what collisions do to bonds, and at Low
+// nothing breaks at all — that is the measured, deliberate design of the
+// threshold, not a shortfall — so a world that opens at Low opens on the one
+// setting where the main event never happens.
+let tempLevel   = 'high';
+let tempTarget  = TEMP_HIGH;
+let tempCurrent = TEMP_HIGH;
 
 function setTemperature(level) {
   tempLevel  = level;

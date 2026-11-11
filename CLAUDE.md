@@ -441,6 +441,13 @@ at the dial speed and an O2 carries 16x the energy of an H2.
 
 ## Temperature
 
+**The sim opens at High.** At Low nothing breaks at all — that is the measured,
+deliberate design of the threshold, not a shortfall — so a world that opened at
+Low opened on the one setting where the main event never happens. Verified on a
+cold load: `tempCurrent` 3, only the HIGH button active, H₂ spawning at 1126
+against Low's ~375. Switching down and back up still ramps (836 → 209 → climbing
+again), since `tempCurrent` chases `tempTarget` rather than jumping.
+
 A Low/High toggle on the toolbar. High runs at `TEMP_HIGH` = 3x the speed, which
 is **9x the kinetic energy** — the energy readout says so, and the graph rescales
 to fit the excursion.
