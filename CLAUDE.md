@@ -800,9 +800,12 @@ feedback: a molecule that just gave energy to its bond runs slower, so it pumps
 less. Capacity has to stay in the 3.5–5.5 band regardless of how fast the world
 starts.
 
-Shipped at dial 8 / capacity 4.5: **6/6/6 at High, 0/0 at Low** over 900 s, with
-breaks spread across 2–90 s. H₂ 1126 → H **734** and O₂ 288 → O **185**, both
-about −35%, and total motion ending at **0.40–0.43×**.
+Shipped at dial 8 / capacity **2.5**: **6/6/6 at High, 0/0/0 at Low** over
+3 × 900 s, everything broken by 10–17 s. H₂ ~1100 → H ~**730** and O₂ ~280 → O
+~**176**, both about −35%, total motion ending at **0.41–0.47×**. Capacity was
+swept at 1.0, 1.5, 2.0 and 3.0 as well — all break 6/6/6 with Low clean, taking
+2.7–5.8 s, 2.3–10.2 s, 4.2–13.1 s and 11.4–23.7 s respectively, so there is
+plenty of room either way.
 
 All of these are dev sliders, and they interact: making fragments slower without
 either lowering capacity or starting faster leaves bonds that nothing can
@@ -831,6 +834,29 @@ have done without changing it.
 
 A single hit big enough to clear the threshold on its own still breaks
 immediately. Accumulation does not replace that case, it contains it.
+
+#### The colour scale is not the break threshold
+
+```javascript
+let breakEnergy = 2.5;     // vibration a bond can hold before it lets go
+let colourScale = 4.5;     // vibration that reads as full pink
+```
+
+These used to be one number, which meant **every change to how easily bonds
+break silently rescaled the colours**: drop the threshold and bonds go pink
+sooner, raise it and they never get there. `vibLoad()` now measures against
+`colourScale`, so the threshold can move without touching a picture that is
+already tuned. Both are scaled by the bond's own energy the same way, so an O=O
+still sits 498/436 above an H–H on both axes.
+
+**The consequence, measured:** with the threshold at 2.5 under a colour scale of
+4.5, a bond breaks at a mean colour load of **0.68**, and in the frames actually
+rendered before it goes it only reaches **0.44 mean / 0.55 max** — the final
+dose lands in the same frame as the break. So bonds now run white → lavender →
+purple and break around purple, and **the top of the pink is a colour you will
+rarely see**. Setting `Full-pink at` equal to `Bond capacity` restores "pink
+means about to go", at the cost of the colours moving faster per unit of
+vibration.
 
 #### Choosing the capacity
 
