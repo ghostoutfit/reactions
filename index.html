@@ -2159,7 +2159,7 @@ function spawnWorld() {
     }
     world.bodies.push(placed);
   }
-  spinCapHits = 0; floorTopUps = 0; energyCreated = 0; fieldsLeaked = 0;
+  spinCapHits = 0; floorTopUps = 0; energyCreated = 0; fieldsReturned = 0;
   breakCount = 0; vibPeak = 0; breakCostPaid = 0;
   lastDialSpeed = launchSpeed() * tempCurrent;
   resetEnergyTrace();
@@ -2224,11 +2224,22 @@ function stepWorld(dt) {
     // A bond that is left alone cools back down. Without this every molecule
     // breaks eventually, however cold the world is, and Low stops being safe.
     if (b.sag > 1e-4) b.sag *= Math.exp(-dt / SAG_TAU); else b.sag = 0;
+    // Vibrational relaxation: the bond hands its energy BACK to the molecule's
+    // motion rather than dropping it out of the world. Energy goes as v^2,
+    // hence the square root. This is what a bond actually does between
+    // collisions — nothing is radiated away here, so the colour softening you
+    // see is energy returning to motion, not energy disappearing.
     if (b.vib > 1e-4) {
       const was = b.vib;
       b.vib *= Math.exp(-dt / VIB_TAU);
-      fieldsLeaked += (was - b.vib) * doseUnit();   // left the world; see CLAUDE.md
-    } else { fieldsLeaked += b.vib * doseUnit(); b.vib = 0; }
+      const back = (was - b.vib) * doseUnit();
+      const ke = 0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy);
+      if (ke > 1e-9 && back > 0) {
+        const k = Math.sqrt((ke + back) / ke);
+        b.vx *= k; b.vy *= k;
+        fieldsReturned += back;
+      }
+    } else b.vib = 0;
   }
   world.time += dt;
 
@@ -2264,7 +2275,7 @@ function pointVel(b, rx, ry) {
 // not enough spin to buy the speed-up, does any energy actually change.
 let speedBandOn = true;        // dev toggle
 let MAX_SPIN    = 14;          // rad/s — past this it is a blur, not a spin
-let fieldsLeaked = 0;   // energy the vibration decay dropped out of the world
+let fieldsReturned = 0; // energy the vibration decay handed back to motion
 let spinCapHits = 0;    // diagnostics: times the reservoir could not take it
 let floorTopUps = 0;
 let energyCreated = 0;   // energy conjured to hold the floor
@@ -2536,7 +2547,7 @@ let breakKick   = 0.22;    // separation speed given to the halves, x nominal
 // straight back up to whatever vTarget says. 0.5 against equipartition's
 // sqrt(2) leaves a free atom at 0.71 x its parent's nominal — a ~29% drop, the
 // same for H and for O, so the whole world slows together.
-let breakSlow   = 0.5;
+let breakSlow   = 0.25;
 let breakCostPaid = 0;     // energy the dissociation absorbed, for the books
 let breakCount  = 0;       // diagnostics: molecules broken this run
 let vibPeak     = 0;       // diagnostics: most vibration held this run
@@ -3065,8 +3076,8 @@ function updateEnergyNote() {
   // energy from motion into the bonds; the vibration decay then drops it out
   // of the world entirely, which is why the two do not add to a constant.
   el.textContent = speedBandOn
-    ? 'Collisions move motion into the bonds. Speed band on \u2014 motion drifts up, then levels off'
-    : 'Collisions move motion into the bonds, exactly. Vibration then decays out of the world';
+    ? 'Motion into the bonds and back out again. Speed band on \u2014 motion drifts up, then levels off'
+    : 'Motion into the bonds and back out again; only breaking a bond spends it for good';
 }
 
 // ─── Controls ─────────────────────────────────────────────────────────────────
@@ -3532,12 +3543,14 @@ window.energySplit = function () {
     { part: 'motion (sum)',     energy: +total.toFixed(0),  share: +(total  / all * 100).toFixed(1) + '%' },
     { part: 'fields (bonds)',   energy: +fields.toFixed(0), share: +(fields / all * 100).toFixed(1) + '%' },
     { part: 'total held',       energy: +all.toFixed(0),    share: '100%' },
-    { part: 'LEAKED by decay',  energy: +fieldsLeaked.toFixed(0),
-      share: +(fieldsLeaked / Math.max(1, energyAtSpawn) * 100).toFixed(1) + '% of spawn' },
+    { part: 'decay -> motion',  energy: +fieldsReturned.toFixed(0),
+      share: +(fieldsReturned / Math.max(1, energyAtSpawn) * 100).toFixed(1) + '% of spawn' },
+    { part: 'spent breaking',   energy: +breakCostPaid.toFixed(0),
+      share: +(breakCostPaid / Math.max(1, energyAtSpawn) * 100).toFixed(1) + '% of spawn' },
   ]);
   console.log('collision -> bond conversion: ' + Math.round(fieldConvert * 100) + '%' +
-    '  |  the transfer itself is exact (restitution sqrt(1 - conv)); what leaves the' +
-    ' world is the vibration decay, counted above');
+    '  |  the transfer is exact both ways (restitution sqrt(1 - conv) in, ' +
+    'relaxation back out). The only sink left is dissociation.');
   console.log('band ' + (speedBandOn ? 'on' : 'off') +
     ' \u00b1' + Math.round(SPEED_SIGMA * 100) + '%  |  out of band now: ' + outOfBand + '/' + world.bodies.length +
     '  |  spin capped ' + spinCapHits + '\u00d7, floor topped up ' + floorTopUps + '\u00d7' +

@@ -813,112 +813,56 @@ break.
 
 #### Where the energy actually goes
 
-The deposit is now exact. **The decay is still a leak** — `exp(-dt / VIB_TAU)`
-drops energy out of the world rather than passing it anywhere, and at the
-shipped defaults that is **88–214% of the spawn energy over 240 s at High**.
-It is no longer silent: `fieldsLeaked` counts it and `energySplit()` prints it,
-the way `energyCreated` already counts what the speed band invents.
+Both directions are exact, and nothing leaks.
 
-Physically it should leave as infrared, or to other molecules in later
-collisions. Routing it back is the remaining piece, and it needs the care the
-speed band got, because feeding it back is exactly how a world runs away.
+| | |
+|---|---|
+| collision | motion → fields, via restitution `sqrt(1 - fieldConvert)` |
+| relaxation | fields → motion, `exp(-dt / VIB_TAU)` returned as speed |
+| breaking | fields + motion → **spent**, the one real sink |
 
-#### Holding and cooling
+**The relaxation used to delete the energy.** A bond's colour softened between
+collisions and what it was holding simply stopped existing — 88–214% of the
+spawn energy over 240 s at High. It now hands it back to the molecule's motion,
+scaled as `sqrt((ke + back) / ke)` since energy goes as v². That is what a bond
+does between collisions; nothing is radiated away in this model.
 
-`b.vib` accumulates and decays as `exp(-dt / VIB_TAU)`. **The decay is what
-keeps Low safe** — without it every molecule breaks eventually however cold the
-world is, since vibration would only ever go up. Vibration is pumped whether or
-not `breakBonds` is on, so the toggle only decides whether a full bond lets go;
-the heat still shows, and the diagnostics can measure what the world *would*
-have done without changing it.
+Verified with the speed band off and nothing breaking, so neither could mask an
+error: **world drift 0%** over 120 s. And on a single molecule left to relax,
+instrumented frame by frame: vibration lost **190881**, `fieldsReturned`
+**190881**, translation gained 162887, rotation 27994 — **balance exactly 0**.
+(The rotation share is off-centre wall bounces moving energy between the two,
+elastically. A first attempt at this check counted only translation and looked
+a third short, which is a good reason to count both.)
 
-A single hit big enough to clear the threshold on its own still breaks
-immediately. Accumulation does not replace that case, it contains it.
+`energySplit()` now reports `decay -> motion` and `spent breaking` instead of a
+leak.
 
-#### The colour scale is a fraction of the threshold
+#### Making the slowdown unmistakable
 
-```javascript
-let breakEnergy = 2.5;     // vibration a bond can hold before it lets go
-let colourFull  = 0.8;     // full pink at this FRACTION of capacity
-```
+`breakSlow` ships at **0.25**. It was 0.5, which gave a real but unnoticed
+34% drop — measured, stable over 300 s, and still not what anyone saw. The
+headroom came from `breakEnergy` dropping to 2.5: the earlier trade, where
+slowing fragments starved the last O₂, was measured at capacities of 4.5–6 and
+simply does not bite at 2.5.
 
-These used to be one number, so **every change to how easily bonds break
-silently rescaled the colours**. Splitting them is right, but an *absolute*
-colour scale is not: set it above the threshold and bonds break before the ramp
-runs out, below it and they sit pink for ages. Measured with an absolute scale
-of 4.5 against a threshold of 2.5, bonds broke at a mean colour load of 0.68 and
-the rendered frames only reached 0.44 mean / 0.55 max — the top of the ramp was
-a colour you never saw.
+| `breakSlow` | High: broke | speed after |
+|---|---|---|
+| 0.5 | 6/6/6 | 0.66–0.76 |
+| 0.4 | 6/6/6 | 0.51–0.60 |
+| 0.3 | 6/6/6 | 0.42–0.44 |
+| **0.25** | **6/6/6** | **0.30–0.34** |
+| 0.15 | 6/6/**5** | 0.19–0.21 |
 
-As a **fraction of capacity**, the full white → purple → pink range survives any
-retuning of breaking, which is the point.
+Shipped: H₂ ~1160 → H **~371** and O₂ ~261 → O **~88**, both about **−67%**,
+with total motion at **0.10–0.11×**. 6/6/6 at High, 0/0/0 at Low over 3 × 900 s.
+0.15 is where it starts failing to finish.
 
-**`colourFull` is under 1 on purpose.** At exactly 1 the ramp reaches pink only
-in the same frame the bond breaks — the dose that saturates the colour is the
-dose that breaks it — so the pink is never actually drawn. Measured over 3 runs
-at High, 120 s each:
-
-| `colourFull` | bonds that reach pink | white | purple | pink |
-|---|---|---|---|---|
-| 1.0 | 67% | 34.6% | 56.7% | 8.7% |
-| **0.8** | **94%** | **26.0%** | **43.5%** | **30.4%** |
-| 0.6 | 89% | 41.1% | 31.6% | 27.3% |
-| 0.45 | 94% | 39.9% | 13.1% | 47.0% |
-
-0.8 uses the whole ramp most evenly. Below it purple gets squeezed — at 0.45 a
-bond mostly jumps from white to pink with barely any purple in between.
-
-`colourFull` is **visual only**; it does not appear in `breakThreshold`. Both it
-and the threshold are scaled by the bond's own energy the same way, so an O=O
-still sits 498/436 above an H–H on both axes.
-
-#### Choosing the capacity
-
-`breakEnergy` is the vibration an O=O can hold; an H–H holds `436/498` of it,
-**22.8 against 26**. Swept against measured behaviour, 3–4 seeds each:
-
-| capacity | High: broke | first break | last break | Low: breaks |
-|---|---|---|---|---|
-| 18 | 6/6/6 | 3.3 s | 8–15 s | 0/0/0 |
-| 22 | 6/6/6/6 | 6–17 s | 18–26 s | — |
-| **26** | **6/6/6/6** | **12–47 s** | **40–64 s** | **0/0/0** |
-| 30 | 6/6/6/6 | 2.6–32 s | 19–54 s | — |
-| 44 | 0/6/0 | — | — | 0/0/0 |
-
-26 gives the longest arc — something to watch rather than a burst — while still
-finishing reliably. 44 is past the edge: two runs in three broke nothing at all.
-
-**Low is clean.** Over 3 × 900 s (45 simulated minutes) at Low: **0 breaks**,
-peak vibration **11.8** against H₂'s capacity of 22.8, a 1.9× margin on the
-worst moment in all of it. Live at High: all six molecules gone by **28.1 s**,
-both O₂ included, no console errors, every body finite.
-
-#### What it looks like
-
-A loaded bond glows, so a molecule about to go is visibly holding energy rather
-than just flashing when hit — `heat = max(flare, VIB_GLOW · vibLoad)`, with
-vibration deliberately reading below a full flare so a collision is still the
-brightest thing that happens to a bond. Measured over the load range, in a box
-around one O₂'s bond: white-core pixels **219 → 810 → 1146 → 1335 → 1440**, and
-total ink +34%. The core *spreads* rather than the lobe simply brightening,
-which is the same effect the flare relies on and for the same reason.
-
-#### Fragments
-
-Each keeps the velocity its atom actually had — the body's velocity plus the
-spin's contribution at that offset, via `pointVel` — so a molecule that was
-spinning fast throws its halves apart harder, with none of it invented. On top
-sits `breakKick` along the outward direction, standing in for the bond energy
-released. A free atom gets `spin = 0`: there is nothing for it to spin about.
-
-The electron structure falls out for free: `buildElectrons` on a one-atom body
-with no bonds makes every valence electron lone, so a free H shows **1** and a
-free O shows **6**. Both are radicals, and both look like it.
-
-**Breaks are applied after the collision pass, never inside it** —
-`world.breaking` queues them and `stepDissociation` splices. Replacing a body
-mid-pass would shift `world.bodies` indices under the loop and let a pair be
-missed or tested twice.
+**None of this is faked.** The speed on screen is the speed in the physics.
+One perceptual confound to know about, though: `loneSpeedFree` spins a free
+atom's electrons at 6×, so a slow free atom still reads as frantic. That is a
+separate visual channel from translation, and it was asked for deliberately —
+but it is the thing working against "the world is calmer now".
 
 #### runBreakTests()
 
