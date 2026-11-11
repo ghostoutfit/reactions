@@ -695,6 +695,44 @@ High. Swept again at conversion 0.45, 3 seeds at High and 2 at Low:
 | **6** | **6/6/6** | **3.8–31.6 s** | **14.6–38.7 s** | **0/0** |
 | 8 | 6/6/6 | 69.7–107.7 s | 82.6–123.5 s | 0/0 |
 
+#### Making the loss visible
+
+The conversion is real, but it was **invisible on screen**, and the reason is
+subtle enough to be worth writing down: the speed band is not creating energy
+when it restores a molecule. It **sells the pair's spin** to hold their linear
+speed inside the band. So the loss lands on rotation, which is far harder to see
+than speed.
+
+Measured over 507 collisions: the impulse alone took **−13.5%** of the pair's
+linear speed, and after the band it was **+0.1%**. On the hardest third,
+**−37.6% became −2.4%**. One hit went 1122 → 531 → 813.
+
+Tying the band's floor to the bond's accumulated load did **not** fix it — a
+typical hit leaves `vibLoad` near 0.19, which moves the floor about 3%. What has
+to drive it is the energy *that collision* took.
+
+```javascript
+let vibDrag = 0.6;        // how far the band lets a molecule sag
+const SAG_TAU = 0.8;      // seconds for the slowdown to fade
+```
+
+`b.sag` is the share of a body's own kinetic energy that just went into its
+bond. `bandTarget()` lowers the band around it by `sqrt(1 - vibDrag · sag)` —
+energy goes as v², hence the root — so the molecule visibly slows on impact and
+winds back up over about a second. On the hardest third of hits:
+
+| `vibDrag` | after the band |
+|---|---|
+| 0 | −2.2% |
+| **0.6** | **−8.1%** |
+| 0.9 | −17.5% |
+
+It does not starve the breaking: still 6/6/6 at High and 0/0 at Low over 900 s,
+motion floor 41–57%. Capacity was re-checked at 4.5, 5 and 6 and all three break
+6/6/6/6 — the spread in *when* the first break lands (1.2 s to 123 s) is seed
+noise, not capacity, so 6 stands. Once the first bond goes the rest follow
+within 5–20 s, because free atoms are fast and keep hitting.
+
 #### Where the energy actually goes
 
 The deposit is now exact. **The decay is still a leak** — `exp(-dt / VIB_TAU)`

@@ -2006,6 +2006,7 @@ function makeBody(els, x, y, heading, speed, spin, nominal = speed) {
     bonds: els.slice(1).map((_, k) => [k, k + 1]),
     flare: 0,                // collision brightness, decays towards 0
     vib: 0,                  // energy held in the bond; past breakThreshold it lets go
+    sag: 0,                  // share of its motion just given to the bond; fades
     vTarget: nominal,        // nominal speed for this species, tracks temp + dial
     x, y,
     vx: Math.cos(heading) * speed,
@@ -2176,6 +2177,34 @@ const RESTITUTION = 1.0;   // 1 = perfectly elastic: total kinetic energy is con
 // energy the band creates, and already counted in `energyCreated`.
 let fieldConvert = 0.45;
 
+// How visibly a molecule slows when it gives energy to its bond.
+//
+// The conversion is real — motion energy genuinely drops — but it was invisible
+// on screen, and the reason is subtle. The speed band is NOT creating energy
+// here: it sells the pair's SPIN to hold their linear speed inside the band. So
+// the loss lands on rotation, which is far harder to see than speed. Measured
+// over 507 collisions: the impulse alone took -13.5% of the pair's linear
+// speed, and after the band it was +0.1%. On the hardest third, -37.6% became
+// -2.4%. One hit went 1122 -> 531 -> 813.
+//
+// Tying the band's floor to the bond's accumulated load did not fix it either:
+// a typical hit leaves `vibLoad` near 0.19, which moves the floor about 3%.
+// What has to drive it is the energy THIS collision took.
+//
+// `sag` is that, per body: the share of its own kinetic energy that just went
+// into its bond. It decays over SAG_TAU, so the molecule visibly slows on
+// impact and winds back up over about a second. Energy goes as v^2, hence the
+// square root.
+let vibDrag = 0.6;
+const SAG_TAU = 0.8;    // seconds for the slowdown to fade
+
+// The speed the band should hold this body at right now.
+function bandTarget(b) {
+  return b.sag > 1e-4
+    ? b.vTarget * Math.sqrt(Math.max(0.05, 1 - vibDrag * b.sag))
+    : b.vTarget;
+}
+
 function stepWorld(dt) {
   // Move, spin, wrap
   for (const b of world.bodies) {
@@ -2186,6 +2215,7 @@ function stepWorld(dt) {
     if (b.flare > 1e-4) b.flare *= Math.exp(-dt / FLARE_TAU); else b.flare = 0;
     // A bond that is left alone cools back down. Without this every molecule
     // breaks eventually, however cold the world is, and Low stops being safe.
+    if (b.sag > 1e-4) b.sag *= Math.exp(-dt / SAG_TAU); else b.sag = 0;
     if (b.vib > 1e-4) {
       const was = b.vib;
       b.vib *= Math.exp(-dt / VIB_TAU);
@@ -2263,7 +2293,8 @@ function settleBodySpeed(b) {
   if (!speedBandOn) return;
   const v = Math.hypot(b.vx, b.vy);
   if (v < 1e-9) return;
-  const target = softBand(v, b.vTarget * (1 - SPEED_SIGMA), b.vTarget * (1 + SPEED_SIGMA));
+  const vt = bandTarget(b);
+  const target = softBand(v, vt * (1 - SPEED_SIGMA), vt * (1 + SPEED_SIGMA));
   if (target === v) return;
 
   const E0 = 0.5 * b.mass * v * v + 0.5 * b.inertia * b.spin * b.spin;
@@ -2296,7 +2327,8 @@ function settlePairSpeeds(A, B) {
   for (const b of pair) {
     const v = Math.hypot(b.vx, b.vy);
     if (v < 1e-9) continue;
-    const target = softBand(v, b.vTarget * (1 - SPEED_SIGMA), b.vTarget * (1 + SPEED_SIGMA));
+    const vt = bandTarget(b);
+  const target = softBand(v, vt * (1 - SPEED_SIGMA), vt * (1 + SPEED_SIGMA));
     if (target === v) continue;
     const k = target / v;
     b.vx *= k; b.vy *= k;
@@ -2514,6 +2546,10 @@ function vibLoad(b) {
 // immediately — accumulation does not replace that case, it includes it.
 function queueIfBroken(b, energy) {
   if (b.els.length < 2 || b.broken) return;
+  // Record how big a bite this was out of THIS body's motion, so the band lets
+  // it run slow for a moment instead of buying the speed back off its spin.
+  const ke = 0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy);
+  b.sag = Math.min(1, b.sag + energy / Math.max(1e-6, ke + energy));
   // Pumped whether or not breaking is on, so the toggle only decides whether a
   // full bond lets go — the heat still shows, and the diagnostics can measure
   // what the world WOULD have done without changing it.
@@ -3107,6 +3143,7 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     row('devHe', 'He atoms',       0, COMPOSITION_MAX, 1, COMPOSITION_DEFAULT.He, '#7fdbe8') +
     row('devConv', 'Collision \u2192 bond', 0, 0.9, 0.05, fieldConvert, '#c46cff') +
     '<div id="devConvNote" style="opacity:0.45;font-size:10px;"></div>' +
+    row('devDrag', 'Loaded bond slows it', 0, 0.9, 0.05, vibDrag, '#c46cff') +
     '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
     '<div style="font-size:9px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.4;margin-top:8px;">' +
       'Valence electrons</div>' +
@@ -3201,6 +3238,8 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
       ? 'Elastic \u2014 nothing heats, so nothing ever breaks'
       : Math.round(v * 100) + '% of each hit leaves the motion for the bond';
   }, false, v => Math.round(v * 100) + '%');
+  bind('devDrag', v => vibDrag = v, false, v => v === 0 ? 'off' : '-' +
+       Math.round((1 - Math.sqrt(1 - v)) * 100) + '% at full');
   bind('devESpeed', v => eSpeed      = v, false, v => v.toFixed(2));
   bind('devETrail', v => eTrailScale = v, false, v => v.toFixed(2));
   bind('devESteer', v => eSteer      = v, false, v => v.toFixed(2));
@@ -3421,8 +3460,9 @@ window.energySplit = function () {
     trans += 0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy);
     rot   += 0.5 * b.inertia * b.spin * b.spin;
     const v = Math.hypot(b.vx, b.vy);
-    if (v < b.vTarget * (1 - SPEED_SIGMA) - 0.5 ||
-        v > b.vTarget * (1 + SPEED_SIGMA) + 0.5) outOfBand++;
+    const vt = bandTarget(b);
+    if (v < vt * (1 - SPEED_SIGMA) - 0.5 ||
+        v > vt * (1 + SPEED_SIGMA) + 0.5) outOfBand++;
   }
   const fields = energyInFields();
   const total = trans + rot;
