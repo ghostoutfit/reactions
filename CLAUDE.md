@@ -200,7 +200,7 @@ A bare lemniscate is a narrow bow tie. Its widest half-width is `a/(2√2)` —
 than as two orbits. `eWidth` stretches it perpendicular to the bond:
 
 ```javascript
-let eWidth = 0.60;   // 1 = bare lemniscate; 1.41 makes a lobe exactly round
+let eWidth = 2.40;   // 1 = bare lemniscate; 1.41 makes a lobe exactly round
 ```
 
 At 1.45 each H–H lobe measured **51.6 px long by 53.0 px wide**, a ratio of
@@ -244,13 +244,19 @@ kept on the perpendicular, so the lobe breathes but averages a circle.
 
 `eSteer` sets how hard the electron is pulled onto the ideal path — below 1 it
 steers toward the ideal *velocity*, and the lag blurs the laps. **It ships at
-1**: no lag, the electron sits on the ideal point every frame. So the cloud is
-now entirely the three wobbles, re-rolled at **every lobe**:
+0.10**, which is a lot of lag, and the lag does what it always does on a curved
+path: it cuts corners inward. Measured on an O=O, mean distance from the owning
+nucleus is **25.7 px at 0.10 against 33.5 at 1.0**, nominal valence radius 38.1
+— so the lobes run about 23% tighter than the ideal curve and wander more. That
+is the look, not a fault; it is the same mechanism that made circle mode
+collapse, used deliberately on a path that can absorb it.
+
+On top of that lag, three wobbles are re-rolled at **every lobe**:
 
 ```javascript
 let eRadial = 0.26;   // +-: how far the lobe reaches past the nucleus
-let eWander = 0.74;   // +-: how wide the lobe is
-let eTilt   = 0;      // +- radians: the whole lobe swings off the bond axis
+let eWander = 0.80;   // +-: how wide the lobe is
+let eTilt   = 0.54;   // +- radians: the whole lobe swings off the bond axis
 let eRoll   = 0.12;   // how fast a re-rolled target is taken up, per frame
 ```
 
@@ -271,6 +277,28 @@ applied at full value, both signs, with `eRoll` at 0.12.
 
 All five are dev sliders.
 
+### A bonded atom shows only its bonding electrons
+
+```javascript
+let lonePairsOnBonded = false;   // dev toggle
+```
+
+An O₂'s four lone pairs drew as two rings of circling dots around the figure-8,
+and with the bond itself now a pair of round lobes they read as the same kind of
+mark — four rings on one molecule, only two of which say anything about the
+bond. The picture is the bond, so the rest comes off. An O₂ is **4 bonding
+electrons and nothing else**.
+
+**Scoped to bonded atoms, not to oxygen.** A free atom keeps its full shell,
+which is what makes a broken-off O look like a radical carrying six where the O₂
+it came from showed four. Verified: O₂ 4 bonding / 0 lone, H₂ 2 bonding, free O
+still 6.
+
+**This is a real chemical omission.** An O₂ does have lone pairs, and an H₂O's
+bent shape is usually explained by the two on its oxygen. When water arrives
+that explanation needs them back — the toggle turns them on again, and
+`buildElectrons` re-runs on every body when it changes.
+
 ### Two overlapping circles — how an H₂ bond runs
 
 `H₂ bond as two circles` in the dev panel. Each of an H–H bond's two electrons
@@ -284,8 +312,8 @@ closed curve per nucleus, rather than two lobes of one curve meeting at the bond
 midpoint. That is the picture an O₂'s lone pairs already show.
 
 ```javascript
-let bondCircles = true;   // off: the figure-8
-let bondCircleR = 0.85;   // ring radius, multiple of the atom's valence radius
+let bondCircles = false;  // on: a ring per atom, instead of the figure-8
+let bondCircleR = 0.80;   // ring radius, multiple of the atom's valence radius
 ```
 
 They overlap because a bond is shorter than two valence radii: H–H sits
@@ -357,7 +385,7 @@ lone electrons are spaced evenly and all travel the same way, so they read as
 one ring at one radius instead of a scribble.
 
 ```javascript
-let loneRadius = 0.7;     // multiple of the atom's valence radius
+let loneRadius = 0.9;     // multiple of the atom's valence radius
 let loneSpeed  = 0.125;   // radians per frame at 60 fps — one lap in 0.84 s
 let loneSpeedFree = 6.0;  // x loneSpeed for an atom with no bonds at all
 ```
