@@ -64,7 +64,7 @@ Icons (`drawAtomIcon`) stay a plain ring — the arrow is unreadable at icon siz
 
 Each atom carries one small **proton** at its centre, lifted from fission's
 `drawParticles`: the same pink sphere (`#ff1a65` shell, `#ff80b0` core) with a
-white "+", at `nucleusDiameter` = 10 px. One proton stands in for the whole
+white "+", at `nucleusDiameter` = 12 px. One proton stands in for the whole
 nucleus — an oxygen really has eight — so it is a marker saying "the positive
 charge is here", not a count. Shown in both views; in Outline it is what says
 how many atoms the silhouette is made of.
@@ -200,11 +200,14 @@ A bare lemniscate is a narrow bow tie. Its widest half-width is `a/(2√2)` —
 than as two orbits. `eWidth` stretches it perpendicular to the bond:
 
 ```javascript
-let eWidth = 1.45;   // 1 = bare lemniscate; 1.41 makes a lobe exactly round
+let eWidth = 0.60;   // 1 = bare lemniscate; 1.41 makes a lobe exactly round
 ```
 
-Measured on H–H: each lobe is **51.6 px long by 53.0 px wide**, a ratio of
-**1.03** — about as round as stretching can get it.
+At 1.45 each H–H lobe measured **51.6 px long by 53.0 px wide**, a ratio of
+**1.03** — about as round as stretching can get it. **It ships at 0.60, the
+bottom of its slider, and that is inert**: at `eRound` 1 the blend below lands
+fully on the circle and never reads this. It only bites on the way down the
+roundness slider, where 1.41 is the value to come back to.
 
 ### Roundness: the lobes *are* circles
 
@@ -239,20 +242,25 @@ kept on the perpendicular, so the lobe breathes but averages a circle.
 
 ### Pass-to-pass variation
 
-The electron **steers** toward the ideal velocity (`eSteer`) rather than
-snapping to the ideal point. On top of that lag, three wobbles are re-rolled at
-**every lobe**, so no two laps lie on each other and the trail reads as a cloud
-rather than a wire:
+`eSteer` sets how hard the electron is pulled onto the ideal path — below 1 it
+steers toward the ideal *velocity*, and the lag blurs the laps. **It ships at
+1**: no lag, the electron sits on the ideal point every frame. So the cloud is
+now entirely the three wobbles, re-rolled at **every lobe**:
 
 ```javascript
 let eRadial = 0.26;   // +-: how far the lobe reaches past the nucleus
-let eWander = 0.30;   // +-: how wide the lobe is
-let eTilt   = 0.17;   // +- radians: the whole lobe swings off the bond axis
+let eWander = 0.74;   // +-: how wide the lobe is
+let eTilt   = 0;      // +- radians: the whole lobe swings off the bond axis
 let eRoll   = 0.12;   // how fast a re-rolled target is taken up, per frame
 ```
 
-Over 40 lobes that gives a reach spanning **13.7 px**, a width range of 0.57,
-and **18.8°** of swing.
+`eWander` carries most of it, which is why it is so much wider than the 0.30
+that was enough when steering lag was doing half the work.
+
+**The swing is off.** It earned its keep on a leaf-shaped lobe, where rotating
+about the crossing changed what the lobe looked like. A circle rotated about a
+point on itself is the same circle somewhere else — so all `eTilt` did was walk
+the lobes off the bond axis and drift the crossing, with no gain in texture.
 
 An earlier version had almost none of this and it showed. Both jitters were
 multiplied by 0.25 at the point of use, and the width roll was `-random()` —
@@ -265,22 +273,28 @@ All five are dev sliders.
 
 ### Two overlapping circles — how an H₂ bond runs
 
-**On by default.** Each of an H–H bond's two electrons runs a closed circle
-around **its own** nucleus instead of the pair sharing one lemniscate, so an H₂
-reads as two overlapping rings — the shape an O₂ already shows, where each O
-carries a ring of its own lone electrons. `H₂ bond as two circles` in the dev
-panel switches it off, back to the figure-8.
+`H₂ bond as two circles` in the dev panel. Each of an H–H bond's two electrons
+runs a closed circle around **its own** nucleus instead of the pair sharing one
+curve, so an H₂ reads as two overlapping rings — the shape an O₂ already shows,
+where each O carries a ring of its own lone electrons.
+
+**Off by default, now that `eRound` exists.** It was briefly the default, and
+`eRound` made that unnecessary: at roundness 1 the figure-8's own lobes already
+*are* two overlapping circles, without leaving the one-path shape that an O=O
+has to use anyway. This stays as the way to see genuinely independent rings —
+one closed curve per nucleus — rather than two lobes of one curve meeting at
+the bond midpoint.
 
 ```javascript
-let bondCircles = true;   // off: the figure-8
-let bondCircleR = 1.0;    // ring radius, multiple of the atom's valence radius
+let bondCircles = false;  // on: a ring per atom, instead of the figure-8
+let bondCircleR = 1.3;    // ring radius, multiple of the atom's valence radius
 ```
 
 They overlap because a bond is shorter than two valence radii: H–H sits
-`2 × 30 × BOND_OVERLAP` = **43.2 px** apart while each ring is **30 px**, so the
-rings cross and share a **16.8 px** lens over the bond. That lens is the picture
-— it is where both electrons are, which is what the figure-8's crossing says
-with one line instead of two.
+`2 × 30 × BOND_OVERLAP` = **43.2 px** apart while each ring is `30 × 1.3` =
+**39 px**, so the rings cross and share a **34.8 px** lens over the bond. That
+lens is the picture — it is where both electrons are, which is what the
+figure-8's crossing says with one line instead of two.
 
 **Scoped to H–H**, because "two circles" only describes a single bond. An O=O
 has four bonding electrons and would come out as four stacked rings, so it keeps
@@ -344,16 +358,17 @@ lone electrons are spaced evenly and all travel the same way, so they read as
 one ring at one radius instead of a scribble.
 
 ```javascript
-let loneRadius = 1.0;     // multiple of the atom's valence radius
+let loneRadius = 0.7;     // multiple of the atom's valence radius
 let loneSpeed  = 0.125;   // radians per frame at 60 fps — one lap in 0.84 s
 ```
 
 At `loneRadius` 1.0 the ring sits on the valence shell, which is physically
-where a lone pair belongs — **but that is also how far the bonding lemniscate
-reaches past each nucleus, so the two overlap and the figure-8 gets hard to
-pick out.** Around **1.7** pushes the ring clear and the bond reads through the
-middle of it. Both are one slider apart; 1.0 is the default because it is the
-honest radius.
+where a lone pair belongs — **but that is also how far the bonding lobe reaches
+past each nucleus, so the two overlap and the figure-8 gets hard to pick out.**
+Around **1.7** pushes the ring clear outside it. It ships at **0.7**, which
+solves the same collision the other way: the lone ring is tucked inside the
+bonding lobe rather than fighting it for the same radius. All three are one
+slider apart.
 
 They do pass through the bond region on the way round, which a real lone pair
 would not. The plain circle is the point, not the lobe geometry.

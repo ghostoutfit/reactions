@@ -1307,7 +1307,7 @@ function glowSprite(rgb, R) {
 // shadowBlur in a per-atom path is what cost 8.3 ms a frame here, so the whole
 // thing — halo, sphere and "+" — is baked once into a sprite and blitted. The
 // blur happens at bake time, where paying for it once is fine.
-const NUCLEUS_DIAMETER = 10;      // px; dev slider
+const NUCLEUS_DIAMETER = 12;      // px; dev slider
 let nucleusDiameter = NUCLEUS_DIAMETER;
 
 const _protonCache = new Map();
@@ -1403,17 +1403,25 @@ const TIER_TRAIL_LEN = { 'hi-res': 48, 'detailed': 32, 'simple': 18 };
 const TRAIL_MAX = 64;             // ring-buffer size; the largest tier length
 
 // Tuning, carried over from bonds and kept adjustable (dev sliders)
-let eSpeed      = 0.50;   // phase advance per frame at 60 fps
-let eSteer      = 0.30;   // how hard the electron is pulled onto the ideal path
+let eSpeed      = 0.60;   // phase advance per frame at 60 fps
+// 1 = no lag at all: the electron sits on the ideal point every frame. The
+// trail's spread then comes entirely from the per-lobe wobbles below, not from
+// steering lag, which is why eWander carries so much of it.
+let eSteer      = 1.00;   // how hard the electron is pulled onto the ideal path
 let eCrossSlow  = 0.50;   // speed multiplier at the bond midpoint crossing
 let eTrailScale = 1.0;    // multiplies the tier's trail length
 let showLonePairs = true; // non-bonding valence electrons on/off
 
 // A bare lemniscate is a narrow bow tie: its widest half-width is a/(2*sqrt 2),
 // about 0.354 of the lobe's reach. `eWidth` stretches it across the bond, and
-// 1.41 is the value that makes a lobe exactly as wide as it is long — a circle
-// round the nucleus, which is what a bonding pair should look like it is doing.
-let eWidth      = 1.45;   // perpendicular stretch; 1 = bare lemniscate
+// 1.41 is the value that makes a lobe exactly as wide as it is long.
+//
+// INERT at eRound 1, which is where this ships — the blend below lands fully on
+// the circle, which is already as wide as it is long, so this value is only
+// reached on the way down the roundness slider. Left at the bottom of its range
+// because that is where it was set; 1.41 is the value to come back to if the
+// lemniscate lobe is ever wanted on its own.
+let eWidth      = 0.60;   // perpendicular stretch; 1 = bare lemniscate
 
 // Stretching a lemniscate can only get a lobe so round: even at the width that
 // makes it as wide as it is long, it still pinches into the crossing, so the
@@ -1430,9 +1438,14 @@ let eRound      = 1.0;    // 0 = bare lemniscate lobes, 1 = tangent circles
 // Pass-to-pass variability. All three are re-rolled at every lobe, so no two
 // laps of the figure-8 lie on top of each other and the trail reads as a cloud
 // rather than a wire. They are plus-or-minus fractions, applied directly.
+//
+// With eSteer at 1 there is no lag to blur the laps, so the cloud is these
+// alone — hence the wide eWander. The swing is off: the lobes are circles now,
+// and swinging a circle off the bond axis only moves it, it does not change
+// what it looks like, so it bought nothing but a drifting crossing.
 let eRadial     = 0.26;   // +-: how far the lobe reaches past the nucleus
-let eWander     = 0.30;   // +-: how wide the lobe is
-let eTilt       = 0.17;   // +- radians: lobe swing off the bond axis
+let eWander     = 0.74;   // +-: how wide the lobe is
+let eTilt       = 0;      // +- radians: lobe swing off the bond axis (off)
 let eRoll       = 0.12;   // how fast a re-rolled target is taken up (per frame)
 
 // ── Two overlapping circles, instead of one figure-8 ─────────────────────────
@@ -1451,8 +1464,13 @@ let eRoll       = 0.12;   // how fast a re-rolled target is taken up (per frame)
 // Scoped to H-H because "two circles" only describes a single bond. An O=O has
 // four bonding electrons and would come out as four stacked rings, so it keeps
 // the figure-8; widening this is the element test in bondIsCircled().
-let bondCircles = true;   // off: the figure-8 above
-let bondCircleR = 1.0;    // ring radius, multiple of the atom's valence radius
+// Off by default again, now that eRound exists: at eRound 1 the figure-8's own
+// lobes ARE circles, so an H2 already reads as two overlapping rings without
+// leaving the one-path shape that an O=O also has to use. This stays as the way
+// to see true independent rings, one per nucleus, rather than two lobes of one
+// curve meeting at the bond midpoint.
+let bondCircles = false;  // on: a ring per atom, instead of the figure-8 above
+let bondCircleR = 1.3;    // ring radius, multiple of the atom's valence radius
 
 function valenceRadius(el) { return ATOM_RADIUS * ELEMENTS[el].rScale; }
 
@@ -1535,7 +1553,7 @@ function buildElectrons(b) {
 //
 // They do pass through the bond region on the way round, which a real lone pair
 // would not; the plain circle is the point here, not the lobe geometry.
-let loneRadius = 1.0;     // multiple of the atom's valence radius
+let loneRadius = 0.7;     // multiple of the atom's valence radius
 let loneSpeed  = 0.125;   // radians per frame at 60 fps
 
 // Ideal position for a bond electron, in body-local coordinates.
@@ -2888,7 +2906,7 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   const syncCirclesNote = () => {
     circlesNote.textContent = bondCircles
       ? 'A ring on each H, overlapping — width, swing and steering do not apply'
-      : 'One figure-8 across the bond';
+      : 'One figure-8 across the bond — two circles already, at roundness 1';
   };
   circles.checked = bondCircles;
   syncCirclesNote();
