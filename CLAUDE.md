@@ -1089,9 +1089,24 @@ too** — measured, 0.6x the natural length reads 337 kJ/mol on an O=O — which
 right, since you are pushing against repulsion. A spring would have given a
 symmetric parabola and said something false about short range.
 
-**At the natural length the stored energy is zero and the lobe is at its
-dimmest.** That follows from the model rather than being a bug: nothing has been
-done to the bond yet.
+**At the natural length the stored energy is zero — but the lobe is not.**
+
+```javascript
+const BOND_FIELD_FLOOR = 0.35;   // mag = floor + (1 - floor) * work
+```
+
+Drawing zero literally left a blank gap between the two atoms, which says
+"there is no bond here" — the opposite of what a bond at rest is. The floor is
+the bond simply **existing**; `work` is what stretching or squeezing adds on top.
+It sits at the bottom of the colour ramp (`load` is still 0 there), so a bond at
+rest is the plain blue glow and the purple and pink are what stretching does to
+it. Measured at the natural length: **(29,84,204)**, clearly blue, against
+0 kJ/mol on the readout.
+
+**Nothing else on screen glows.** The atoms had a halo at their valence radius
+and it had to go: it read as a second field, and the eye could not tell which of
+the two it was meant to be watching. Verified — a pixel beside a nucleus is
+(5,4,15), the background exactly.
 
 ### ...and then it fades anyway
 
@@ -1107,12 +1122,12 @@ at long range, and that disagreement is the point.
 
 | separation | stored | contact | readout | lobe |
 |---|---|---|---|---|
-| 1.0x | 0.00 | 1.0 | 0 kJ/mol | dimmest |
-| 1.55x (opens here) | 0.32 | 1.0 | 157 kJ/mol | blue |
-| 2.0x | 0.60 | 1.0 | 301 kJ/mol | purple |
-| 2.4x | 0.77 | 0.9 | 384 kJ/mol | pink, brightest |
-| 2.7x | 0.85 | 0.5 | 423 kJ/mol | pink, dimming |
-| 3.2x | 0.93 | 0.0 | **462 kJ/mol** | **gone** |
+| 1.0x | 0.00 | 1.0 | 0 kJ/mol | blue (29,84,204) |
+| 1.55x (opens here) | 0.32 | 1.0 | 157 kJ/mol | brighter blue (100,134,241) |
+| 2.0x | 0.60 | 1.0 | 301 kJ/mol | purple (190,120,251) |
+| 2.4x | 0.77 | 0.9 | 384 kJ/mol | pink (208,111,240), brightest |
+| 2.8x | 0.88 | 0.4 | 433 kJ/mol | pink (149,27,156), dimming |
+| 3.2x | 0.93 | 0.0 | **462 kJ/mol** | **gone** (5,4,15) |
 
 **Colour follows the stored energy, not the fade.** `load: work`, so a
 nearly-broken bond stays pink right up until it stops being drawn, instead of

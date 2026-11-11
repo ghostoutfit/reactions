@@ -4009,6 +4009,16 @@ const BOND_START_MULT = 1.55;
 const BOND_FIELD_BOOST   = 1.30;
 const BOND_FIELD_SQUEEZE = 0.85;
 
+// The lobe never starts from nothing. At the natural separation the stored
+// energy is zero, and drawing that literally left a blank gap between the two
+// atoms — which says "there is no bond here", the opposite of what a bond at
+// rest is. The floor is the bond simply EXISTING; `work` is then what gets
+// added on top of it by stretching or squeezing.
+//
+// It sits at the bottom of the colour ramp (load 0), so a bond at rest is the
+// plain blue glow, and the purple and pink are what stretching does to it.
+const BOND_FIELD_FLOOR = 0.35;
+
 const BOND_DOT_GLOW  = 17;      // px — bonds draws these at electronDotR 16.5
 const BOND_DOT_CORE  = 3;       // px — its core is a sixth of that
 
@@ -4152,7 +4162,9 @@ function drawBondTab() {
     // feature — it is what makes a collision flare read as a white core
     // spreading — but here the brightness is the reading, and a clipped core
     // throws away the top of the range just where the bond is most interesting.
-    mag: bondEnergy(A.el, B.el) / BOND_ENERGY_MAX * work * contact * FIELD_GAIN * BOND_FIELD_BOOST,
+    mag: bondEnergy(A.el, B.el) / BOND_ENERGY_MAX
+         * (BOND_FIELD_FLOOR + (1 - BOND_FIELD_FLOOR) * work)
+         * contact * FIELD_GAIN * BOND_FIELD_BOOST,
     // Narrower than the main tab's lobe. FIELD_WIDTH is a fraction of the bond
     // LENGTH and the gaussian reaches 2.5 sigma, so a squeeze of 1 gave a lobe
     // reaching ~193 px either side of a 257 px bond — taller than the bond is
@@ -4166,14 +4178,12 @@ function drawBondTab() {
   }];
   drawFieldHeatmap(ctx, seg, W, H);
 
-  // The two nuclei, big, with the atom's own halo under them.
+  // The two nuclei. No halo around them: the only glow on this screen should
+  // be the bond's. An atom-coloured cloud at the valence radius read as a
+  // second field, and the eye could not tell which of the two it was meant to
+  // be watching.
   for (const at of [A, B]) {
     const r = valenceRadius(at.el) * z;
-    const g = ctx.createRadialGradient(at.x, at.y, 0, at.x, at.y, r);
-    g.addColorStop(0, rgba(ELEMENTS[at.el].rgb, 0.30));
-    g.addColorStop(1, rgba(ELEMENTS[at.el].rgb, 0));
-    ctx.fillStyle = g;
-    ctx.beginPath(); ctx.arc(at.x, at.y, r, 0, Math.PI * 2); ctx.fill();
     drawNucleons(ctx, at.x, at.y, at.el, bondTab.wobble);
     ctx.fillStyle = 'rgba(255,255,255,0.75)';
     ctx.font = '600 ' + Math.round(13 * Math.min(2, z)) + 'px Inter, system-ui, sans-serif';
