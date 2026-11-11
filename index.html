@@ -1415,6 +1415,18 @@ let showLonePairs = true; // non-bonding valence electrons on/off
 // round the nucleus, which is what a bonding pair should look like it is doing.
 let eWidth      = 1.45;   // perpendicular stretch; 1 = bare lemniscate
 
+// Stretching a lemniscate can only get a lobe so round: even at the width that
+// makes it as wide as it is long, it still pinches into the crossing, so the
+// shape reads as a bow tie rather than as the electron going round an atom.
+// `eRound` morphs each lobe towards a TRUE circle instead — the one tangent to
+// the bond's perpendicular at the midpoint, radius a/2, so it starts at the
+// crossing and its far edge lands on the same valence shell the lemniscate
+// reached. Two of them, one per atom, touching at the midpoint: still a
+// figure-8, still one path with one crossing, but the bulk of every lap is now
+// circular round a nucleus — the same picture the H2 rings give, in the shape
+// that can also carry four electrons.
+let eRound      = 1.0;    // 0 = bare lemniscate lobes, 1 = tangent circles
+
 // Pass-to-pass variability. All three are re-rolled at every lobe, so no two
 // laps of the figure-8 lie on top of each other and the trail reads as a cloud
 // rather than a wire. They are plus-or-minus fractions, applied directly.
@@ -1424,10 +1436,11 @@ let eTilt       = 0.17;   // +- radians: lobe swing off the bond axis
 let eRoll       = 0.12;   // how fast a re-rolled target is taken up (per frame)
 
 // ── Two overlapping circles, instead of one figure-8 ─────────────────────────
-// A dev alternative, H-H only: each of the bond's two electrons runs a closed
-// circle around its OWN nucleus rather than the pair sharing one lemniscate, so
-// an H2 reads as two overlapping rings — the shape an O2 already shows, where
-// each O carries a ring of its own lone electrons.
+// How an H-H bond runs by default: each of the bond's two electrons runs a
+// closed circle around its OWN nucleus rather than the pair sharing one
+// lemniscate, so an H2 reads as two overlapping rings — the shape an O2 already
+// shows, where each O carries a ring of its own lone electrons. The dev toggle
+// switches back to the figure-8 above.
 //
 // They overlap because a bond is shorter than two valence radii: H-H sits
 // 2 x 30 x BOND_OVERLAP = 43.2 px apart while each ring is 30 px, so the rings
@@ -1438,7 +1451,7 @@ let eRoll       = 0.12;   // how fast a re-rolled target is taken up (per frame)
 // Scoped to H-H because "two circles" only describes a single bond. An O=O has
 // four bonding electrons and would come out as four stacked rings, so it keeps
 // the figure-8; widening this is the element test in bondIsCircled().
-let bondCircles = false;  // off: the figure-8 above
+let bondCircles = true;   // off: the figure-8 above
 let bondCircleR = 1.0;    // ring radius, multiple of the atom's valence radius
 
 function valenceRadius(el) { return ATOM_RADIUS * ELEMENTS[el].rScale; }
@@ -1525,14 +1538,21 @@ function buildElectrons(b) {
 let loneRadius = 1.0;     // multiple of the atom's valence radius
 let loneSpeed  = 0.125;   // radians per frame at 60 fps
 
-// Ideal lemniscate position for a bond electron, in body-local coordinates.
+// Ideal position for a bond electron, in body-local coordinates.
 // `a = r + d` puts the far edge of each lobe exactly on that atom's valence
 // shell: d carries it to the nucleus, r wraps it around.
 //
 // The two visits are the two lobes of ONE figure-8 — visit 0 is t in [0, pi],
 // visit 1 is t in [pi, 2pi] — so the electron crosses the bond midpoint between
 // them, which is the point of the whole shape.
-function lemniscate(e, b, phase, visit) {
+//
+// Each lobe is a blend of two curves with the same reach, mixed by `eRound`:
+// the lemniscate's leaf, and a circle of radius a/2 centred a/2 along the axis.
+// Both are written in axis coordinates (+lx towards atom k, origin at the
+// crossing) and both start and finish a lobe at the origin with the velocity
+// purely perpendicular to the bond, so the blend is smooth at every mix and the
+// path stays closed and crossing-centred whatever eRound is.
+function bondPath(e, b, phase, visit) {
   const ai = b.atoms[e.i], ak = b.atoms[e.k];
   const mx = (ai.lx + ak.lx) / 2, my = (ai.ly + ak.ly) / 2;
   const bx = ak.lx - ai.lx, by = ak.ly - ai.ly;
@@ -1544,8 +1564,23 @@ function lemniscate(e, b, phase, visit) {
 
   const t = visit === 0 ? phase + Math.PI : phase;
   const denom = 1 + Math.cos(t) ** 2;
-  const lx = a * Math.sin(t) / denom;
-  const ly = eWidth * (1 + e.effW) * a * Math.sin(t) * Math.cos(t) / denom;
+  const wob = 1 + e.effW;
+  const lemX = a * Math.sin(t) / denom;
+  const lemY = eWidth * wob * a * Math.sin(t) * Math.cos(t) / denom;
+
+  // The circular lobe. `s` is which atom it wraps — the same choice the
+  // lemniscate makes by the sign of sin(t), stated outright. The lap angle is
+  // pi - 2*phase, which runs from the crossing out round the nucleus and back
+  // the same way round as the leaf, so the two never fight through the blend.
+  // The wobble is kept on the perpendicular only, so the lobe breathes without
+  // the width slider's job coming back: on average it stays a circle.
+  const rho = a / 2;
+  const s   = visit === 0 ? -1 : 1;
+  const cirX = s * rho * (1 - Math.cos(2 * phase));
+  const cirY = rho * wob * Math.sin(2 * phase);
+
+  const lx = lemX + (cirX - lemX) * eRound;
+  const ly = lemY + (cirY - lemY) * eRound;
   // swing the whole lobe off the bond axis, about the crossing point
   const ct = Math.cos(e.effT), st = Math.sin(e.effT);
   const px = lx * ct - ly * st, py = lx * st + ly * ct;
@@ -1564,7 +1599,7 @@ function stepBondElectron(e, b, k) {
   e.effW += (e.targetW - e.effW) * eRoll;
   e.effT += (e.targetT - e.effT) * eRoll;
 
-  const p0 = lemniscate(e, b, e.phase, e.visit);
+  const p0 = bondPath(e, b, e.phase, e.visit);
   // Normalise by d/a so the speed at the crossing is the same on both sides.
   // Without this a bond between a big atom and a small one kinks at the
   // midpoint, because the two lobes have different amplitudes.
@@ -1574,7 +1609,7 @@ function stepBondElectron(e, b, k) {
 
   let nextPhase = e.phase + spd, nextVisit = e.visit;
   if (nextPhase >= Math.PI) { nextPhase -= Math.PI; nextVisit = (e.visit + 1) % 2; }
-  const p1 = lemniscate(e, b, nextPhase, nextVisit);
+  const p1 = bondPath(e, b, nextPhase, nextVisit);
   e.phase = nextPhase; e.visit = nextVisit;
 
   // Steer towards the ideal velocity rather than snapping to the ideal point —
@@ -2735,6 +2770,9 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     row('devESpeed', 'Electron speed', 0.02, 0.6, 0.01, eSpeed,      '#ff3a8a') +
     row('devETrail', 'Trail length',   0.2,  2,   0.05, eTrailScale, '#ff3a8a') +
     row('devESteer', 'Path steering',  0.02, 1,   0.02, eSteer,      '#ff3a8a') +
+    row('devERound', 'Lobe roundness',   0,   1,   0.05, eRound,      '#ff3a8a') +
+    '<div style="opacity:0.45;font-size:10px;margin-top:3px;">' +
+      '1 = a true circle round each atom; width below only bites below 1</div>' +
     row('devEWidth', 'Figure-8 width',  0.6, 2.4, 0.05, eWidth,      '#ff3a8a') +
     row('devEWand',  'Width jitter',    0,   0.8, 0.02, eWander,     '#ff3a8a') +
     row('devERad',   'Reach jitter',    0,   0.8, 0.02, eRadial,     '#ff3a8a') +
@@ -2794,6 +2832,7 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   bind('devESpeed', v => eSpeed      = v, false, v => v.toFixed(2));
   bind('devETrail', v => eTrailScale = v, false, v => v.toFixed(2));
   bind('devESteer', v => eSteer      = v, false, v => v.toFixed(2));
+  bind('devERound', v => eRound      = v, false, v => v.toFixed(2));
   bind('devEWidth', v => eWidth      = v, false, v => v.toFixed(2));
   bind('devEWand',  v => eWander     = v, false, v => v.toFixed(2));
   bind('devERad',   v => eRadial     = v, false, v => v.toFixed(2));

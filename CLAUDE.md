@@ -204,8 +204,38 @@ let eWidth = 1.45;   // 1 = bare lemniscate; 1.41 makes a lobe exactly round
 ```
 
 Measured on H–H: each lobe is **51.6 px long by 53.0 px wide**, a ratio of
-**1.03** — a circle round the nucleus, which is what a bonding pair should look
-like it is doing.
+**1.03** — about as round as stretching can get it.
+
+### Roundness: the lobes *are* circles
+
+Stretching only takes a lemniscate so far. Even at the width that makes it as
+wide as it is long, it still pinches into the crossing, so the pair read as a
+bow tie rather than as two orbits. `eRound` morphs each lobe towards a **true
+circle** instead — the one tangent to the bond's perpendicular at the midpoint,
+radius `a/2`, so the lobe starts at the crossing and its far edge lands on the
+same valence shell the leaf reached:
+
+```javascript
+let eRound = 1.0;    // 0 = bare lemniscate lobes, 1 = tangent circles
+```
+
+Two of them, one per atom, touching at the midpoint. Still one path, still one
+crossing, but the bulk of every lap is now circular round a nucleus — the same
+picture the H₂ rings below give, in the shape that can also carry an O=O's four
+electrons. Measured on O=O at `eRound` 1, a lobe is **59.7 px by 59.7 px**,
+aspect **1.000**; at 0 it is 59.7 by 61.2, aspect 1.025 but with the pinch.
+
+Both curves are written in axis coordinates (origin at the crossing, `+x`
+towards atom k) and **both begin and end a lobe at the origin moving purely
+perpendicular to the bond**, so the blend is smooth at every mix. Checked at
+`eRound` 0, 0.5 and 1: across the lobe handoff the velocity direction matches
+to **0.04°** and the magnitude to **0.1 px/rad** — no kink anywhere on the
+slider. At `eRound` 1 both lobes arrive and leave at **90°**, which is what
+tangency means.
+
+`eWidth` only bites below 1, since a circle is already as wide as it is long;
+the note under the slider says so. The width *jitter* still applies — it is
+kept on the perpendicular, so the lobe breathes but averages a circle.
 
 ### Pass-to-pass variation
 
@@ -233,15 +263,16 @@ applied at full value, both signs, with `eRoll` at 0.12.
 
 All five are dev sliders.
 
-### Two overlapping circles — a dev alternative
+### Two overlapping circles — how an H₂ bond runs
 
-`H₂ bond as two circles` in the dev panel. Each of the bond's two electrons runs
-a closed circle around **its own** nucleus instead of the pair sharing one
-lemniscate, so an H₂ reads as two overlapping rings — the shape an O₂ already
-shows, where each O carries a ring of its own lone electrons.
+**On by default.** Each of an H–H bond's two electrons runs a closed circle
+around **its own** nucleus instead of the pair sharing one lemniscate, so an H₂
+reads as two overlapping rings — the shape an O₂ already shows, where each O
+carries a ring of its own lone electrons. `H₂ bond as two circles` in the dev
+panel switches it off, back to the figure-8.
 
 ```javascript
-let bondCircles = false;  // off: the figure-8
+let bondCircles = true;   // off: the figure-8
 let bondCircleR = 1.0;    // ring radius, multiple of the atom's valence radius
 ```
 
