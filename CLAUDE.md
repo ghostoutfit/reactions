@@ -828,12 +828,33 @@ scaled as `sqrt((ke + back) / ke)` since energy goes as v². That is what a bond
 does between collisions; nothing is radiated away in this model.
 
 Verified with the speed band off and nothing breaking, so neither could mask an
-error: **world drift 0%** over 120 s. And on a single molecule left to relax,
-instrumented frame by frame: vibration lost **190881**, `fieldsReturned`
-**190881**, translation gained 162887, rotation 27994 — **balance exactly 0**.
-(The rotation share is off-centre wall bounces moving energy between the two,
-elastically. A first attempt at this check counted only translation and looked
-a third short, which is a good reason to count both.)
+error. **At both temperatures**, since the two exercise quite different regimes
+— Low spends far more of its time near zero vibration:
+
+| check | Low | High |
+|---|---|---|
+| whole world, 300 s | drift **0** | drift **0** |
+| one molecule relaxing fully to zero | lost **0** | lost **0** |
+
+And on a single molecule, instrumented frame by frame: vibration lost
+**190881**, `fieldsReturned` **190881**, translation gained 162887, rotation
+27994 — **balance exactly 0**. (The rotation share is off-centre wall bounces
+moving energy between the two, elastically. A first attempt at this check
+counted only translation and looked a third short, which is a good reason to
+count both.)
+
+**Two leaks were found by checking Low rather than only High**, both now fixed:
+
+- The decay used to snap `vib` to zero below `1e-4` instead of returning the
+  remainder, dropping exactly `1e-4 × doseUnit()` = **13 energy units** every
+  time a molecule was left alone long enough to decay that far. It never fires
+  in a running world — collisions top vibration up faster than it can fall that
+  low, measured 0 times in 300 s at either temperature — but a lone molecule
+  reaches it, and it was 0.0035% of a Low world's energy against 0.0013% of a
+  High one.
+- A molecule at a dead stop has no velocity to scale, so its returned energy was
+  dropped. It now goes to **spin**, which is still motion. Verified: vibration
+  fully returned, nothing lost, the molecule ends spinning.
 
 `energySplit()` now reports `decay -> motion` and `spent breaking` instead of a
 leak.

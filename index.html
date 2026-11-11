@@ -2229,17 +2229,27 @@ function stepWorld(dt) {
     // hence the square root. This is what a bond actually does between
     // collisions — nothing is radiated away here, so the colour softening you
     // see is energy returning to motion, not energy disappearing.
-    if (b.vib > 1e-4) {
+    if (b.vib > 0) {
       const was = b.vib;
-      b.vib *= Math.exp(-dt / VIB_TAU);
+      // The last sliver is handed back too, not snapped to zero. Dropping it
+      // cost exactly 1e-4 x doseUnit() = 13 energy units every time a molecule
+      // was left alone long enough to decay that far — small, but it is the
+      // "energy goes nowhere" this whole mechanism exists to not do.
+      b.vib = b.vib > 1e-4 ? b.vib * Math.exp(-dt / VIB_TAU) : 0;
       const back = (was - b.vib) * doseUnit();
-      const ke = 0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy);
-      if (ke > 1e-9 && back > 0) {
-        const k = Math.sqrt((ke + back) / ke);
-        b.vx *= k; b.vy *= k;
+      if (back > 0) {
+        const ke = 0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy);
+        if (ke > 1e-9) {
+          const k = Math.sqrt((ke + back) / ke);
+          b.vx *= k; b.vy *= k;
+        } else {
+          // Nothing to scale — a molecule at a dead stop. Spin is the only
+          // other place it can go, and it is still motion.
+          b.spin = Math.sign(b.spin || 1) * Math.sqrt(b.spin * b.spin + 2 * back / b.inertia);
+        }
         fieldsReturned += back;
       }
-    } else b.vib = 0;
+    }
   }
   world.time += dt;
 
