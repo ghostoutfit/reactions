@@ -233,6 +233,46 @@ applied at full value, both signs, with `eRoll` at 0.12.
 
 All five are dev sliders.
 
+### Two overlapping circles — a dev alternative
+
+`H₂ bond as two circles` in the dev panel. Each of the bond's two electrons runs
+a closed circle around **its own** nucleus instead of the pair sharing one
+lemniscate, so an H₂ reads as two overlapping rings — the shape an O₂ already
+shows, where each O carries a ring of its own lone electrons.
+
+```javascript
+let bondCircles = false;  // off: the figure-8
+let bondCircleR = 1.0;    // ring radius, multiple of the atom's valence radius
+```
+
+They overlap because a bond is shorter than two valence radii: H–H sits
+`2 × 30 × BOND_OVERLAP` = **43.2 px** apart while each ring is **30 px**, so the
+rings cross and share a **16.8 px** lens over the bond. That lens is the picture
+— it is where both electrons are, which is what the figure-8's crossing says
+with one line instead of two.
+
+**Scoped to H–H**, because "two circles" only describes a single bond. An O=O
+has four bonding electrons and would come out as four stacked rings, so it keeps
+the figure-8. Widening it is the element test in `bondIsCircled()`.
+
+**Position is set straight onto the circle, not steered onto it.** Steering was
+tried first, for consistency with the lemniscate, and it does not survive a
+closed curve: `eSteer` lags, and on a circle that lag cuts the corner inward
+every frame instead of being absorbed by a changing shape. Measured over 900
+frames it pulled the ring to a mean radius of **25.6 px against a nominal 30**,
+dipping to 15.6 — a wobbling blob, not a clean ring. Set directly, the measured
+mean is **30.5** with the range 22.8–37.0 that `eRadial` ±26% predicts. So
+`eSteer`, `eWidth` and `eTilt` all do nothing in this mode, and the note under
+the toggle says so.
+
+Angular speed is `eSpeed × d / R`, the ring twin of the lemniscate's
+`eSpeed × d / a` — it holds **linear** pace, so a wider ring turns more slowly
+instead of racing. Measured at **10.7 px/frame** against the figure-8's ~10.8.
+
+`eRadial` still applies, re-rolled once a lap rather than once a lobe, so the
+laps breathe instead of lying exactly on each other. At 0 the ring repeats
+exactly.
+
 ### Cost
 
 This is the dominant draw cost, so it is bucketed like bonds does it: the trail
@@ -564,5 +604,13 @@ Dormant, kept because the next round of work wants it. None of it is live:
 
 ## Deployment
 
-Not deployed yet. No git remote is configured — the fission remote was removed
-when this repo was copied, so `git push` will not reach fission.
+`origin` is **`github.com/ghostoutfit/reactions`**. (The fission remote was
+removed when this repo was copied, so nothing here can reach fission.)
+
+GitHub Pages is **not enabled** on that repo — the API 404s — so there is no
+`ghostoutfit.github.io/reactions/` URL yet. Open `index.html` locally, or serve
+the directory, until it is switched on.
+
+This sim is deliberately **not** on the SSP site. It was briefly built to
+`sim.ssp.org/reactions/` and that was removed: reactions lives only in
+ghostoutfit.
