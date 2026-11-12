@@ -2155,6 +2155,7 @@ function makeBody(els, x, y, heading, speed, spin, nominal = speed) {
     bonds: els.slice(1).map((_, k) => [k, k + 1]),
     flare: 0,                // collision brightness, decays towards 0
     vib: 0,                  // energy held in the bond; past breakThreshold it lets go
+    vibN: 0,                 // collisions' worth currently stacked, up to bondLevels
     sag: 0,                  // share of its motion just given to the bond; fades
     vTarget: nominal,        // nominal speed for this species, tracks temp + dial
     x, y,
@@ -2396,6 +2397,9 @@ function stepWorld(dt) {
       // "energy goes nowhere" this whole mechanism exists to not do.
       b.vib = b.vib > 1e-4 ? b.vib * Math.exp(-dt / VIB_TAU) : 0;
       returnFieldEnergy(b, (was - b.vib) * doseUnit());
+      // Once what is left is negligible the stack is empty again, so a bond
+      // left alone recovers its full capacity rather than staying full forever.
+      if (b.vib < breakThreshold(b) * 0.04) b.vibN = 0;
     }
   }
   world.time += dt;
@@ -2774,13 +2778,26 @@ function returnFieldEnergy(b, amount) {
   fieldsReturned += amount;
 }
 
-// A bond holds at most ONE collision's worth of energy.
+// How many collisions' worth a molecule can stack before it has to resolve.
+// A double bond is two bonds, so an O=O can hold two where an H-H holds one:
+// the second hit lands on a bond that is already carrying the first, and the
+// two add up rather than the first being handed back.
 //
-// Every collision resolves whatever the bond was already carrying: together
-// with the new dose it either breaks the bond, or it is handed straight back to
-// the molecule's motion on the way out of the collision and the bond restarts
-// from the new dose alone. Energy never rides along through three or four hits
-// waiting to add up.
+// This is the thing that makes a double bond feel like a double bond. Without
+// it an O=O was simply a stronger single bond — harder to break and otherwise
+// identical. With it, it has somewhere to put a second knock.
+function bondLevels(b) {
+  return b.bonds.length ? Math.max(...b.bonds.map(([i, k]) =>
+    bondOrder(b.atoms[i].el, b.atoms[k].el))) : 1;
+}
+
+// A bond holds at most `bondLevels(b)` collisions' worth of energy.
+//
+// A collision adds its dose to whatever is already stacked. Once the stack is
+// full, the next collision has to resolve it: together they either break the
+// bond, or the lot is handed straight back to the molecule's motion on the way
+// out and the bond restarts from the new dose alone. Energy never rides along
+// through more hits than the bond has levels for.
 //
 // That is a deliberate simplification, and it is the one that makes the picture
 // readable: what a glowing bond shows is the hit that just happened, not a
@@ -2809,10 +2826,19 @@ function queueIfBroken(b, energy) {
     return;
   }
 
-  // Not enough: whatever the bond was already holding goes back into the
-  // motion leaving this collision, and the bond starts again from this hit.
+  // Room on the stack: keep it. A double bond gets a second hit before it has
+  // to give anything back.
+  if (b.vibN < bondLevels(b)) {
+    b.vib = sum;
+    b.vibN++;
+    return;
+  }
+
+  // Stack full and still not enough: the lot goes back into the motion leaving
+  // this collision, and the bond starts again from this hit alone.
   returnFieldEnergy(b, b.vib * doseUnit());
   b.vib = dose;
+  b.vibN = 1;
 }
 
 // Replace one body with one free atom per atom it had. Each fragment keeps the
