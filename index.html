@@ -774,13 +774,17 @@
     </div>
 
     <div class="ctrl-box-blue" style="align-items:stretch;">
-      <span class="ctrl-box-label ctrl-box-label-blue">ENERGY STORED</span>
+      <span class="ctrl-box-label ctrl-box-label-blue" id="bondEnergyLabel">ENERGY STORED</span>
       <div style="display:flex;flex-direction:column;gap:5px;justify-content:center;padding:8px 0;min-width:190px;">
         <span id="bondEnergyVal" style="font-size:22px;font-weight:700;color:#c46cff;text-shadow:0 0 10px rgba(196,108,255,0.7);">0 kJ/mol</span>
         <span id="bondEnergyPct" style="font-size:11px;opacity:0.6;">of the 436 kJ/mol it takes to break an H&ndash;H</span>
       </div>
-      <div style="display:flex;align-items:center;padding:8px 10px;max-width:210px;">
-        <span style="font-size:10px;opacity:0.55;line-height:1.5;">Drag either nucleus &mdash; both move, so the bond stretches about its centre. Pull far enough and the glow fades: the energy is still there, but the atoms have stopped interacting.</span>
+      <div style="display:flex;flex-direction:column;gap:4px;align-items:stretch;justify-content:center;padding:8px 0;">
+        <span style="font-size:9px;letter-spacing:0.07em;text-transform:uppercase;opacity:0.5;text-align:center;">Zero at</span>
+        <div style="display:flex;gap:4px;">
+          <button class="awheel-item zero-btn active" data-zero="rest" style="flex:1 1 0;min-width:0;">Rest energy</button>
+          <button class="awheel-item zero-btn" data-zero="lowest" style="flex:1 1 0;min-width:0;">Lowest energy</button>
+        </div>
       </div>
     </div>
   </div>
@@ -4359,6 +4363,30 @@ function bondTabEls() {
 // and raw 98% at 4.07 r0, and 1/0.98 maps those to 99% and 100% exactly.
 const WORK_FULL_AT = 0.98;
 
+// Where the energy scale's zero sits. The glow is unaffected either way — the
+// lobe's colour follows the work done, which is the same quantity whatever you
+// measure it from. Only the number moves.
+//
+//   'rest'    zero at this bond's own natural length. The reading is the work
+//             YOU have done pulling, 0 to that bond's dissociation energy. It
+//             answers "how far have I got with this bond".
+//
+//   'lowest'  zero placed so free atoms sit at SEPARATED_TOTAL for EVERY pair.
+//             The reading is then an absolute height on one shared scale, and
+//             what differs between pairs is how far DOWN the bonded state sits:
+//             an O=O rests at 102 and an H-H at 164, because the O=O well is
+//             deeper. It answers "which of these bonds is the strong one", a
+//             question the per-bond scale cannot ask, since on that one every
+//             bond starts at 0 and looks alike.
+const SEPARATED_TOTAL = 600;   // kJ/mol, the common height of free atoms
+let energyZero = 'rest';
+
+// kJ/mol shown at this separation, under whichever zero is selected.
+function bondEnergyShown(a, b, work) {
+  const D = bondEnergy(a, b);
+  return energyZero === 'lowest' ? (SEPARATED_TOTAL - D) + D * work : D * work;
+}
+
 // Energy stored by being at r instead of r0, as a fraction of the full bond
 // energy. 0 at the natural length, 1 once it is as good as broken.
 function bondWorkFraction(r, r0) {
@@ -4675,9 +4703,17 @@ function updateBondReadout() {
   const valEl = document.getElementById('bondEnergyVal');
   const pctEl = document.getElementById('bondEnergyPct');
   if (sepEl) sepEl.textContent = (bondTab.sep / bondTab.r0).toFixed(2) + '\u00d7 natural';
-  if (valEl) valEl.textContent = Math.round(full * work) + ' kJ/mol';
-  if (pctEl) pctEl.textContent = Math.round(work * 100) + '% of the ' +
-    full + ' kJ/mol it takes to break an ' + a + '\u2013' + b;
+  if (valEl) valEl.textContent = Math.round(bondEnergyShown(a, b, work)) + ' kJ/mol';
+  const labEl = document.getElementById('bondEnergyLabel');
+  if (energyZero === 'lowest') {
+    if (labEl) labEl.textContent = 'ENERGY';
+    if (pctEl) pctEl.textContent = 'free atoms sit at ' + SEPARATED_TOTAL +
+      '; this ' + a + '\u2013' + b + ' well is ' + full + ' deep';
+  } else {
+    if (labEl) labEl.textContent = 'ENERGY STORED';
+    if (pctEl) pctEl.textContent = Math.round(work * 100) + '% of the ' +
+      full + ' kJ/mol it takes to break an ' + a + '\u2013' + b;
+  }
 }
 
 // ── Dragging ──────────────────────────────────────────────────────────────────
@@ -4758,6 +4794,16 @@ document.getElementById('bondPick').addEventListener('change', function () {
   updateBondReadout();
   logAction('One Bond: ' + this.value);
 });
+document.querySelectorAll('.zero-btn[data-zero]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    energyZero = btn.dataset.zero;
+    document.querySelectorAll('.zero-btn').forEach(b =>
+      b.classList.toggle('active', b === btn));
+    updateBondReadout();
+    logAction('Energy zero: ' + energyZero);
+  });
+});
+
 document.getElementById('bondReset').addEventListener('click', () => {
   bondTabReset(); updateBondReadout();
 });

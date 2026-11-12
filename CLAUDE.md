@@ -1438,6 +1438,38 @@ the clamp sits at 3.48 against a base of 2.54, so it does not bite at all and
 the 20% lands in full (2.12 → 2.54). At full stretch the pair still spans only
 198–1086 px.
 
+### Two places to put the zero
+
+```javascript
+const SEPARATED_TOTAL = 600;   // kJ/mol, the common height of free atoms
+let energyZero = 'rest';       // 'rest' | 'lowest' — a UI toggle in the box
+```
+
+**The glow is unaffected either way.** The lobe's colour follows the work done,
+which is the same quantity whatever you measure it from; only the number moves.
+Verified — the centre pixel at 2x reads (197,127,253) under both.
+
+| | H–H | O=O | O–H |
+|---|---|---|---|
+| **rest**, at rest | 0 | 0 | 0 |
+| **rest**, fully apart | 436 | 498 | 463 |
+| **lowest**, at rest | **164** | **102** | **137** |
+| **lowest**, fully apart | **600** | **600** | **600** |
+
+`'rest'` zeroes at each bond's own natural length, so the reading is the work
+*you* have done: 0 to that bond's dissociation energy. It answers "how far have
+I got with this bond".
+
+`'lowest'` places the zero so free atoms sit at `SEPARATED_TOTAL` for **every**
+pair. The reading becomes an absolute height on one shared scale, and what
+differs between pairs is how far **down** the bonded state sits — an O=O rests
+at 102 against an H–H's 164, because the O=O well is deeper. It answers "which
+of these is the strong bond", which the per-bond scale cannot ask, since on that
+one every bond starts at 0 and they all look alike.
+
+The box's own label follows: **ENERGY STORED** for the first, **ENERGY** for the
+second, because under `'lowest'` it is no longer a quantity you put in.
+
 ### The scale reaches 100%
 
 ```javascript
