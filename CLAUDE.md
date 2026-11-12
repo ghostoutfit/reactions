@@ -1470,6 +1470,31 @@ one every bond starts at 0 and they all look alike.
 The box's own label follows: **ENERGY STORED** for the first, **ENERGY** for the
 second, because under `'lowest'` it is no longer a quantity you put in.
 
+### Snapshots
+
+A **Snapshot** button in the energy box stills the bond as it is now and stacks
+it in a scrollable column down the right, newest last, so the list reads top to
+bottom as the order you took them in. Each row carries the reading **under
+whichever zero was selected when it was taken**, so a column can mix both if you
+switch mid-run — which is a feature: the same bond at the same separation under
+the two scales, side by side.
+
+**The crop is a fixed fraction of the canvas, not a box fitted round the two
+atoms.** Fitting would scale every thumbnail to fill its frame and so hide the
+one thing the series is for: a snapshot at 3x should *look* wider apart than one
+at 1x, and it only does if they share a scale. The view zoom already sizes the
+scene for the widest separation, so a fixed crop always contains it.
+
+The panel is positioned in JS rather than CSS because its height depends on the
+toolbar's, which changes with the tab; it re-fits on resize and hides itself on
+the Reactions tab.
+
+Verified: three snapshots at 1x, 2x and 3.5x read 0, 307 and 485 kJ/mol with
+thumbnail ink rising 1536 → 2581 → 6126 as the pair spreads; one taken after
+switching to the lowest-energy zero reads 102; eight of them overflow 601 px of
+panel into 881 px of content and scroll, landing on the newest; clear empties
+it; and the panel stays inside the viewport.
+
 ### The scale reaches 100%
 
 ```javascript

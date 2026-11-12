@@ -61,6 +61,46 @@
     box-shadow: 0 4px 24px rgba(0,0,0,0.55);
   }
 
+  /* ── One Bond snapshots ─────────────────────────────────────────────────── */
+  #bondSnaps {
+    position: fixed;
+    right: 14px;
+    width: 212px;
+    z-index: 60;
+    display: none;
+    flex-direction: column;
+    gap: 6px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 8px;
+    border-radius: 10px;
+    background: rgba(10,10,22,0.72);
+    border: 1px solid rgba(123,111,255,0.22);
+    backdrop-filter: blur(6px);
+  }
+  #bondSnaps.visible { display: flex; }
+  #bondSnapsHead {
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 9px; letter-spacing: 0.07em; text-transform: uppercase;
+    opacity: 0.5; padding: 0 2px 2px;
+  }
+  #bondSnapsClear {
+    background: none; border: 0; color: inherit; font: inherit;
+    cursor: pointer; opacity: 0.8; padding: 0;
+  }
+  #bondSnapsClear:hover { opacity: 1; color: #ff6a9a; }
+  .bond-snap {
+    display: flex; flex-direction: column; gap: 3px;
+    padding: 5px; border-radius: 7px;
+    background: rgba(255,255,255,0.04);
+  }
+  .bond-snap canvas { display: block; width: 100%; height: auto; border-radius: 4px; }
+  .bond-snap .snap-row {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 6px;
+  }
+  .bond-snap .snap-e { font-size: 13px; font-weight: 700; color: #c46cff; }
+  .bond-snap .snap-sep { font-size: 10px; opacity: 0.55; white-space: nowrap; }
+
   /* ── Tab bar ───────────────────────────────────────────────────────────── */
   /* Lifted unchanged from fission, where it carried a "Temperature" tab beside
      the main one. Same shape, same glow, so the two sims still look related. */
@@ -660,6 +700,11 @@
 <canvas id="canvas"></canvas>
 
 
+<div id="bondSnaps">
+  <div id="bondSnapsHead"><span>Snapshots</span><button id="bondSnapsClear" title="Clear all">clear</button></div>
+  <div id="bondSnapsList" style="display:flex;flex-direction:column;gap:6px;"></div>
+</div>
+
 <div id="toolbar">
   <div class="toolbar-row">
     <div id="tabBar">
@@ -785,6 +830,7 @@
           <button class="awheel-item zero-btn active" data-zero="rest" style="flex:1 1 0;min-width:0;">Rest energy</button>
           <button class="awheel-item zero-btn" data-zero="lowest" style="flex:1 1 0;min-width:0;">Lowest energy</button>
         </div>
+        <button id="bondSnapBtn" class="btn" style="margin-top:2px;">&#128247; Snapshot</button>
       </div>
     </div>
   </div>
@@ -1001,6 +1047,9 @@ window.addEventListener('resize', () => {
   resize();
   document.getElementById('energyBar').classList.add('visible');
   restretchWorld();
+  // The snapshot column is sized against the canvas, so it has to be re-fitted
+  // too. Declared later in the file; guard for the call that fires during load.
+  if (typeof syncSnapPanel === 'function') syncSnapPanel();
 });
 
 // ─── Colormaps ────────────────────────────────────────────────────────────────
@@ -4782,6 +4831,7 @@ function applyTab(tab) {
     canvas.style.cursor = '';
   }
   syncWorldBox();
+  syncSnapPanel();
   logAction('Switched to ' + tab.toUpperCase() + ' tab');
 }
 
@@ -4794,6 +4844,73 @@ document.getElementById('bondPick').addEventListener('change', function () {
   updateBondReadout();
   logAction('One Bond: ' + this.value);
 });
+// ── Snapshots ────────────────────────────────────────────────────────────────
+// A still of the bond as it is now, with its reading beside it, stacked newest
+// last so the column reads top to bottom as the order you took them in.
+//
+// The crop is a FIXED fraction of the canvas, not a box fitted round the two
+// atoms. Fitting would scale every thumbnail to fill its frame and so hide the
+// one thing the series is for: a snapshot at 3x should look wider apart than
+// one at 1x, and it only does if they share a scale. The view zoom already
+// sizes the scene for the widest separation, so a fixed crop always contains it.
+const SNAP_CROP_W = 0.78;    // of canvas width
+const SNAP_ASPECT = 2.6;     // crop width over height
+
+function takeBondSnapshot() {
+  const list = document.getElementById('bondSnapsList');
+  if (!list) return;
+  const [a, b] = bondTabEls();
+  const work = bondWorkFraction(bondTab.sep, bondTab.r0);
+
+  const cw = Math.round(canvas.width * SNAP_CROP_W);
+  const ch = Math.round(cw / SNAP_ASPECT);
+  const sx = Math.round(canvas.width / 2 - cw / 2);
+  const sy = Math.round((world.top + canvas.height) / 2 - ch / 2);
+
+  const row = document.createElement('div');
+  row.className = 'bond-snap';
+  const thumb = document.createElement('canvas');
+  thumb.width = 192; thumb.height = Math.round(192 / SNAP_ASPECT);
+  const tc = thumb.getContext('2d');
+  tc.fillStyle = getComputedStyle(document.body).getPropertyValue('--bg') || '#05040f';
+  tc.fillRect(0, 0, thumb.width, thumb.height);
+  // drawBondTab has already painted this frame, so the canvas is current.
+  tc.drawImage(canvas, sx, sy, cw, ch, 0, 0, thumb.width, thumb.height);
+
+  const info = document.createElement('div');
+  info.className = 'snap-row';
+  const e = document.createElement('span');
+  e.className = 'snap-e';
+  e.textContent = Math.round(bondEnergyShown(a, b, work)) + ' kJ/mol';
+  const sep = document.createElement('span');
+  sep.className = 'snap-sep';
+  sep.textContent = a + '\u2013' + b + '  ' + (bondTab.sep / bondTab.r0).toFixed(2) + '\u00d7';
+  info.appendChild(e); info.appendChild(sep);
+
+  row.appendChild(thumb); row.appendChild(info);
+  list.appendChild(row);
+  const panel = document.getElementById('bondSnaps');
+  panel.scrollTop = panel.scrollHeight;
+  logAction('Snapshot: ' + a + '-' + b + ' at ' + (bondTab.sep / bondTab.r0).toFixed(2) + 'x');
+}
+
+// The panel is sized and shown here rather than in CSS because its height
+// depends on the toolbar's, which changes with the tab.
+function syncSnapPanel() {
+  const panel = document.getElementById('bondSnaps');
+  if (!panel) return;
+  panel.classList.toggle('visible', bondTab.on);
+  if (!bondTab.on) return;
+  panel.style.top = (world.top + 12) + 'px';
+  panel.style.maxHeight = (canvas.height - world.top - 28) + 'px';
+}
+
+document.getElementById('bondSnapBtn').addEventListener('click', takeBondSnapshot);
+document.getElementById('bondSnapsClear').addEventListener('click', () => {
+  document.getElementById('bondSnapsList').innerHTML = '';
+  logAction('Snapshots cleared');
+});
+
 document.querySelectorAll('.zero-btn[data-zero]').forEach(btn => {
   btn.addEventListener('click', () => {
     energyZero = btn.dataset.zero;
