@@ -1561,11 +1561,36 @@ exactly; it is only the colour that runs out, and only where the answer is
 ### The One Bond tab tunes the field separately
 
 ```javascript
-let BOND_FIELD_WIDTH = 0.30;   // own copy of FIELD_WIDTH
+let BOND_FIELD_WIDTH = 0.22;   // own copy of FIELD_WIDTH
 let BOND_FIELD_GAIN  = 0.90;   // own copy of FIELD_GAIN
-let BOND_ALPHA_POW   = 1.8;    // opacity taper — the reason for the split
+let BOND_ALPHA_POW   = 1.8;    // opacity taper
+let BOND_FIELD_FLOOR = 0.70;   // what a bond at rest looks like
+const BOND_FIELD_STAGES = [...];   // its own hues: grey -> purple -> pink
 const BOND_COLORMAP  = new Uint8Array(LOAD_BINS * 256 * 4);
 ```
+
+**Its own colour stages, with a GREY bottom.** The main tab's cold stage is a
+blue-white, which is right there — a resting bond in a world of them should
+still read as something. Here the bottom of the scale is a bond at its natural
+length with *nothing* stored, and that should look like a bond rather than like
+an event: a visible glow with no colour in it. The colour is then what
+stretching adds, so hue carries the reading instead of decorating it.
+
+**The floor is 0.70, not 0.35.** At 0.35 a bond at rest was a dim smudge. At
+0.70 it reads **(169,169,180)** — brightness 518, saturation 11 — about as
+present as a 2x stretch used to be. The range above it is then carried by hue
+rather than brightness, which is the right division of labour:
+
+| separation | reads | centre | saturation |
+|---|---|---|---|
+| 1.0x | 0% | (169,169,180) grey | **11** |
+| 1.5x | 28% | (218,138,165) | 80 |
+| 2.0x | 62% | (197,127,253) purple | 126 |
+| 3.0x | 92% | (243,97,217) pink | 146 |
+| 3.79x | 99% | (255,92,208) full pink | **163** |
+
+Saturation climbs monotonically while brightness barely moves (518 → 577 →
+555).
 
 The main tab's numbers are set for a dozen small lobes glimpsed at once while
 molecules fly past. This tab has one lobe filling the screen, held still and
@@ -1629,11 +1654,36 @@ exactly; it is only the colour that runs out, and only where the answer is
 ### The One Bond tab tunes the field separately
 
 ```javascript
-let BOND_FIELD_WIDTH = 0.30;   // own copy of FIELD_WIDTH
+let BOND_FIELD_WIDTH = 0.22;   // own copy of FIELD_WIDTH
 let BOND_FIELD_GAIN  = 0.90;   // own copy of FIELD_GAIN
-let BOND_ALPHA_POW   = 1.8;    // opacity taper — the reason for the split
+let BOND_ALPHA_POW   = 1.8;    // opacity taper
+let BOND_FIELD_FLOOR = 0.70;   // what a bond at rest looks like
+const BOND_FIELD_STAGES = [...];   // its own hues: grey -> purple -> pink
 const BOND_COLORMAP  = new Uint8Array(LOAD_BINS * 256 * 4);
 ```
+
+**Its own colour stages, with a GREY bottom.** The main tab's cold stage is a
+blue-white, which is right there — a resting bond in a world of them should
+still read as something. Here the bottom of the scale is a bond at its natural
+length with *nothing* stored, and that should look like a bond rather than like
+an event: a visible glow with no colour in it. The colour is then what
+stretching adds, so hue carries the reading instead of decorating it.
+
+**The floor is 0.70, not 0.35.** At 0.35 a bond at rest was a dim smudge. At
+0.70 it reads **(169,169,180)** — brightness 518, saturation 11 — about as
+present as a 2x stretch used to be. The range above it is then carried by hue
+rather than brightness, which is the right division of labour:
+
+| separation | reads | centre | saturation |
+|---|---|---|---|
+| 1.0x | 0% | (169,169,180) grey | **11** |
+| 1.5x | 28% | (218,138,165) | 80 |
+| 2.0x | 62% | (197,127,253) purple | 126 |
+| 3.0x | 92% | (243,97,217) pink | 146 |
+| 3.79x | 99% | (255,92,208) full pink | **163** |
+
+Saturation climbs monotonically while brightness barely moves (518 → 577 →
+555).
 
 The main tab's numbers are set for a dozen small lobes glimpsed at once while
 molecules fly past. This tab has one lobe filling the screen, held still and

@@ -1125,7 +1125,7 @@ function setFieldRamp(name) {
 // molecules fly past. This tab has one lobe filling the screen, held still and
 // read. Those are different jobs and they want different numbers, so none of
 // these are shared.
-let BOND_FIELD_WIDTH = 0.30;   // own copy of FIELD_WIDTH
+let BOND_FIELD_WIDTH = 0.22;   // own copy of FIELD_WIDTH
 let BOND_FIELD_GAIN  = 0.90;   // own copy of FIELD_GAIN
 const BOND_COLORMAP  = new Uint8Array(LOAD_BINS * 256 * 4);
 
@@ -1186,11 +1186,44 @@ const BOND_FIELD_SQUEEZE = 0.85;
 // rest is. The floor is the bond simply EXISTING; `work` is then what gets
 // added on top of it by stretching or squeezing. It sits at the bottom of the
 // colour ramp, so a bond at rest is the plain blue glow.
-let BOND_FIELD_FLOOR = 0.35;
+// 0.70, not 0.35. The floor is what a bond at its natural length looks like,
+// and at 0.35 that was a dim smudge. At 0.70 the centre reads (168,168,179) —
+// brightness 515, saturation 11 — a clearly visible glow with no colour in it,
+// about as present as a 2x stretch used to be. The range above it is then
+// carried by HUE rather than brightness, which is the right division of labour:
+// saturation climbs 11 -> 126 -> 146 from 1x to 2x to 3x while brightness
+// barely moves.
+let BOND_FIELD_FLOOR = 0.70;
+
+// One Bond's own colour stages. The main tab's cold stage is a blue-white,
+// which is right there — a resting bond in a world of them should still read as
+// something. Here the bottom of the scale is a bond at its natural length with
+// NOTHING stored, and that should look like a bond and not like an event: a
+// visible glow with no colour in it. Grey. The colour is then what stretching
+// adds, so hue carries the reading rather than decorating it.
+const BOND_FIELD_STAGES = [
+  // nothing stored — grey, present but not vibrant
+  [ { t: 0.0,  r: 24,  g: 25,  b: 30,  a: 0   },
+    { t: 0.12, r: 74,  g: 77,  b: 86,  a: 140 },
+    { t: 0.40, r: 124, g: 128, b: 140, a: 210 },
+    { t: 0.70, r: 168, g: 172, b: 186, a: 245 },
+    { t: 1.0,  r: 214, g: 218, b: 228, a: 255 } ],
+  // working — purple
+  [ { t: 0.0,  r: 20,  g: 0,   b: 54,  a: 0   },
+    { t: 0.12, r: 62,  g: 16,  b: 148, a: 140 },
+    { t: 0.40, r: 112, g: 36,  b: 214, a: 210 },
+    { t: 0.70, r: 158, g: 70,  b: 240, a: 245 },
+    { t: 1.0,  r: 196, g: 122, b: 255, a: 255 } ],
+  // nearly broken — pink
+  [ { t: 0.0,  r: 50,  g: 0,   b: 42,  a: 0   },
+    { t: 0.12, r: 146, g: 10,  b: 112, a: 140 },
+    { t: 0.40, r: 220, g: 28,  b: 166, a: 210 },
+    { t: 0.70, r: 248, g: 58,  b: 192, a: 245 },
+    { t: 1.0,  r: 255, g: 92,  b: 208, a: 255 } ],
+];
 
 function buildBondColormap() {
-  buildRampStack(FIELD_STAGES[fieldRamp] || FIELD_STAGES.energy,
-                 FIELD_STAGE_GAMMA, BOND_COLORMAP,
+  buildRampStack(BOND_FIELD_STAGES, FIELD_STAGE_GAMMA, BOND_COLORMAP,
                  t => Math.pow(t, BOND_ALPHA_POW));
 }
 
