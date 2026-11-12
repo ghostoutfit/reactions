@@ -1147,7 +1147,7 @@ let BOND_ALPHA_POW = 1.8;
 // the natural length the two nuclei and their shells nearly touch, there is no
 // visible gap for the shared pair to live in, and the first thing the tab says
 // should be "two atoms with something between them".
-const BOND_START_MULT = 1.34;
+const BOND_START_MULT = 1.0;
 
 // How far apart the pair can be dragged, as a multiple of the natural length.
 // 4.8 rather than 3.2 because that is where the stored energy finally reads
@@ -1160,9 +1160,14 @@ const BOND_MIN_MULT = 0.6;
 // the view would give.
 const BOND_ZOOM = 1.2;
 
-// How hard a bonding electron is held to the middle of the bond in the One Bond
-// tab. Higher keeps the shared pair tight in the gap; lower lets it roam.
-let bondCentreHold = 0.10;
+// How hard a bonding electron is held to the middle of the bond. One value for
+// both tabs, though they spend it differently: One Bond uses it as a per-frame
+// velocity anchor on its wandering dots, while the Reactions shells view uses
+// it as a straight positional lerp from where the figure-8 has the electron
+// towards the bond's midpoint. Same knob, same direction of effect — higher is
+// more centred in both — but not the same units, so the two will not land at
+// identical distances from the middle.
+let bondCentreHold = 0.4;
 
 // The lobe is drawn bigger and brighter than a faithful reading would make it
 // at that opening separation. `BOND_FIELD_BOOST` multiplies its magnitude and
@@ -3140,10 +3145,11 @@ const SHELL_DOT_R = 9;    // smaller than the One Bond tab's 17 — a world of
 // right, and falls out of these being body-local coordinates.
 const shellSpin = 0;      // rad/s round the ring — none
 
-// How far the bonding electrons are pulled in towards the middle of the bond.
-// 0 leaves them wherever the figure-8 has them, which in this view reads as two
-// dots swinging around the whole molecule; 1 pins them to the midpoint.
-const shellBondPull = 0.72;
+// The Reactions shells view pulls its bonding electrons towards the middle of
+// the bond by `bondCentreHold`, the same number the One Bond tab holds its
+// shared pair with. 0 leaves them wherever the figure-8 has them, which in this
+// view reads as two dots swinging around the whole molecule; 1 pins them to the
+// midpoint.
 
 let shellPhase = 0;       // kept so the draw path needs no special case
 
@@ -3159,11 +3165,11 @@ function drawElectronsAsDots(b, dc = ctx) {
     if (e.kind === 'lone' && !showLonePairs) continue;
     let lx, ly;
     if (e.kind === 'bond') {
-      // Toward the middle of its own bond, by shellBondPull.
+      // Toward the middle of its own bond, by bondCentreHold.
       const ai = b.atoms[e.i], ak = b.atoms[e.k];
       const mx = (ai.lx + ak.lx) / 2, my = (ai.ly + ak.ly) / 2;
-      lx = e.x + (mx - e.x) * shellBondPull;
-      ly = e.y + (my - e.y) * shellBondPull;
+      lx = e.x + (mx - e.x) * bondCentreHold;
+      ly = e.y + (my - e.y) * bondCentreHold;
     } else {
       // Sitting in its seat ON the shell, not running round it and not floating
       // inside it. The radius comes from `shellRadius`, the same function that
@@ -3547,7 +3553,9 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     '<div style="opacity:0.45;font-size:10px;">share of the ring a bonded ' +
       'atom\u2019s non-bonding electrons sit on, centred away from the bond; ' +
       '1 = all the way round</div>' +
-    row('devShHold',  'One Bond centre hold', 0.01, 0.4, 0.01, bondCentreHold, '#7bffd0') +
+    row('devShHold',  'Bond e centre hold', 0.01, 1, 0.01, bondCentreHold, '#7bffd0') +
+    '<div style="opacity:0.45;font-size:10px;">both tabs; One Bond spends it as ' +
+      'a velocity anchor, Reactions as a positional pull</div>' +
     '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
     '<label style="display:flex;align-items:center;gap:7px;margin:9px 0 2px;cursor:pointer;">' +
       '<input type="checkbox" id="devEqui" checked style="margin:0">' +
@@ -4052,8 +4060,11 @@ const BOND_MORSE_A = 1.5;   // x 1/r0 — how quickly the well opens out
 // number is the energy. They disagree at long range and that disagreement is
 // the point — hence `bondContact`, which holds at 1 while the atoms still feel
 // each other and falls to 0 once they do not.
-const BOND_CONTACT_HOLD = 2.2;   // x r0 — full interaction out to here
-const BOND_CONTACT_GONE = 3.2;   // x r0 — nothing left by here
+// The glow holds all the way out to where the reading says 99%, then goes over
+// the last one percent. So the lobe is pink right up to the moment the bond is
+// called whole, and the "highest energy, no glow" state is everything past it.
+const BOND_CONTACT_HOLD = 3.79;  // x r0 — reads 99% here
+const BOND_CONTACT_GONE = 4.07;  // x r0 — reads 100% here, and is gone
 
 // ── Real nuclei, ported from the bonds repo ─────────────────────────────────
 // Protons and neutrons, packed into a sphere, not a "+" sprite. Same algorithm
@@ -4262,11 +4273,22 @@ function bondTabEls() {
   return [a, b];
 }
 
+// The raw Morse form only APPROACHES 1 — it is still at 99.3% even at the end
+// of the drag, so the reading never quite says "this is the whole bond". The
+// last couple of percent is also the flattest part of the curve, where a lot of
+// pulling buys almost nothing. Dividing by the fraction that counts as whole
+// fixes both: the scale reaches 100% while there is still something to see, and
+// the natural length still reads 0 because it is a scale, not an offset.
+//
+// 0.98 is chosen from the two separations asked for: raw 97% sits at 3.79 r0
+// and raw 98% at 4.07 r0, and 1/0.98 maps those to 99% and 100% exactly.
+const WORK_FULL_AT = 0.98;
+
 // Energy stored by being at r instead of r0, as a fraction of the full bond
-// energy. 0 at the natural length, approaching 1 pulled right apart.
+// energy. 0 at the natural length, 1 once it is as good as broken.
 function bondWorkFraction(r, r0) {
   const x = 1 - Math.exp(-(BOND_MORSE_A / r0) * (r - r0));
-  return Math.min(1, x * x);
+  return Math.min(1, x * x / WORK_FULL_AT);
 }
 
 // How much the two atoms still interact at all: 1 close in, smoothly 0 far out.

@@ -1348,12 +1348,32 @@ the clamp sits at 3.48 against a base of 2.54, so it does not bite at all and
 the 20% lands in full (2.12 → 2.54). At full stretch the pair still spans only
 198–1086 px.
 
+### The scale reaches 100%
+
+```javascript
+const WORK_FULL_AT = 0.98;   // raw Morse fraction that counts as a whole bond
+```
+
+The raw Morse form only ever *approaches* 1 — it is still at 99.3% at the end of
+the drag, so the reading never quite says "this is the whole bond". That last
+couple of percent is also the flattest part of the curve, where a lot of pulling
+buys almost nothing. Dividing by the fraction that counts as whole fixes both,
+and because it is a **scale rather than an offset** the natural length still
+reads 0.
+
+Measured: raw 97% sits at **3.79 r0** and raw 98% at **4.07 r0**; after the
+scale those read **99%** and **100%** exactly.
+
 ### ...and then it fades anyway
 
 ```javascript
-const BOND_CONTACT_HOLD = 2.2;   // x r0 — full interaction out to here
-const BOND_CONTACT_GONE = 3.2;   // x r0 — nothing left by here
+const BOND_CONTACT_HOLD = 3.79;  // x r0 — reads 99% here
+const BOND_CONTACT_GONE = 4.07;  // x r0 — reads 100% here, and is gone
 ```
+
+**The glow holds all the way to 99%, then goes over the last one percent.** So
+the lobe is full pink right up to the moment the bond is called whole, and the
+"highest energy, no glow" state is everything past it.
 
 Pulled far enough the two atoms simply do not interact, so there is nothing
 between them to draw — **even though this is exactly where the stored energy is
@@ -1362,12 +1382,16 @@ at long range, and that disagreement is the point.
 
 | separation | stored | contact | readout | lobe |
 |---|---|---|---|---|
-| 1.0x | 0.00 | 1.0 | 0 kJ/mol | blue (29,84,204) |
-| 1.55x (opens here) | 0.32 | 1.0 | 157 kJ/mol | brighter blue (100,134,241) |
-| 2.0x | 0.60 | 1.0 | 301 kJ/mol | purple (190,120,251) |
-| 2.4x | 0.77 | 0.9 | 384 kJ/mol | pink (208,111,240), brightest |
-| 2.8x | 0.88 | 0.4 | 433 kJ/mol | pink (149,27,156), dimming |
-| 3.2x | 0.93 | 0.0 | **462 kJ/mol** | **gone** (5,4,15) |
+| separation | reads | contact | lobe |
+|---|---|---|---|
+| 1.0x (opens here) | 0% | 1.0 | blue (18,28,68) |
+| 2.0x | 62% | 1.0 | purple (182,117,241) |
+| 3.0x | 92% | 1.0 | pink (243,97,217) |
+| 3.5x | 97% | 1.0 | full pink (255,92,208) |
+| **3.79x** | **99%** | **1.0** | **full pink, still** |
+| 3.95x | 100% | 0.39 | fading (72,14,62) |
+| **4.07x** | **100%** | **0.0** | **gone** (5,4,15) |
+| 4.8x | 100% | 0.0 | gone |
 
 **Colour follows the stored energy, not the fade.** `load: work`, so a
 nearly-broken bond stays pink right up until it stops being drawn, instead of
@@ -1476,10 +1500,10 @@ const BOND_FIELD_BOOST   = 1.30;   // lobe magnitude
 const BOND_FIELD_SQUEEZE = 0.85;   // lobe width
 ```
 
-**Not 1.0.** At the natural length the two nuclei and their shells nearly touch,
-there is no visible gap for the shared pair to live in, and the first thing the
-tab says should be "two atoms with something between them". At **1.34** every
-pair opens with a clear gap and 70–79 kJ/mol already stored.
+**It opens at 1.0**, the natural length: a bond at rest, 0 kJ/mol stored, the
+lobe at its floor. Earlier versions opened stretched so there was a visible gap
+for the shared pair to sit in; opening at rest instead makes the first move you
+make — pulling — the thing that puts energy in.
 
 The lobe is then drawn bigger and brighter than a faithful reading would make it
 there — which has a real cost, since **brightness is the energy reading**.
@@ -1544,10 +1568,10 @@ const BOND_FIELD_BOOST   = 1.30;   // lobe magnitude
 const BOND_FIELD_SQUEEZE = 0.85;   // lobe width
 ```
 
-**Not 1.0.** At the natural length the two nuclei and their shells nearly touch,
-there is no visible gap for the shared pair to live in, and the first thing the
-tab says should be "two atoms with something between them". At **1.34** every
-pair opens with a clear gap and 70–79 kJ/mol already stored.
+**It opens at 1.0**, the natural length: a bond at rest, 0 kJ/mol stored, the
+lobe at its floor. Earlier versions opened stretched so there was a visible gap
+for the shared pair to sit in; opening at rest instead makes the first move you
+make — pulling — the thing that puts energy in.
 
 The lobe is then drawn bigger and brighter than a faithful reading would make it
 there — which has a real cost, since **brightness is the energy reading**.
