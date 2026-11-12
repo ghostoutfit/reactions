@@ -1149,6 +1149,10 @@ let BOND_ALPHA_POW = 1.8;
 // should be "two atoms with something between them".
 const BOND_START_MULT = 1.34;
 
+// How hard a bonding electron is held to the middle of the bond in the One Bond
+// tab. Higher keeps the shared pair tight in the gap; lower lets it roam.
+let bondCentreHold = 0.10;
+
 // The lobe is drawn bigger and brighter than a faithful reading would make it
 // at that opening separation. `BOND_FIELD_BOOST` multiplies its magnitude and
 // `BOND_FIELD_SQUEEZE` its width.
@@ -1800,6 +1804,10 @@ function buildElectrons(b) {
       // settled here rather than searched for on every electron every frame.
       e.bonded = anyBond[i];
       e.angle = facing + q * Math.PI * 2 * (free ? GOLDEN : 1 / lone);
+      // Where this electron sits on its ring, fixed. The trails view advances
+      // `angle`; the shells view wants a seat, not an orbit, so it draws from
+      // this instead and the electron stays where it was put.
+      e.angle0 = e.angle;
       const r0 = valenceRadius(at.el) * loneRadius * (e.bonded ? loneRadiusBonded : 1);
       e.x = at.lx + r0 * Math.cos(e.angle);
       e.y = at.ly + r0 * Math.sin(e.angle);
@@ -3131,6 +3139,24 @@ function drawWorld() {
 const SHELL_DOT_R = 9;    // smaller than the One Bond tab's 17 — a world of
                           // molecules, not one bond filling the screen
 
+// ── Shells-view tuning ──────────────────────────────────────────────────────
+// A shell is a place an electron lives, not a racetrack. The trails view wants
+// motion — a stationary electron leaves no trail — but in the shells view that
+// same motion reads as the electrons whizzing round the ring, which says
+// something false about what a shell is. So the shells view draws from
+// `angle0`, the seat each electron was given, and turns it only as fast as
+// `shellSpin` says. At 0 they are still, and the only thing that moves them is
+// the molecule itself rotating, which is right.
+let shellSpin = 0.05;     // rad/s round the ring; 0 = completely still
+
+// How far the bonding electrons are pulled in towards the middle of the bond.
+// 0 leaves them wherever the figure-8 has them, which in this view reads as
+// two dots swinging around the whole molecule; 1 pins them to the midpoint.
+// In between they stay near the centre and still move a little.
+let shellBondPull = 0.72;
+
+let shellPhase = 0;       // accumulates shellSpin
+
 function drawAtomShells(c, p) {
   drawShellBands(c, p.x, p.y, p.el, valenceRadius(p.el),
                  ELEMENTS[p.el].rgb, nucleusDiameter / 2);
@@ -3141,7 +3167,22 @@ function drawElectronsAsDots(b, dc = ctx) {
   const ca = Math.cos(b.angle), sa = Math.sin(b.angle);
   for (const e of b.electrons) {
     if (e.kind === 'lone' && !showLonePairs) continue;
-    drawElectronDot(dc, b.x + e.x * ca - e.y * sa, b.y + e.x * sa + e.y * ca,
+    let lx, ly;
+    if (e.kind === 'bond') {
+      // Toward the middle of its own bond, by shellBondPull.
+      const ai = b.atoms[e.i], ak = b.atoms[e.k];
+      const mx = (ai.lx + ak.lx) / 2, my = (ai.ly + ak.ly) / 2;
+      lx = e.x + (mx - e.x) * shellBondPull;
+      ly = e.y + (my - e.y) * shellBondPull;
+    } else {
+      // Sitting in its seat on the ring, not running round it.
+      const at = b.atoms[e.i];
+      const r = valenceRadius(at.el) * loneRadius * (e.bonded ? loneRadiusBonded : 1);
+      const ang = e.angle0 + shellPhase * (b.bonds.length === 0 ? loneSpeedFree : 1);
+      lx = at.lx + r * Math.cos(ang);
+      ly = at.ly + r * Math.sin(ang);
+    }
+    drawElectronDot(dc, b.x + lx * ca - ly * sa, b.y + lx * sa + ly * ca,
                     ELEMENTS[e.el].rgb, false, SHELL_DOT_R);
   }
 }
@@ -3189,6 +3230,7 @@ function worldLoop(now) {
   // are already drawn on page load, before GO is ever pressed.
   // Once a frame, never per sub-step: the phase logic is tuned in per-frame units.
   stepElectrons(dt);
+  shellPhase += shellSpin * dt;
   drawWorld();
 }
 
@@ -3500,6 +3542,12 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     row('devBFloor',  'Lobe at rest',    0,    1,   0.05, BOND_FIELD_FLOOR, '#7b6fff') +
     row('devBBoost',  'Stretch boost',   0.5,  3,   0.05, BOND_FIELD_BOOST, '#7b6fff') +
     '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
+    '<div style="font-size:9px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.4;margin-top:8px;">' +
+      'Shells view</div>' +
+    row('devShSpin',  'Ring spin',       0,    1,   0.01, shellSpin,      '#7bffd0') +
+    row('devShPull',  'Bond e to centre',0,    1,   0.02, shellBondPull,  '#7bffd0') +
+    row('devShHold',  'One Bond centre hold', 0.01, 0.4, 0.01, bondCentreHold, '#7bffd0') +
+    '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
     '<label style="display:flex;align-items:center;gap:7px;margin:9px 0 2px;cursor:pointer;">' +
       '<input type="checkbox" id="devEqui" checked style="margin:0">' +
       '<span>Heavy molecules start slower</span>' +
@@ -3574,6 +3622,10 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
        false, v => v.toFixed(1));
   bind('devBFloor',   v => BOND_FIELD_FLOOR = v, false, v => v.toFixed(2));
   bind('devBBoost',   v => BOND_FIELD_BOOST = v, false, v => v.toFixed(2));
+  bind('devShSpin',   v => shellSpin = v, false,
+       v => v === 0 ? 'still' : v.toFixed(2) + ' rad/s');
+  bind('devShPull',   v => shellBondPull = v, false, v => Math.round(v * 100) + '%');
+  bind('devShHold',   v => bondCentreHold = v, false, v => v.toFixed(2));
 
   // Equipartition on/off, so both can be compared side by side
   const equi = panel.querySelector('#devEqui');
@@ -4171,7 +4223,9 @@ const BOND_DOT_CONF = 1.55;    // confinement radius, x the valence radius. In
 
 const BOND_DOT_GLOW = 17;   // px — bonds draws these at electronDotR 16.5
 const BOND_DOT_CORE = 3;    // its core is a sixth of that
-const E_SPIN = 0.22;        // rad/s — the shells slowly turn, so nothing is dead
+// The One Bond tab's shells turn at the same rate the main tab's do, from the
+// same slider — a shell is a shell on both. `bondCentreHold` lives up with the
+// other One Bond constants, above devPanel, which reads it at load.
 
 // How shared the bonding electrons are: 1 sitting between the two atoms, 0 gone
 // home to their own. They let go as the bond is pulled apart, which is the
@@ -4319,7 +4373,7 @@ function stepBondDots() {
     // a shared electron roams, a returned one sits on its shell.
     d.vx += (Math.random() - 0.5) * avgConf * BOND_DOT_LR * share;
     d.vy += (Math.random() - 0.5) * avgConf * BOND_DOT_UD * share;
-    d.vx += (tx - d.x) * (0.025 + 0.14 * (1 - share));
+    d.vx += (tx - d.x) * (bondCentreHold + 0.14 * (1 - share));
     d.vy += (ty - d.y) * (0.08  + 0.10 * (1 - share));
     for (const o of bondTab.dots) {
       if (o === d) continue;
@@ -4388,7 +4442,7 @@ function drawShellBands(c, x, y, el, vr, outerHex, nucR) {
 function stepBondTab(dt) {
   if (!bondTab.dots.length && !bondTab.shellE.length) initBondElectrons();
   bondTab.wobble += dt;
-  bondTab.spin += E_SPIN * dt;
+  bondTab.spin += shellSpin * dt;
   stepBondDots();
 }
 

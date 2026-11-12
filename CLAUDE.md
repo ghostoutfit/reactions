@@ -696,6 +696,35 @@ the inner shell stays where the physics puts it.
 Dots are `SHELL_DOT_R` = 9 px against the One Bond tab's 17 — a world of
 molecules, not one bond filling the screen.
 
+### Shells electrons sit still
+
+```javascript
+let shellSpin     = 0.05;   // rad/s round the ring; 0 = completely still
+let shellBondPull = 0.72;   // bonding electrons, towards the bond's middle
+```
+
+**A shell is a place an electron lives, not a racetrack.** The trails view needs
+motion — a stationary electron leaves no trail — but in the shells view that
+same motion reads as electrons whizzing round the ring, which says something
+false about what a shell is.
+
+So the shells view draws lone electrons from **`e.angle0`**, the seat each one
+was given at build time, turned only as fast as `shellSpin`. The simulation
+keeps running underneath for the trails view; shells just ignores it. Measured
+over 10 s: the drawn electron moved **10.3 px** while the simulated orbit angle
+advanced **75 radians**, about twelve laps.
+
+The only thing that should move them is the molecule itself rotating, and that
+still does, because these are body-local coordinates.
+
+**Bonding electrons are pulled towards the middle of their bond.** At 0 they sit
+where the figure-8 puts them, which in this view reads as two dots swinging
+around the whole molecule. Measured mean distance from the bond's midpoint, on
+an O=O whose half-bond is 27.4 px: **25.3 px at pull 0, 7.1 px at 0.72, 0 at 1**.
+
+All three — ring spin, bond pull, and the One Bond tab's `bondCentreHold` — are
+dev sliders under **Shells view**.
+
 Shells is the **cheapest** of the three: 0.14 ms/frame against trails' 0.20 and
 outline's 0.16, since a dot is one gradient where a trail is a stack of stroked
 buckets. Verified across lone-pairs on and off, and after breaking leaves a
@@ -1001,6 +1030,35 @@ the inner shell stays where the physics puts it.
 
 Dots are `SHELL_DOT_R` = 9 px against the One Bond tab's 17 — a world of
 molecules, not one bond filling the screen.
+
+### Shells electrons sit still
+
+```javascript
+let shellSpin     = 0.05;   // rad/s round the ring; 0 = completely still
+let shellBondPull = 0.72;   // bonding electrons, towards the bond's middle
+```
+
+**A shell is a place an electron lives, not a racetrack.** The trails view needs
+motion — a stationary electron leaves no trail — but in the shells view that
+same motion reads as electrons whizzing round the ring, which says something
+false about what a shell is.
+
+So the shells view draws lone electrons from **`e.angle0`**, the seat each one
+was given at build time, turned only as fast as `shellSpin`. The simulation
+keeps running underneath for the trails view; shells just ignores it. Measured
+over 10 s: the drawn electron moved **10.3 px** while the simulated orbit angle
+advanced **75 radians**, about twelve laps.
+
+The only thing that should move them is the molecule itself rotating, and that
+still does, because these are body-local coordinates.
+
+**Bonding electrons are pulled towards the middle of their bond.** At 0 they sit
+where the figure-8 puts them, which in this view reads as two dots swinging
+around the whole molecule. Measured mean distance from the bond's midpoint, on
+an O=O whose half-bond is 27.4 px: **25.3 px at pull 0, 7.1 px at 0.72, 0 at 1**.
+
+All three — ring spin, bond pull, and the One Bond tab's `bondCentreHold` — are
+dev sliders under **Shells view**.
 
 Shells is the **cheapest** of the three: 0.14 ms/frame against trails' 0.20 and
 outline's 0.16, since a dot is one gradient where a trail is a stack of stroked
