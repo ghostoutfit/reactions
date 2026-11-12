@@ -673,15 +673,21 @@ That is the entire separation between Low and High, and it is why no
 
 #### Three view modes
 
-`viewMode` is `'trails'`, `'shells'` or `'outline'` — the old boolean `showAtoms`
+`viewMode` is `'trails'`, `'shells'` or `'space'` — the old boolean `showAtoms`
 split in two, because "Atoms" was doing two jobs.
+
+All three buttons carry the **same** H₂ icon, animated by the shared
+`ICON_CANVASES` loop. They are three pictures of the same thing, so the button
+should say which *view* you get rather than imply the molecule differs between
+them. Each canvas keeps its own jitter so they do not wobble in lockstep. The
+bespoke `drawOutlineIcon` that used to sit on the third button is gone.
 
 - **Trails** — the electron trails this sim has always drawn.
 - **Shells** — the bonds sim's shells picture: a gradient band at each occupied
   shell radius, electrons as **dots sitting on it** rather than as paths behind
   them. Shares `drawShellBands`, `drawElectronDot`, `ATOM_SHELLS` and
   `shellRadius` with the One Bond tab.
-- **Outline** — space-filling, unchanged.
+- **Space** — space-filling, unchanged but for the name.
 
 **Colour is by element here, not by atom.** The One Bond tab colours its two
 atoms apart because the whole question there is whose electrons are whose; with
@@ -1008,15 +1014,21 @@ first, then spawn.
 
 ## Three view modes
 
-`viewMode` is `'trails'`, `'shells'` or `'outline'` — the old boolean `showAtoms`
+`viewMode` is `'trails'`, `'shells'` or `'space'` — the old boolean `showAtoms`
 split in two, because "Atoms" was doing two jobs.
+
+All three buttons carry the **same** H₂ icon, animated by the shared
+`ICON_CANVASES` loop. They are three pictures of the same thing, so the button
+should say which *view* you get rather than imply the molecule differs between
+them. Each canvas keeps its own jitter so they do not wobble in lockstep. The
+bespoke `drawOutlineIcon` that used to sit on the third button is gone.
 
 - **Trails** — the electron trails this sim has always drawn.
 - **Shells** — the bonds sim's shells picture: a gradient band at each occupied
   shell radius, electrons as **dots sitting on it** rather than as paths behind
   them. Shares `drawShellBands`, `drawElectronDot`, `ATOM_SHELLS` and
   `shellRadius` with the One Bond tab.
-- **Outline** — space-filling, unchanged.
+- **Space** — space-filling, unchanged but for the name.
 
 **Colour is by element here, not by atom.** The One Bond tab colours its two
 atoms apart because the whole question there is whose electrons are whose; with

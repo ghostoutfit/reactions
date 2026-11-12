@@ -745,9 +745,9 @@
       </div>
       <div style="display:flex;gap:10px;align-self:stretch;align-items:center">
         <div style="display:flex;flex-direction:column;gap:4px">
-          <button class="awheel-item active" data-view="trails" style="display:flex;align-items:center;gap:5px"><canvas id="atomsModeIcon" width="22" height="18" style="display:block;flex-shrink:0;image-rendering:pixelated"></canvas>Trails</button>
-          <button class="awheel-item" data-view="shells" style="display:flex;align-items:center;gap:5px">Shells</button>
-          <button class="awheel-item" data-view="outline" style="display:flex;align-items:center;gap:5px"><canvas id="outlineModeIcon" width="22" height="18" style="display:block;flex-shrink:0;image-rendering:pixelated"></canvas>Outline</button>
+          <button class="awheel-item active" data-view="trails" style="display:flex;align-items:center;gap:5px"><canvas id="trailsModeIcon" width="22" height="18" style="display:block;flex-shrink:0;image-rendering:pixelated"></canvas>Trails</button>
+          <button class="awheel-item" data-view="shells" style="display:flex;align-items:center;gap:5px"><canvas id="shellsModeIcon" width="22" height="18" style="display:block;flex-shrink:0;image-rendering:pixelated"></canvas>Shells</button>
+          <button class="awheel-item" data-view="space" style="display:flex;align-items:center;gap:5px"><canvas id="spaceModeIcon" width="22" height="18" style="display:block;flex-shrink:0;image-rendering:pixelated"></canvas>Space</button>
         </div>
       </div>
     </div>
@@ -2102,7 +2102,7 @@ let viewZoom = 1.0;
 // 'trails'  — the electron trails this sim has always drawn
 // 'shells'   — the bonds sim's shells picture: a band at each occupied shell
 //              radius, electrons as dots on it rather than as paths
-// 'outline'  — space-filling
+// 'space'    — space-filling
 let viewMode = 'trails';
 let running = false;
 
@@ -3014,53 +3014,19 @@ function drawMoleculeIcon(canvas, els, jitter = null, pad = 3) {
   els.forEach((el, k) => drawAtomIcon(c, cx + rel[k] * R, cy, el, R));
 }
 
-function drawOutlineIcon() {
-  const ic = document.getElementById('outlineModeIcon');
-  if (!ic) return;
-  const c = ic.getContext('2d');
-  const w = ic.width, h = ic.height;
-  const cx = w / 2, cy = h / 2;
-  const sR = Math.min(w, h) * 0.36;
-  const R  = 2.5;
-  const N  = Math.max(5, Math.round(2 * Math.PI * sR / (R * 1.5)));
-  const centers = Array.from({ length: N }, (_, k) => {
-    const a = k * 2 * Math.PI / N;
-    return { x: cx + sR * Math.cos(a), y: cy + sR * Math.sin(a) };
-  });
-  // outerIntersection equivalent for the icon ctx
-  function iconOuterIntersect(c1, c2) {
-    const dx = c2.x - c1.x, dy = c2.y - c1.y;
-    const d  = Math.sqrt(dx * dx + dy * dy);
-    const h2 = Math.sqrt(Math.max(0, R * R - (d / 2) ** 2));
-    const mx = (c1.x + c2.x) / 2, my = (c1.y + c2.y) / 2;
-    const px = -dy / d * h2, py = dx / d * h2;
-    const p1 = { x: mx + px, y: my + py }, p2 = { x: mx - px, y: my - py };
-    const d1 = (p1.x - cx)**2 + (p1.y - cy)**2;
-    const d2 = (p2.x - cx)**2 + (p2.y - cy)**2;
-    return d1 > d2 ? p1 : p2;
-  }
-  const arcs = centers.map((pt, k) => {
-    const prev = centers[(k - 1 + N) % N], next = centers[(k + 1) % N];
-    const sp = iconOuterIntersect(pt, prev);
-    const ep = iconOuterIntersect(pt, next);
-    return { cx: pt.x, cy: pt.y, startAngle: Math.atan2(sp.y - pt.y, sp.x - pt.x), endAngle: Math.atan2(ep.y - pt.y, ep.x - pt.x) };
-  });
-  c.clearRect(0, 0, w, h);
-  c.save();
-  c.shadowColor = 'rgba(80,160,255,0.9)'; c.shadowBlur = 4;
-  c.strokeStyle = 'rgba(160,215,255,1)'; c.lineWidth = 1;
-  c.beginPath();
-  c.moveTo(arcs[0].cx + R * Math.cos(arcs[0].startAngle), arcs[0].cy + R * Math.sin(arcs[0].startAngle));
-  for (const arc of arcs) c.arc(arc.cx, arc.cy, R, arc.startAngle, arc.endAngle, false);
-  c.closePath(); c.stroke(); c.restore();
-}
 
 // One loop for every live toolbar icon, at ~15 fps. Each gets its own wobble so
 // they do not all drift in lockstep. (The speed dial used to run a second rAF
 // loop of its own at the full frame rate, for an icon 46 px across.)
 const ICON_CANVASES = [
   { id: 'newBtnMolecule',      pad: 4, wobble: 0.7, jitter: { x: 0, y: 0 } },   // respawn button
-  { id: 'atomsModeIcon',       pad: 1, wobble: 0.4, jitter: { x: 0, y: 0 } },   // Atoms view button
+  // All three view buttons carry the same icon. They are three pictures of the
+  // same thing, so the button should say which VIEW you get, not pretend the
+  // molecule differs between them. Each keeps its own jitter so they do not
+  // wobble in lockstep.
+  { id: 'trailsModeIcon',      pad: 1, wobble: 0.4, jitter: { x: 0, y: 0 } },
+  { id: 'shellsModeIcon',      pad: 1, wobble: 0.4, jitter: { x: 0, y: 0 } },
+  { id: 'spaceModeIcon',       pad: 1, wobble: 0.4, jitter: { x: 0, y: 0 } },
 ];
 
 let _iconLast = -67;
@@ -3076,7 +3042,6 @@ function toolbarIconLoop(now) {
   requestAnimationFrame(toolbarIconLoop);
 }
 toolbarIconLoop(0);
-drawOutlineIcon();
 
 // ─── Renderer ─────────────────────────────────────────────────────────────────
 // One body, one place. The wrap-around world drew up to four copies of anything
@@ -3109,7 +3074,7 @@ function drawWorld() {
   drawWalls();
   if (document.getElementById('showFields').checked) drawFieldHeatmap(ctx);
 
-  if (viewMode === 'outline') {
+  if (viewMode === 'space') {
     drawSpaceFilling();   // all bodies at once: the layer is shared
   } else if (viewMode === 'shells') {
     // Bands first, under everything, then the electrons as dots on them.
