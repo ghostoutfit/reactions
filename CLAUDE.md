@@ -714,11 +714,12 @@ the inner shell stays where the physics puts it.
 Dots are `SHELL_DOT_R` = 9 px against the One Bond tab's 17 — a world of
 molecules, not one bond filling the screen.
 
-### Shells electrons sit still
+### Shells electrons sit still, and outward
 
 ```javascript
-let shellSpin     = 0.05;   // rad/s round the ring; 0 = completely still
-let shellBondPull = 0.72;   // bonding electrons, towards the bond's middle
+const shellSpin     = 0;      // rad/s round the ring — none
+const shellBondPull = 0.72;   // bonding electrons, towards the bond's middle
+let   loneArcFrac   = 0.45;   // share of the ring a bonded atom's lone pairs use
 ```
 
 **A shell is a place an electron lives, not a racetrack.** The trails view needs
@@ -734,6 +735,32 @@ advanced **75 radians**, about twelve laps.
 
 The only thing that should move them is the molecule itself rotating, and that
 still does, because these are body-local coordinates.
+
+**A bonded atom's non-bonding electrons sit on the far side from the bond**,
+spread over `loneArcFrac` of the ring centred on the direction away from its
+partner. Evenly round the whole circle they swept straight through the bond
+region, which is where the bonding pair already is and the one place a lone pair
+should not be. Measured on an O in an O=O, the cosine of each electron's angle
+against that away direction — +1 is directly outward, −1 is through the bond:
+
+| | mean | worst | all outward? |
+|---|---|---|---|
+| whole circle | **−0.25** | −1.00 | no |
+| arc 0.55 (198°) | +0.34 | −0.16 | no |
+| **arc 0.45 (162°)** | **+0.53** | **+0.16** | **yes** |
+
+Under 0.5 on purpose: at 0.55 the arc spans 198°, so the outermost pair sits at
+±99° and tips just past the halfway line onto the bond's side. At 0.45 they land
+at **81°, 27°, 27°, 81°** from the away direction — every one of them strictly
+outward.
+
+**A free atom keeps the whole circle**, golden-angle spaced: nothing is pushing
+its electrons anywhere, so they have no reason to bunch. Verified it still
+spans the full range after a bond breaks.
+
+Ring spin and the bond-pull slider are gone — spin is fixed at none and the pull
+at its tuned value. `Lone pairs outward` replaces them, and rebuilds every
+body's electrons when moved.
 
 **Bonding electrons are pulled towards the middle of their bond.** At 0 they sit
 where the figure-8 puts them, which in this view reads as two dots swinging
@@ -1067,11 +1094,12 @@ the inner shell stays where the physics puts it.
 Dots are `SHELL_DOT_R` = 9 px against the One Bond tab's 17 — a world of
 molecules, not one bond filling the screen.
 
-### Shells electrons sit still
+### Shells electrons sit still, and outward
 
 ```javascript
-let shellSpin     = 0.05;   // rad/s round the ring; 0 = completely still
-let shellBondPull = 0.72;   // bonding electrons, towards the bond's middle
+const shellSpin     = 0;      // rad/s round the ring — none
+const shellBondPull = 0.72;   // bonding electrons, towards the bond's middle
+let   loneArcFrac   = 0.45;   // share of the ring a bonded atom's lone pairs use
 ```
 
 **A shell is a place an electron lives, not a racetrack.** The trails view needs
@@ -1087,6 +1115,32 @@ advanced **75 radians**, about twelve laps.
 
 The only thing that should move them is the molecule itself rotating, and that
 still does, because these are body-local coordinates.
+
+**A bonded atom's non-bonding electrons sit on the far side from the bond**,
+spread over `loneArcFrac` of the ring centred on the direction away from its
+partner. Evenly round the whole circle they swept straight through the bond
+region, which is where the bonding pair already is and the one place a lone pair
+should not be. Measured on an O in an O=O, the cosine of each electron's angle
+against that away direction — +1 is directly outward, −1 is through the bond:
+
+| | mean | worst | all outward? |
+|---|---|---|---|
+| whole circle | **−0.25** | −1.00 | no |
+| arc 0.55 (198°) | +0.34 | −0.16 | no |
+| **arc 0.45 (162°)** | **+0.53** | **+0.16** | **yes** |
+
+Under 0.5 on purpose: at 0.55 the arc spans 198°, so the outermost pair sits at
+±99° and tips just past the halfway line onto the bond's side. At 0.45 they land
+at **81°, 27°, 27°, 81°** from the away direction — every one of them strictly
+outward.
+
+**A free atom keeps the whole circle**, golden-angle spaced: nothing is pushing
+its electrons anywhere, so they have no reason to bunch. Verified it still
+spans the full range after a bond breaks.
+
+Ring spin and the bond-pull slider are gone — spin is fixed at none and the pull
+at its tuned value. `Lone pairs outward` replaces them, and rebuilds every
+body's electrons when moved.
 
 **Bonding electrons are pulled towards the middle of their bond.** At 0 they sit
 where the figure-8 puts them, which in this view reads as two dots swinging

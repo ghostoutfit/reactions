@@ -1789,8 +1789,6 @@ function buildElectrons(b) {
       awayX += at.lx - b.atoms[other].lx;
       awayY += at.ly - b.atoms[other].ly;
     }
-    // Start angle only — which way the atom faces no longer confines anything,
-    // it just stops every atom's ring starting from the same place.
     const facing = (awayX !== 0 || awayY !== 0) ? Math.atan2(awayY, awayX) : 0;
     // Evenly spaced round the circle — EXCEPT on a free atom, which runs its
     // ring many times faster. An even ring of n repeats every 2pi/n, so once
@@ -1808,13 +1806,24 @@ function buildElectrons(b) {
     // never alias, and the even ring is the cleaner picture.
     const GOLDEN = 0.6180339887498949;
     const free = b.bonds.length === 0;
+    // A BONDED atom's non-bonding electrons sit on the far side from the bond,
+    // spread over `loneArcFrac` of the ring centred on `facing` — the direction
+    // away from whatever it is bonded to. Evenly round the whole circle they
+    // swept straight through the bond region, which is where the bonding pair
+    // already is and the one place a lone pair should not be.
+    //
+    // A free atom keeps the full circle (golden-angle spaced): nothing is
+    // pushing its electrons anywhere, so they have no reason to bunch.
+    const arc = anyBond[i] ? loneArcFrac * Math.PI * 2 : Math.PI * 2;
     for (let q = 0; q < lone; q++) {
       const e = makeElectron('lone', at.el);
       e.i = i;
       // Whether this atom has bonds is fixed for the life of the body, so it is
       // settled here rather than searched for on every electron every frame.
       e.bonded = anyBond[i];
-      e.angle = facing + q * Math.PI * 2 * (free ? GOLDEN : 1 / lone);
+      e.angle = free
+        ? facing + q * Math.PI * 2 * GOLDEN
+        : facing + (lone === 1 ? 0 : (q / (lone - 1) - 0.5) * arc);
       // Where this electron sits on its ring, fixed. The trails view advances
       // `angle`; the shells view wants a seat, not an orbit, so it draws from
       // this instead and the electron stays where it was put.
@@ -1841,6 +1850,12 @@ let loneRadius = 0.9;     // multiple of the atom's valence radius
 // thing you look at. Free atoms are unaffected — nothing is competing for the
 // space out there, so they keep the honest radius.
 let loneRadiusBonded = 0.6;   // x loneRadius, for an atom that has bonds
+// Share of the ring a BONDED atom's non-bonding electrons occupy, centred on
+// the direction away from the bond. 1 is the whole circle.
+// Under 0.5 on purpose. At 0.55 the arc spans 198 degrees, so the outermost
+// pair sits at +-99 and tips just past the halfway line onto the bond's side
+// (cos -0.16). 0.45 spans 162, putting every one of them strictly outward.
+let loneArcFrac = 0.45;
 let loneSpeed  = 0.125;   // radians per frame at 60 fps
 let loneSpeedFree = 6.0;  // x loneSpeed for an atom with no bonds at all
 
@@ -3118,20 +3133,19 @@ const SHELL_DOT_R = 9;    // smaller than the One Bond tab's 17 — a world of
 // ── Shells-view tuning ──────────────────────────────────────────────────────
 // A shell is a place an electron lives, not a racetrack. The trails view wants
 // motion — a stationary electron leaves no trail — but in the shells view that
-// same motion reads as the electrons whizzing round the ring, which says
+// same motion read as the electrons whizzing round the ring, which says
 // something false about what a shell is. So the shells view draws from
-// `angle0`, the seat each electron was given, and turns it only as fast as
-// `shellSpin` says. At 0 they are still, and the only thing that moves them is
-// the molecule itself rotating, which is right.
-let shellSpin = 0.05;     // rad/s round the ring; 0 = completely still
+// `angle0`, the seat each electron was given, and does not turn it at all.
+// The only thing that moves them is the molecule itself rotating, which is
+// right, and falls out of these being body-local coordinates.
+const shellSpin = 0;      // rad/s round the ring — none
 
 // How far the bonding electrons are pulled in towards the middle of the bond.
-// 0 leaves them wherever the figure-8 has them, which in this view reads as
-// two dots swinging around the whole molecule; 1 pins them to the midpoint.
-// In between they stay near the centre and still move a little.
-let shellBondPull = 0.72;
+// 0 leaves them wherever the figure-8 has them, which in this view reads as two
+// dots swinging around the whole molecule; 1 pins them to the midpoint.
+const shellBondPull = 0.72;
 
-let shellPhase = 0;       // accumulates shellSpin
+let shellPhase = 0;       // kept so the draw path needs no special case
 
 function drawAtomShells(c, p) {
   drawShellBands(c, p.x, p.y, p.el, valenceRadius(p.el),
@@ -3529,8 +3543,10 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
     '<div style="font-size:9px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.4;margin-top:8px;">' +
       'Shells view</div>' +
-    row('devShSpin',  'Ring spin',       0,    1,   0.01, shellSpin,      '#7bffd0') +
-    row('devShPull',  'Bond e to centre',0,    1,   0.02, shellBondPull,  '#7bffd0') +
+    row('devLoneArc', 'Lone pairs outward', 0.15, 1, 0.05, loneArcFrac,  '#7bffd0') +
+    '<div style="opacity:0.45;font-size:10px;">share of the ring a bonded ' +
+      'atom\u2019s non-bonding electrons sit on, centred away from the bond; ' +
+      '1 = all the way round</div>' +
     row('devShHold',  'One Bond centre hold', 0.01, 0.4, 0.01, bondCentreHold, '#7bffd0') +
     '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
     '<label style="display:flex;align-items:center;gap:7px;margin:9px 0 2px;cursor:pointer;">' +
@@ -3607,9 +3623,10 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
        false, v => v.toFixed(1));
   bind('devBFloor',   v => BOND_FIELD_FLOOR = v, false, v => v.toFixed(2));
   bind('devBBoost',   v => BOND_FIELD_BOOST = v, false, v => v.toFixed(2));
-  bind('devShSpin',   v => shellSpin = v, false,
-       v => v === 0 ? 'still' : v.toFixed(2) + ' rad/s');
-  bind('devShPull',   v => shellBondPull = v, false, v => Math.round(v * 100) + '%');
+  bind('devLoneArc',  v => { loneArcFrac = v;
+         for (const b of world.bodies) buildElectrons(b);
+         if (bondTab.on) initBondElectrons(); },
+       false, v => Math.round(v * 360) + '\u00b0');
   bind('devShHold',   v => bondCentreHold = v, false, v => v.toFixed(2));
 
   // Equipartition on/off, so both can be compared side by side
@@ -4315,10 +4332,21 @@ function initBondElectrons() {
     shells.forEach((count, sh) => {
       const spare = (sh === outer) ? Math.max(0, count - toBond) : count;
       const bonding = (sh === outer) ? count - spare : 0;
-      // Evenly spaced round the shell, the bonding ones taken from the side
-      // that faces the other atom so they do not have to cross the nucleus.
+      // The non-bonding ones sit on the far side from the bond, over
+      // `loneArcFrac` of the ring centred on `away` — left for the left atom,
+      // right for the right one. The bonding ones start on the inward side,
+      // facing their partner, so they do not have to cross their own nucleus
+      // to get to the gap.
+      const away = side ? 0 : Math.PI;
+      const arc  = loneArcFrac * Math.PI * 2;
       for (let i = 0; i < count; i++) {
-        const ang = (i / count) * Math.PI * 2 + (side ? Math.PI / count : 0);
+        let ang;
+        if (i < bonding) {
+          ang = away + Math.PI + (bonding === 1 ? 0 : (i / (bonding - 1) - 0.5) * 1.2);
+        } else {
+          const j = i - bonding, n = count - bonding;
+          ang = away + (n === 1 ? 0 : (j / (n - 1) - 0.5) * arc);
+        }
         const e = { side, shell: sh, outer: sh === outer, ang,
                     inner: sh !== outer };
         if (i < bonding) bondTab.dots.push({ ...e, x: 0, y: 0, vx: 0, vy: 0,
