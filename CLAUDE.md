@@ -689,10 +689,22 @@ bespoke `drawOutlineIcon` that used to sit on the third button is gone.
   `shellRadius` with the One Bond tab.
 - **Space** — space-filling, unchanged but for the name.
 
-**Colour is by element here, not by atom.** The One Bond tab colours its two
-atoms apart because the whole question there is whose electrons are whose; with
-a dozen molecules on screen that would be noise, and the element colours are
-what the rest of the sim already speaks.
+**Both views share one geometry.** `shellRadius` places the band *and* the
+electrons on it, in both tabs, so a shell is in the same place relative to its
+atom wherever you look. Reactions used to place its shells-view electrons at
+`loneRadius x loneRadiusBonded` instead — **0.54 of its own band, 17.5 px adrift
+on an oxygen**, the electron floating inside the ring it was drawn with. Those
+two constants are *trails-view* tuning: 0.6 exists so a lone-pair ring does not
+collide with the bonding lobes in that picture. There are no lobes in the shells
+view, so applying it there only broke the agreement. Now both read 1.00.
+
+**Colour is by element in both tabs**, from `ELEMENTS` — H the pale grey, O the
+red. The One Bond tab briefly coloured its two atoms apart, blue left and amber
+right, so you could tell whose electrons were whose as they separated. That
+reads well on an O-O and is a lie everywhere else: the same oxygen was a
+different colour depending on which side it sat, and nothing else in the sim
+speaks that language. On an O-O you now tell them apart by watching which way
+they go.
 
 **`shellRadius` takes the nucleus radius.** The One Bond tab draws nuclei about
 9x life and needs its inner shells shoved clear of them; the main tab's nucleus
@@ -1030,10 +1042,22 @@ bespoke `drawOutlineIcon` that used to sit on the third button is gone.
   `shellRadius` with the One Bond tab.
 - **Space** — space-filling, unchanged but for the name.
 
-**Colour is by element here, not by atom.** The One Bond tab colours its two
-atoms apart because the whole question there is whose electrons are whose; with
-a dozen molecules on screen that would be noise, and the element colours are
-what the rest of the sim already speaks.
+**Both views share one geometry.** `shellRadius` places the band *and* the
+electrons on it, in both tabs, so a shell is in the same place relative to its
+atom wherever you look. Reactions used to place its shells-view electrons at
+`loneRadius x loneRadiusBonded` instead — **0.54 of its own band, 17.5 px adrift
+on an oxygen**, the electron floating inside the ring it was drawn with. Those
+two constants are *trails-view* tuning: 0.6 exists so a lone-pair ring does not
+collide with the bonding lobes in that picture. There are no lobes in the shells
+view, so applying it there only broke the agreement. Now both read 1.00.
+
+**Colour is by element in both tabs**, from `ELEMENTS` — H the pale grey, O the
+red. The One Bond tab briefly coloured its two atoms apart, blue left and amber
+right, so you could tell whose electrons were whose as they separated. That
+reads well on an O-O and is a lie everywhere else: the same oxygen was a
+different colour depending on which side it sat, and nothing else in the sim
+speaks that language. On an O-O you now tell them apart by watching which way
+they go.
 
 **`shellRadius` takes the nucleus radius.** The One Bond tab draws nuclei about
 9x life and needs its inner shells shoved clear of them; the main tab's nucleus

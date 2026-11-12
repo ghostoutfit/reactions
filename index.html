@@ -3140,9 +3140,18 @@ function drawElectronsAsDots(b, dc = ctx) {
       lx = e.x + (mx - e.x) * shellBondPull;
       ly = e.y + (my - e.y) * shellBondPull;
     } else {
-      // Sitting in its seat on the ring, not running round it.
+      // Sitting in its seat ON the shell, not running round it and not floating
+      // inside it. The radius comes from `shellRadius`, the same function that
+      // draws the band and the same one the One Bond tab places its electrons
+      // with, so the two views agree about where a shell is.
+      //
+      // NOT `loneRadius * loneRadiusBonded`: those are trails-view tuning —
+      // 0.6 exists so a lone-pair ring does not collide with the bonding lobes
+      // in that picture. There are no lobes here, and applying it anyway put
+      // the electron at 0.54 of its own band, 17.5 px adrift on an oxygen.
       const at = b.atoms[e.i];
-      const r = valenceRadius(at.el) * loneRadius * (e.bonded ? loneRadiusBonded : 1);
+      const outer = (ATOM_SHELLS[at.el] || [1]).length - 1;
+      const r = shellRadius(at.el, outer, 1, nucleusDiameter / 2);
       const ang = e.angle0 + shellPhase * (b.bonds.length === 0 ? loneSpeedFree : 1);
       lx = at.lx + r * Math.cos(ang);
       ly = at.ly + r * Math.sin(ang);
@@ -4172,9 +4181,13 @@ function _rgbOf(col) {
     : col;
 }
 
-// Colour-coded per ATOM, not per element — an O-O has two oxygens and you still
-// have to be able to tell whose electrons are whose when they separate.
-const ATOM_E_COLOUR = ['#4ea8ff', '#ff9a3c'];   // left atom, right atom
+// Colour by ELEMENT, the same as everywhere else in the sim: H is the pale grey
+// of ELEMENTS.H, O is its red. An earlier version coloured the two atoms apart
+// — blue left, amber right — so you could tell whose electrons were whose as
+// they separated. That reads well on an O-O and is a lie everywhere else: the
+// same oxygen was a different colour depending on which side it sat, and
+// nothing else in the sim speaks that language. Consistency wins; on an O-O you
+// now tell them apart by watching which way they go, not by hue.
 const INNER_E_COLOUR = '#6e6e7d';               // inner shells, like bonds' grey
 
 // bonds' own wander constants for a shared pair, unchanged.
@@ -4450,8 +4463,8 @@ function drawBondTab() {
     { width: BOND_FIELD_WIDTH, gain: BOND_FIELD_GAIN, colormap: BOND_COLORMAP });
 
   // Shell bands under everything, so the electrons sit on top of their shells.
-  drawShellBands(ctx, A.x, A.y, A.el, valenceRadius(A.el) * z, ATOM_E_COLOUR[0]);
-  drawShellBands(ctx, B.x, B.y, B.el, valenceRadius(B.el) * z, ATOM_E_COLOUR[1]);
+  drawShellBands(ctx, A.x, A.y, A.el, valenceRadius(A.el) * z, ELEMENTS[A.el].rgb);
+  drawShellBands(ctx, B.x, B.y, B.el, valenceRadius(B.el) * z, ELEMENTS[B.el].rgb);
 
   // The two nuclei. No halo around them: the only glow on this screen should
   // be the bond's. An atom-coloured cloud at the valence radius read as a
@@ -4472,14 +4485,14 @@ function drawBondTab() {
     const r  = shellRadius(at.el, e.shell, z);
     const ang = e.ang + bondTab.spin;
     drawElectronDot(ctx, at.x + Math.cos(ang) * r, at.y + Math.sin(ang) * r,
-                    e.inner ? INNER_E_COLOUR : ATOM_E_COLOUR[e.side], e.inner);
+                    e.inner ? INNER_E_COLOUR : ELEMENTS[at.el].rgb, e.inner);
   }
 
   // The bonding electrons last, over everything. Each keeps the colour of the
   // atom it came from, wherever on the bond it currently is — which is what
   // makes pulling them apart legible: you watch each one go home.
   for (const dot of bondTab.dots) {
-    drawElectronDot(ctx, dot.x, dot.y, ATOM_E_COLOUR[dot.side], false);
+    drawElectronDot(ctx, dot.x, dot.y, ELEMENTS[[A, B][dot.side].el].rgb, false);
   }
 
   // A ring on each nucleus says "this is the handle".
