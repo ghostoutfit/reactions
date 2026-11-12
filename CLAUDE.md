@@ -764,13 +764,24 @@ Ring spin and the bond-pull slider are gone — spin is fixed at none and the pu
 at its tuned value. `Lone pairs outward` replaces them, and rebuilds every
 body's electrons when moved.
 
-**Bonding electrons are pulled towards the middle of their bond.** At 0 they sit
-where the figure-8 puts them, which in this view reads as two dots swinging
-around the whole molecule. Measured mean distance from the bond's midpoint, on
-an O=O whose half-bond is 27.4 px: **25.3 px at pull 0, 7.1 px at 0.72, 0 at 1**.
+**Bonding electrons are SEATED beside the bond's midpoint**, perpendicular to
+the axis, alternating sides and tiered outwards so a double bond's four do not
+stack. Not the figure-8 position: that is the trails view's business, and drawn
+as a dot it made the bonding electrons look like they were perpetually swinging
+round the molecule. A shared pair sits in the gap.
 
-All three — ring spin, bond pull, and the One Bond tab's `bondCentreHold` — are
-dev sliders under **Shells view**.
+Pulling them towards the midpoint from the figure-8 was tried first and is not
+enough — at anything short of a full pull they still swing, because the thing
+being pulled is itself orbiting. Measured after seating: an O=O's four sit at
+**11.4 and 18.3 px** from the midpoint on a 27.4 px half-bond, and move **0 px
+over 5 s** relative to the molecule.
+
+The seats use the same geometry the One Bond tab settles into, so the two views
+agree about where a shared pair lives.
+
+`Lone pairs outward` and `One Bond centre hold` are dev sliders under **Shells
+view**. The latter is One Bond only now — the shells view seats its bonding
+electrons outright rather than pulling them anywhere.
 
 Shells is the **cheapest** of the three: 0.14 ms/frame against trails' 0.20 and
 outline's 0.16, since a dot is one gradient where a trail is a stack of stroked
@@ -1146,13 +1157,24 @@ Ring spin and the bond-pull slider are gone — spin is fixed at none and the pu
 at its tuned value. `Lone pairs outward` replaces them, and rebuilds every
 body's electrons when moved.
 
-**Bonding electrons are pulled towards the middle of their bond.** At 0 they sit
-where the figure-8 puts them, which in this view reads as two dots swinging
-around the whole molecule. Measured mean distance from the bond's midpoint, on
-an O=O whose half-bond is 27.4 px: **25.3 px at pull 0, 7.1 px at 0.72, 0 at 1**.
+**Bonding electrons are SEATED beside the bond's midpoint**, perpendicular to
+the axis, alternating sides and tiered outwards so a double bond's four do not
+stack. Not the figure-8 position: that is the trails view's business, and drawn
+as a dot it made the bonding electrons look like they were perpetually swinging
+round the molecule. A shared pair sits in the gap.
 
-All three — ring spin, bond pull, and the One Bond tab's `bondCentreHold` — are
-dev sliders under **Shells view**.
+Pulling them towards the midpoint from the figure-8 was tried first and is not
+enough — at anything short of a full pull they still swing, because the thing
+being pulled is itself orbiting. Measured after seating: an O=O's four sit at
+**11.4 and 18.3 px** from the midpoint on a 27.4 px half-bond, and move **0 px
+over 5 s** relative to the molecule.
+
+The seats use the same geometry the One Bond tab settles into, so the two views
+agree about where a shared pair lives.
+
+`Lone pairs outward` and `One Bond centre hold` are dev sliders under **Shells
+view**. The latter is One Bond only now — the shells view seats its bonding
+electrons outright rather than pulling them anywhere.
 
 Shells is the **cheapest** of the three: 0.14 ms/frame against trails' 0.20 and
 outline's 0.16, since a dot is one gradient where a trail is a stack of stroked
@@ -1324,6 +1346,24 @@ it. Measured at the natural length: **(29,84,204)**, clearly blue, against
 and it had to go: it read as a second field, and the eye could not tell which of
 the two it was meant to be watching. Verified — a pixel beside a nucleus is
 (5,4,15), the background exactly.
+
+### It opens settled
+
+```javascript
+const BOND_SETTLE_FRAMES = 300;
+```
+
+The dots used to be placed on their own atoms and hauled into the gap by the
+anchor, so the tab opened with a visible scramble — the first second of every
+load was electrons flying across the bond, which is not a thing bonds do.
+
+`placeBondDots` now runs the step they would have run anyway for a few hundred
+silent frames, so the opening frame shows the arrangement you would have seen
+after a few seconds of watching. Cheap: four dots, no drawing.
+
+Measured movement over the first second after load: **4.8 px mean, 8.1 px
+worst**, against **66.5 px mean and 120.7 worst** without the settle — a
+fourteenfold difference, which is the scramble.
 
 ### The range, and the zoom
 

@@ -1160,13 +1160,13 @@ const BOND_MIN_MULT = 0.6;
 // the view would give.
 const BOND_ZOOM = 1.2;
 
-// How hard a bonding electron is held to the middle of the bond. One value for
-// both tabs, though they spend it differently: One Bond uses it as a per-frame
-// velocity anchor on its wandering dots, while the Reactions shells view uses
-// it as a straight positional lerp from where the figure-8 has the electron
-// towards the bond's midpoint. Same knob, same direction of effect — higher is
-// more centred in both — but not the same units, so the two will not land at
-// identical distances from the middle.
+// How hard a bonding electron is held to the middle of the bond, as a per-frame
+// velocity anchor on the One Bond tab's wandering dots.
+//
+// The Reactions shells view does not use it: it seats its bonding electrons
+// beside the midpoint outright rather than pulling them there from wherever the
+// figure-8 has them. A positional pull left them swinging round the molecule at
+// anything short of 1, which is the thing that needed fixing.
 let bondCentreHold = 0.4;
 
 // The lobe is drawn bigger and brighter than a faithful reading would make it
@@ -1756,6 +1756,12 @@ function buildElectrons(b) {
       // it rings in circle mode. Alternating q gives a single bond one electron
       // per atom, and a double bond two.
       e.home = q % 2 ? k : i;
+      // The shells view seats bond electrons beside the bond's midpoint rather
+      // than running them round the figure-8: alternating sides of the axis,
+      // tiered outwards so a double bond's four do not stack. Same arrangement
+      // the One Bond tab settles into, so the two views agree.
+      e.seatDir = q % 2 ? 1 : -1;
+      e.seatTier = Math.floor(q / 2);
       // Spread the pair (or the four of a double bond) around the figure-8 so
       // they are not stacked on top of one another.
       const t = q / count;
@@ -3165,11 +3171,20 @@ function drawElectronsAsDots(b, dc = ctx) {
     if (e.kind === 'lone' && !showLonePairs) continue;
     let lx, ly;
     if (e.kind === 'bond') {
-      // Toward the middle of its own bond, by bondCentreHold.
+      // Seated beside the midpoint of its own bond, perpendicular to the axis.
+      // NOT the figure-8 position: that is the trails view's business, and
+      // drawing it as a dot made the bonding electrons look like they were
+      // perpetually swinging round the molecule — the "dance". A shared pair
+      // sits in the gap.
       const ai = b.atoms[e.i], ak = b.atoms[e.k];
       const mx = (ai.lx + ak.lx) / 2, my = (ai.ly + ak.ly) / 2;
-      lx = e.x + (mx - e.x) * bondCentreHold;
-      ly = e.y + (my - e.y) * bondCentreHold;
+      const dx = ak.lx - ai.lx, dy = ak.ly - ai.ly;
+      const L = Math.hypot(dx, dy) || 1;
+      const px = -dy / L, py = dx / L;                 // across the bond
+      const spread = (valenceRadius(ai.el) + valenceRadius(ak.el)) / 2 * 0.3;
+      const off = spread * e.seatDir * (1 + e.seatTier * 0.6);
+      lx = mx + px * off;
+      ly = my + py * off;
     } else {
       // Sitting in its seat ON the shell, not running round it and not floating
       // inside it. The radius comes from `shellRadius`, the same function that
@@ -3553,9 +3568,9 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     '<div style="opacity:0.45;font-size:10px;">share of the ring a bonded ' +
       'atom\u2019s non-bonding electrons sit on, centred away from the bond; ' +
       '1 = all the way round</div>' +
-    row('devShHold',  'Bond e centre hold', 0.01, 1, 0.01, bondCentreHold, '#7bffd0') +
-    '<div style="opacity:0.45;font-size:10px;">both tabs; One Bond spends it as ' +
-      'a velocity anchor, Reactions as a positional pull</div>' +
+    row('devShHold',  'One Bond centre hold', 0.01, 1, 0.01, bondCentreHold, '#7bffd0') +
+    '<div style="opacity:0.45;font-size:10px;">One Bond only \u2014 the shells ' +
+      'view seats its bonding electrons outright</div>' +
     '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
     '<label style="display:flex;align-items:center;gap:7px;margin:9px 0 2px;cursor:pointer;">' +
       '<input type="checkbox" id="devEqui" checked style="margin:0">' +
@@ -4394,12 +4409,23 @@ function bondDotHome(d, atoms, z) {
   return { x: at.x + Math.cos(ang) * R, y: at.y + Math.sin(ang) * R };
 }
 
+// Start the dots where they will END UP, not on their own atoms. Placing them
+// home and letting the anchor haul them into the gap meant the tab opened with
+// a visible scramble — the first second of every load was electrons flying
+// across the bond, which is not a thing bonds do and not what the tab is about.
+//
+// They are settled by running the step they would have run anyway: a few
+// hundred silent frames, so the opening frame shows the arrangement you would
+// have seen after a few seconds of watching. Cheap — four dots, no drawing.
+const BOND_SETTLE_FRAMES = 300;
+
 function placeBondDots() {
   const atoms = bondTabAtoms(), z = bondTabZoom();
   for (const d of bondTab.dots) {
     const h = bondDotHome(d, atoms, z);
-    d.x = h.x; d.y = h.y;
+    d.x = h.x; d.y = h.y; d.vx = 0; d.vy = 0;
   }
+  for (let i = 0; i < BOND_SETTLE_FRAMES; i++) stepBondDots();
 }
 
 function stepBondDots() {
