@@ -1087,11 +1087,13 @@ let fieldRamp = 'energy';
 const COLORMAP = new Uint8Array(LOAD_BINS * 256 * 4);
 const _rampA = new Uint8Array(256 * 4), _rampB = new Uint8Array(256 * 4);
 
-function setFieldRamp(name) {
-  fieldRamp = FIELD_STAGES[name] ? name : 'energy';
-  const stages = FIELD_STAGES[fieldRamp];
+// Build a LOAD_BINS-deep stack of 256-entry ramps from a stage list.
+// `alphaFn(t)` overrides the stages' own alpha column when given — which is the
+// whole reason this is a function: the ramp's hues and its opacity taper are
+// independent choices, and two views of the same field can want different ones.
+function buildRampStack(stages, gamma, out, alphaFn) {
   for (let bin = 0; bin < LOAD_BINS; bin++) {
-    const load = Math.pow(bin / (LOAD_BINS - 1), FIELD_STAGE_GAMMA);
+    const load = Math.pow(bin / (LOAD_BINS - 1), gamma);
     const f  = load * (stages.length - 1);
     const i0 = Math.min(stages.length - 1, Math.floor(f));
     const i1 = Math.min(stages.length - 1, i0 + 1);
@@ -1100,10 +1102,77 @@ function setFieldRamp(name) {
     buildColorstops(stages[i1], _rampB);
     const base = bin * 1024;
     for (let j = 0; j < 1024; j++) {
-      COLORMAP[base + j] = _rampA[j] + (_rampB[j] - _rampA[j]) * k;
+      out[base + j] = _rampA[j] + (_rampB[j] - _rampA[j]) * k;
+    }
+    if (alphaFn) {
+      for (let i = 0; i < 256; i++) {
+        out[base + i * 4 + 3] = Math.max(0, Math.min(255, alphaFn(i / 255) * 255));
+      }
     }
   }
 }
+
+function setFieldRamp(name) {
+  fieldRamp = FIELD_STAGES[name] ? name : 'energy';
+  const stages = FIELD_STAGES[fieldRamp];
+  buildRampStack(stages, FIELD_STAGE_GAMMA, COLORMAP);
+  buildBondColormap();
+}
+
+// ── The One Bond tab's own field tuning ─────────────────────────────────────
+// The main tab's numbers are set for a dozen small lobes glimpsed at once while
+// molecules fly past. This tab has one lobe filling the screen, held still and
+// read. Those are different jobs and they want different numbers, so none of
+// these are shared.
+let BOND_FIELD_WIDTH = 0.30;   // own copy of FIELD_WIDTH
+let BOND_FIELD_GAIN  = 0.90;   // own copy of FIELD_GAIN
+const BOND_COLORMAP  = new Uint8Array(LOAD_BINS * 256 * 4);
+
+// A different taper of opacity, and the reason this is separate at all.
+//
+// The shared ramp climbs to alpha 140 within the first 12% of its range,
+// because on the main tab a lobe has to register in a glance. Here that fast
+// rise is what made the lobe read as a slab: it is culled flat at each nucleus
+// (`along < 0 || along > L`), and with alpha already past half by the time the
+// value is low, the cut has nothing to hide behind and shows as a straight
+// vertical edge.
+//
+// A power curve fixes it. alpha = t^BOND_ALPHA_POW keeps the outer reaches of
+// the lobe genuinely faint, so the value falls to nothing before the opacity
+// does and the edge dissolves. Higher = softer and more concentrated.
+let BOND_ALPHA_POW = 1.8;
+
+// Where the tab opens, as a multiple of the natural bond length. Not 1.0: at
+// the natural length the two nuclei and their shells nearly touch, there is no
+// visible gap for the shared pair to live in, and the first thing the tab says
+// should be "two atoms with something between them".
+const BOND_START_MULT = 1.34;
+
+// The lobe is drawn bigger and brighter than a faithful reading would make it
+// at that opening separation. `BOND_FIELD_BOOST` multiplies its magnitude and
+// `BOND_FIELD_SQUEEZE` its width.
+//
+// The cost is real and worth stating: brightness IS the energy reading here, so
+// boosting it means the top of the colour ramp is reached before the atoms are
+// fully apart. The kJ/mol readout still separates those cases exactly; it is
+// only the colour that runs out.
+let BOND_FIELD_BOOST   = 1.30;
+const BOND_FIELD_SQUEEZE = 0.85;
+
+// The lobe never starts from nothing. At the natural separation the stored
+// energy is zero, and drawing that literally left a blank gap between the two
+// atoms — which says "there is no bond here", the opposite of what a bond at
+// rest is. The floor is the bond simply EXISTING; `work` is then what gets
+// added on top of it by stretching or squeezing. It sits at the bottom of the
+// colour ramp, so a bond at rest is the plain blue glow.
+let BOND_FIELD_FLOOR = 0.35;
+
+function buildBondColormap() {
+  buildRampStack(FIELD_STAGES[fieldRamp] || FIELD_STAGES.energy,
+                 FIELD_STAGE_GAMMA, BOND_COLORMAP,
+                 t => Math.pow(t, BOND_ALPHA_POW));
+}
+
 setFieldRamp(fieldRamp);
 
 // ─── Energy in fields — the lobe between two bonded atoms ───────────────────
@@ -1189,9 +1258,16 @@ function bondSegments() {
   return segs;
 }
 
-function drawFieldHeatmap(destCtx, segsIn, boxW, boxH) {
+// `opts` lets a caller bring its own tuning — width, gain and colour ramp. The
+// One Bond tab does, because the main tab's numbers are set for a dozen small
+// lobes glimpsed at once and that is a different job from one lobe filling the
+// screen and being read.
+function drawFieldHeatmap(destCtx, segsIn, boxW, boxH, opts) {
   const segs = segsIn || bondSegments();
   if (!segs.length) return;
+  const widthK = (opts && opts.width) || FIELD_WIDTH;
+  const gain   = (opts && opts.gain)  || FIELD_GAIN;
+  const cmap   = (opts && opts.colormap) || COLORMAP;
 
   const scale = FIELD_SCALE[_quality] || 0.2;
   const w = Math.max(1, Math.ceil((boxW || world.w) * scale));
@@ -1206,7 +1282,7 @@ function drawFieldHeatmap(destCtx, segsIn, boxW, boxH) {
     const L = Math.hypot(sdx, sdy);
     if (L < 1e-6) continue;
     const ux = sdx / L, uy = sdy / L;
-    const sigma  = L * FIELD_WIDTH * s.squeeze;
+    const sigma  = L * widthK * s.squeeze;
     const twoSig = 2 * sigma * sigma;
     const cullSq = twoSig * 3;                 // past here the gaussian is < 5%
     const reach  = sigma * 2.5;
@@ -1240,12 +1316,12 @@ function drawFieldHeatmap(destCtx, segsIn, boxW, boxH) {
     // Where this pixel sits on the lobe, and how loaded the bonds that built it
     // are — the load is contribution-weighted, so where two bonds overlap the
     // colour follows whichever is putting more field there.
-    const c  = Math.min(255, (v / FIELD_GAIN * 255) | 0) * 4;
+    const c  = Math.min(255, (v / gain * 255) | 0) * 4;
     const ld = Math.min(LOAD_BINS - 1, (fieldLoad[i] / v * (LOAD_BINS - 1) + 0.5) | 0);
     const m  = ld * 1024 + c;
     const d  = i * 4;
-    fieldPix[d] = COLORMAP[m]; fieldPix[d + 1] = COLORMAP[m + 1];
-    fieldPix[d + 2] = COLORMAP[m + 2]; fieldPix[d + 3] = COLORMAP[m + 3];
+    fieldPix[d] = cmap[m]; fieldPix[d + 1] = cmap[m + 1];
+    fieldPix[d + 2] = cmap[m + 2]; fieldPix[d + 3] = cmap[m + 3];
   }
 
   fieldCtx.putImageData(fieldImg, 0, 0);
@@ -3351,6 +3427,16 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     row('devLobeGain','Lobe brightness', 0.5,  4,   0.1,  FIELD_GAIN,  '#46a5ff') +
     row('devFlare',   'Flare on impact', 0,    5,   0.1,  FLARE_GAIN,  '#46a5ff') +
     '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
+    '<div style="font-size:9px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.4;margin-top:8px;">' +
+      'One Bond tab</div>' +
+    row('devBLobeW',  'Lobe width',      0.1,  0.8, 0.02, BOND_FIELD_WIDTH, '#7b6fff') +
+    row('devBLobeG',  'Lobe brightness', 0.3,  3,   0.05, BOND_FIELD_GAIN,  '#7b6fff') +
+    row('devBAlpha',  'Opacity taper',   0.6,  4,   0.1,  BOND_ALPHA_POW,   '#7b6fff') +
+    '<div style="opacity:0.45;font-size:10px;">higher = fainter edges, so the ' +
+      'lobe\u2019s flat cut at each nucleus stops showing</div>' +
+    row('devBFloor',  'Lobe at rest',    0,    1,   0.05, BOND_FIELD_FLOOR, '#7b6fff') +
+    row('devBBoost',  'Stretch boost',   0.5,  3,   0.05, BOND_FIELD_BOOST, '#7b6fff') +
+    '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
     '<label style="display:flex;align-items:center;gap:7px;margin:9px 0 2px;cursor:pointer;">' +
       '<input type="checkbox" id="devEqui" checked style="margin:0">' +
       '<span>Heavy molecules start slower</span>' +
@@ -3419,6 +3505,12 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   bind('devLobeW',    v => FIELD_WIDTH = v, false, v => v.toFixed(2));
   bind('devLobeGain', v => FIELD_GAIN  = v, false, v => v.toFixed(1));
   bind('devFlare',    v => FLARE_GAIN  = v, false, v => v.toFixed(1));
+  bind('devBLobeW',   v => BOND_FIELD_WIDTH = v, false, v => v.toFixed(2));
+  bind('devBLobeG',   v => BOND_FIELD_GAIN  = v, false, v => v.toFixed(2));
+  bind('devBAlpha',   v => { BOND_ALPHA_POW = v; buildBondColormap(); },
+       false, v => v.toFixed(1));
+  bind('devBFloor',   v => BOND_FIELD_FLOOR = v, false, v => v.toFixed(2));
+  bind('devBBoost',   v => BOND_FIELD_BOOST = v, false, v => v.toFixed(2));
 
   // Equipartition on/off, so both can be compared side by side
   const equi = panel.querySelector('#devEqui');
@@ -3967,31 +4059,6 @@ function drawNucleons(c, cx, cy, el, wobble) {
   c.textAlign = 'left'; c.textBaseline = 'alphabetic';
 }
 
-// Where the tab opens, as a multiple of the natural bond length. Not 1.0: at
-// the natural length the two nuclei and their shells nearly touch, there is no
-// visible gap for the shared pair to live in, and the first thing the tab says
-// should be "two atoms with something between them".
-const BOND_START_MULT = 1.55;
-
-// The lobe is drawn bigger and brighter than a faithful reading would make it
-// at that opening separation. `BOND_FIELD_BOOST` multiplies its magnitude and
-// `BOND_FIELD_SQUEEZE` its width.
-//
-// The cost is real and worth stating: brightness IS the energy reading here, so
-// boosting it means the top of the colour ramp is reached before the atoms are
-// fully apart. The kJ/mol readout still separates those cases exactly; it is
-// only the colour that runs out.
-const BOND_FIELD_BOOST   = 1.30;
-const BOND_FIELD_SQUEEZE = 0.85;
-
-// The lobe never starts from nothing. At the natural separation the stored
-// energy is zero, and drawing that literally left a blank gap between the two
-// atoms — which says "there is no bond here", the opposite of what a bond at
-// rest is. The floor is the bond simply EXISTING; `work` is then what gets
-// added on top of it by stretching or squeezing. It sits at the bottom of the
-// colour ramp, so a bond at rest is the plain blue glow.
-const BOND_FIELD_FLOOR = 0.35;
-
 // ── The shells view, ported from the bonds repo ─────────────────────────────
 // Every electron each atom has, on its shell, not just the bonding pair: a
 // gradient band at each occupied shell radius and a glowing dot per electron.
@@ -4273,7 +4340,7 @@ function drawBondTab() {
     // throws away the top of the range just where the bond is most interesting.
     mag: bondEnergy(A.el, B.el) / BOND_ENERGY_MAX
          * (BOND_FIELD_FLOOR + (1 - BOND_FIELD_FLOOR) * work)
-         * contact * FIELD_GAIN * BOND_FIELD_BOOST,
+         * contact * BOND_FIELD_GAIN * BOND_FIELD_BOOST,
     // Narrower than the main tab's lobe. FIELD_WIDTH is a fraction of the bond
     // LENGTH and the gaussian reaches 2.5 sigma, so a squeeze of 1 gave a lobe
     // reaching ~193 px either side of a 257 px bond — taller than the bond is
@@ -4285,7 +4352,8 @@ function drawBondTab() {
     // through purple to white on its way out.
     load: work,
   }];
-  drawFieldHeatmap(ctx, seg, W, H);
+  drawFieldHeatmap(ctx, seg, W, H,
+    { width: BOND_FIELD_WIDTH, gain: BOND_FIELD_GAIN, colormap: BOND_COLORMAP });
 
   // Shell bands under everything, so the electrons sit on top of their shells.
   drawShellBands(ctx, A, 0, z);

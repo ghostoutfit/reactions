@@ -1231,15 +1231,15 @@ shadow-blurred core): **0.19 ms/frame** against a 16.7 ms budget.
 ### It opens stretched, and the lobe is boosted to suit
 
 ```javascript
-const BOND_START_MULT    = 1.55;   // opening separation, x natural
+const BOND_START_MULT    = 1.34;   // opening separation, x natural
 const BOND_FIELD_BOOST   = 1.30;   // lobe magnitude
 const BOND_FIELD_SQUEEZE = 0.85;   // lobe width
 ```
 
-**Not 1.0.** At the natural length the two nuclei and their halos nearly touch,
+**Not 1.0.** At the natural length the two nuclei and their shells nearly touch,
 there is no visible gap for the shared pair to live in, and the first thing the
-tab says should be "two atoms with something between them". At 1.55 every pair
-opens with a clear **100–124 px** gap between the nucleus balls.
+tab says should be "two atoms with something between them". At **1.34** every
+pair opens with a clear gap and 70–79 kJ/mol already stored.
 
 The lobe is then drawn bigger and brighter than a faithful reading would make it
 there — which has a real cost, since **brightness is the energy reading**.
@@ -1253,19 +1253,61 @@ So across that band the colour says "as whole as it gets" rather than resolving
 83% from 100%. The kJ/mol readout and the Morse curve still separate them
 exactly; it is only the colour that runs out, and only where the answer is
 "this bond is fine".
+
+### The One Bond tab tunes the field separately
+
+```javascript
+let BOND_FIELD_WIDTH = 0.30;   // own copy of FIELD_WIDTH
+let BOND_FIELD_GAIN  = 0.90;   // own copy of FIELD_GAIN
+let BOND_ALPHA_POW   = 1.8;    // opacity taper — the reason for the split
+const BOND_COLORMAP  = new Uint8Array(LOAD_BINS * 256 * 4);
+```
+
+The main tab's numbers are set for a dozen small lobes glimpsed at once while
+molecules fly past. This tab has one lobe filling the screen, held still and
+read. Different jobs, different numbers, so **nothing is shared** —
+`drawFieldHeatmap` takes an optional `{ width, gain, colormap }` and behaves
+exactly as before when given none.
+
+**The opacity taper is what forced the split.** The shared ramp climbs to alpha
+140 inside the first 12% of its range, because on the main tab a lobe has to
+register in a glance. `BOND_COLORMAP` replaces that column with
+`alpha = t^BOND_ALPHA_POW`, which keeps the outer reaches genuinely faint.
+Verified the two stacks differ in **alpha only** — 4318 entries differ in alpha,
+**0** in RGB, so the hues stay identical and only the fade changes.
+
+Measured along and across the lobe at the opening separation, the distance over
+which alpha falls from 90% to 10% of its peak:
+
+| `BOND_ALPHA_POW` | peak alpha | fade along the bond | fade across it |
+|---|---|---|---|
+| 1.0 | 183 | 64 px | 84 px |
+| **1.8** | **140** | **60 px** | **63 px** |
+| 2.6 | 107 | 54 px | 52 px |
+
+1.8 is where the two roughly match, so the lobe fades at the same rate in both
+directions instead of reading as a slab that is soft on top and cut off at the
+ends.
+
+`buildRampStack(stages, gamma, out, alphaFn)` builds either stack; `setFieldRamp`
+rebuilds both, so changing the hues on the dev panel keeps them in step.
+
+All five — width, brightness, taper, rest floor and stretch boost — are dev
+sliders under **One Bond tab**, in the tab bar's purple rather than the main
+field controls' blue.
 
 ### Two things the main tab's lobe does that this tab must not### It opens stretched, and the lobe is boosted to suit
 
 ```javascript
-const BOND_START_MULT    = 1.55;   // opening separation, x natural
+const BOND_START_MULT    = 1.34;   // opening separation, x natural
 const BOND_FIELD_BOOST   = 1.30;   // lobe magnitude
 const BOND_FIELD_SQUEEZE = 0.85;   // lobe width
 ```
 
-**Not 1.0.** At the natural length the two nuclei and their halos nearly touch,
+**Not 1.0.** At the natural length the two nuclei and their shells nearly touch,
 there is no visible gap for the shared pair to live in, and the first thing the
-tab says should be "two atoms with something between them". At 1.55 every pair
-opens with a clear **100–124 px** gap between the nucleus balls.
+tab says should be "two atoms with something between them". At **1.34** every
+pair opens with a clear gap and 70–79 kJ/mol already stored.
 
 The lobe is then drawn bigger and brighter than a faithful reading would make it
 there — which has a real cost, since **brightness is the energy reading**.
@@ -1279,6 +1321,48 @@ So across that band the colour says "as whole as it gets" rather than resolving
 83% from 100%. The kJ/mol readout and the Morse curve still separate them
 exactly; it is only the colour that runs out, and only where the answer is
 "this bond is fine".
+
+### The One Bond tab tunes the field separately
+
+```javascript
+let BOND_FIELD_WIDTH = 0.30;   // own copy of FIELD_WIDTH
+let BOND_FIELD_GAIN  = 0.90;   // own copy of FIELD_GAIN
+let BOND_ALPHA_POW   = 1.8;    // opacity taper — the reason for the split
+const BOND_COLORMAP  = new Uint8Array(LOAD_BINS * 256 * 4);
+```
+
+The main tab's numbers are set for a dozen small lobes glimpsed at once while
+molecules fly past. This tab has one lobe filling the screen, held still and
+read. Different jobs, different numbers, so **nothing is shared** —
+`drawFieldHeatmap` takes an optional `{ width, gain, colormap }` and behaves
+exactly as before when given none.
+
+**The opacity taper is what forced the split.** The shared ramp climbs to alpha
+140 inside the first 12% of its range, because on the main tab a lobe has to
+register in a glance. `BOND_COLORMAP` replaces that column with
+`alpha = t^BOND_ALPHA_POW`, which keeps the outer reaches genuinely faint.
+Verified the two stacks differ in **alpha only** — 4318 entries differ in alpha,
+**0** in RGB, so the hues stay identical and only the fade changes.
+
+Measured along and across the lobe at the opening separation, the distance over
+which alpha falls from 90% to 10% of its peak:
+
+| `BOND_ALPHA_POW` | peak alpha | fade along the bond | fade across it |
+|---|---|---|---|
+| 1.0 | 183 | 64 px | 84 px |
+| **1.8** | **140** | **60 px** | **63 px** |
+| 2.6 | 107 | 54 px | 52 px |
+
+1.8 is where the two roughly match, so the lobe fades at the same rate in both
+directions instead of reading as a slab that is soft on top and cut off at the
+ends.
+
+`buildRampStack(stages, gamma, out, alphaFn)` builds either stack; `setFieldRamp`
+rebuilds both, so changing the hues on the dev panel keeps them in step.
+
+All five — width, brightness, taper, rest floor and stretch boost — are dev
+sliders under **One Bond tab**, in the tab bar's purple rather than the main
+field controls' blue.
 
 ### Two things the main tab's lobe does that this tab must not
 
