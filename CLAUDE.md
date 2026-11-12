@@ -1438,46 +1438,41 @@ the clamp sits at 3.48 against a base of 2.54, so it does not bite at all and
 the 20% lands in full (2.12 → 2.54). At full stretch the pair still spans only
 198–1086 px.
 
-### Two places to put the zero
+### One energy scale, shared across pairs
 
 ```javascript
-const SEPARATED_TOTAL = 600;   // kJ/mol, the common height of free atoms
-let energyZero = 'rest';       // 'rest' | 'lowest' — a UI toggle in the box
+const SEPARATED_TOTAL = 1000;   // kJ/mol, the common height of free atoms
 ```
 
-**The glow is unaffected either way.** The lobe's colour follows the work done,
-which is the same quantity whatever you measure it from; only the number moves.
-Verified — the centre pixel at 2x reads (197,127,253) under both.
+The zero is placed so free atoms sit at `SEPARATED_TOTAL` for **every** pair, so
+the reading is an absolute height and what differs between pairs is how far
+**down** the bonded state sits:
 
-| | H–H | O=O | O–H |
+| | well depth | at rest | fully apart |
 |---|---|---|---|
-| **rest**, at rest | 0 | 0 | 0 |
-| **rest**, fully apart | 436 | 498 | 463 |
-| **lowest**, at rest | **164** | **102** | **137** |
-| **lowest**, fully apart | **600** | **600** | **600** |
+| H–H | 436 | **564** | 1000 |
+| O=O | 498 | **502** | 1000 |
+| O–H | 463 | **537** | 1000 |
 
-`'rest'` zeroes at each bond's own natural length, so the reading is the work
-*you* have done: 0 to that bond's dissociation energy. It answers "how far have
-I got with this bond".
+The O=O rests lowest because its well is deepest. That comparison is the whole
+point of the scale.
 
-`'lowest'` places the zero so free atoms sit at `SEPARATED_TOTAL` for **every**
-pair. The reading becomes an absolute height on one shared scale, and what
-differs between pairs is how far **down** the bonded state sits — an O=O rests
-at 102 against an H–H's 164, because the O=O well is deeper. It answers "which
-of these is the strong bond", which the per-bond scale cannot ask, since on that
-one every bond starts at 0 and they all look alike.
+There was briefly a toggle offering the other convention — zero at each bond's
+own natural length, so the reading was the work you had done. It is a real way
+to measure and answers a different question, but on it **every bond starts at 0
+and they all look alike**, which is the one thing this tab should not say. The
+shared scale is the one that lets two pairs be compared, so it is now the only
+one and the buttons are gone.
 
-The box's own label follows: **ENERGY STORED** for the first, **ENERGY** for the
-second, because under `'lowest'` it is no longer a quantity you put in.
+**The glow never depended on this.** The lobe's colour follows the work done,
+which is the same quantity wherever the zero sits; only the number moves.
+Verified the centre pixel at 2x still reads (197,127,253) after the rescale.
 
 ### Snapshots
 
 A **Snapshot** button in the energy box stills the bond as it is now and stacks
 it in a scrollable column down the right, newest last, so the list reads top to
-bottom as the order you took them in. Each row carries the reading **under
-whichever zero was selected when it was taken**, so a column can mix both if you
-switch mid-run — which is a feature: the same bond at the same separation under
-the two scales, side by side.
+bottom as the order you took them in. Each row carries the reading as it stood when the shot was taken.
 
 **The crop is a fixed fraction of the canvas, not a box fitted round the two
 atoms.** Fitting would scale every thumbnail to fill its frame and so hide the
