@@ -674,7 +674,9 @@ That is the entire separation between Low and High, and it is why no
 #### Three view modes
 
 `viewMode` is `'trails'`, `'shells'` or `'space'` — the old boolean `showAtoms`
-split in two, because "Atoms" was doing two jobs.
+split in two, because "Atoms" was doing two jobs. **It opens on `'shells'`**:
+that is the picture that names the parts, and the trails are the one to switch
+to once you know what you are looking at.
 
 All three buttons carry the **same** H₂ icon, animated by the shared
 `ICON_CANVASES` loop. They are three pictures of the same thing, so the button
@@ -1054,7 +1056,9 @@ first, then spawn.
 ## Three view modes
 
 `viewMode` is `'trails'`, `'shells'` or `'space'` — the old boolean `showAtoms`
-split in two, because "Atoms" was doing two jobs.
+split in two, because "Atoms" was doing two jobs. **It opens on `'shells'`**:
+that is the picture that names the parts, and the trails are the one to switch
+to once you know what you are looking at.
 
 All three buttons carry the **same** H₂ icon, animated by the shared
 `ICON_CANVASES` loop. They are three pictures of the same thing, so the button
@@ -1265,6 +1269,11 @@ grid, about 15M iterations a frame. If you ever add intermolecular lobes, cull
 them hard by distance or that number comes back.
 
 ## The One Bond tab
+
+**The sim opens here**, not on Reactions. It is the tab that explains what a
+bond *is*, and a world full of them is easier to read once you have pulled one
+apart by hand. `applyTab('bond')` runs at init rather than a second copy of
+that state being written into the markup, so there is one path into it.
 
 A second tab, using fission's tab bar unchanged — same shape, same glow, where
 it used to carry a "Temperature" tab beside the main one. `applyTab` swaps which
