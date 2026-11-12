@@ -1262,6 +1262,29 @@ and it had to go: it read as a second field, and the eye could not tell which of
 the two it was meant to be watching. Verified — a pixel beside a nucleus is
 (5,4,15), the background exactly.
 
+### The range, and the zoom
+
+```javascript
+const BOND_MAX_MULT = 4.8;   // how far apart it can be dragged, x natural
+const BOND_MIN_MULT = 0.6;
+const BOND_ZOOM     = 1.2;   // 20% larger than fitting 3 natural lengths across
+```
+
+**4.8 rather than 3.2 because that is where the stored energy finally reads as
+the whole bond.** The Morse form gives 93% at 3.2 and **99.3% at 4.8**, so the
+extra half of the range is what turns "nearly" into "that is the bond".
+Measured at full stretch: H–H **433 of 436**, O=O **495 of 498**, O–H **460 of
+463** — 99% on all three.
+
+**The fit clamp is computed from the MAXIMUM separation, never the current
+one.** Clamping against the current separation would shrink the view as you
+pulled, which is the one thing this must not do: the whole reading is that the
+gap gets bigger. Sizing for the extreme up front costs a little scale on a
+narrow window and keeps the scale honest while dragging. On a 1284-wide canvas
+the clamp sits at 3.48 against a base of 2.54, so it does not bite at all and
+the 20% lands in full (2.12 → 2.54). At full stretch the pair still spans only
+198–1086 px.
+
 ### ...and then it fades anyway
 
 ```javascript
