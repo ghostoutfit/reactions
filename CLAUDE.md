@@ -671,7 +671,37 @@ dose per hit and ~3× as many hits: **~27× the pumping rate for 3× the speed**
 That is the entire separation between Low and High, and it is why no
 `tempLevel` test appears anywhere in the mechanism.
 
-#### Energy in fields is its own bucket
+#### Three view modes
+
+`viewMode` is `'trails'`, `'shells'` or `'outline'` — the old boolean `showAtoms`
+split in two, because "Atoms" was doing two jobs.
+
+- **Trails** — the electron trails this sim has always drawn.
+- **Shells** — the bonds sim's shells picture: a gradient band at each occupied
+  shell radius, electrons as **dots sitting on it** rather than as paths behind
+  them. Shares `drawShellBands`, `drawElectronDot`, `ATOM_SHELLS` and
+  `shellRadius` with the One Bond tab.
+- **Outline** — space-filling, unchanged.
+
+**Colour is by element here, not by atom.** The One Bond tab colours its two
+atoms apart because the whole question there is whose electrons are whose; with
+a dozen molecules on screen that would be noise, and the element colours are
+what the rest of the sim already speaks.
+
+**`shellRadius` takes the nucleus radius.** The One Bond tab draws nuclei about
+9x life and needs its inner shells shoved clear of them; the main tab's nucleus
+is the plain 6 px sprite and needs no such clearance, so it passes its own and
+the inner shell stays where the physics puts it.
+
+Dots are `SHELL_DOT_R` = 9 px against the One Bond tab's 17 — a world of
+molecules, not one bond filling the screen.
+
+Shells is the **cheapest** of the three: 0.14 ms/frame against trails' 0.20 and
+outline's 0.16, since a dot is one gradient where a trail is a stack of stroked
+buckets. Verified across lone-pairs on and off, and after breaking leaves a
+world of single-atom bodies.
+
+## Energy in fields is its own bucket
 
 `vib` is **not** part of `energyOfMotion()`, and that is deliberate. Real
 vibrational energy sloshes between kinetic (the atoms actually moving) and
@@ -946,6 +976,36 @@ through `speciesSpeed`, so setting the temperature *after* spawning and then
 scaling velocities applies it twice. An early version of this diagnostic did
 exactly that and reported vibration ~50× too high at High. Set the temperature
 first, then spawn.
+
+## Three view modes
+
+`viewMode` is `'trails'`, `'shells'` or `'outline'` — the old boolean `showAtoms`
+split in two, because "Atoms" was doing two jobs.
+
+- **Trails** — the electron trails this sim has always drawn.
+- **Shells** — the bonds sim's shells picture: a gradient band at each occupied
+  shell radius, electrons as **dots sitting on it** rather than as paths behind
+  them. Shares `drawShellBands`, `drawElectronDot`, `ATOM_SHELLS` and
+  `shellRadius` with the One Bond tab.
+- **Outline** — space-filling, unchanged.
+
+**Colour is by element here, not by atom.** The One Bond tab colours its two
+atoms apart because the whole question there is whose electrons are whose; with
+a dozen molecules on screen that would be noise, and the element colours are
+what the rest of the sim already speaks.
+
+**`shellRadius` takes the nucleus radius.** The One Bond tab draws nuclei about
+9x life and needs its inner shells shoved clear of them; the main tab's nucleus
+is the plain 6 px sprite and needs no such clearance, so it passes its own and
+the inner shell stays where the physics puts it.
+
+Dots are `SHELL_DOT_R` = 9 px against the One Bond tab's 17 — a world of
+molecules, not one bond filling the screen.
+
+Shells is the **cheapest** of the three: 0.14 ms/frame against trails' 0.20 and
+outline's 0.16, since a dot is one gradient where a trail is a stack of stroked
+buckets. Verified across lone-pairs on and off, and after breaking leaves a
+world of single-atom bodies.
 
 ## Energy in fields
 

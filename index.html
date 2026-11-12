@@ -745,7 +745,8 @@
       </div>
       <div style="display:flex;gap:10px;align-self:stretch;align-items:center">
         <div style="display:flex;flex-direction:column;gap:4px">
-          <button class="awheel-item active" data-view="atoms" style="display:flex;align-items:center;gap:5px"><canvas id="atomsModeIcon" width="22" height="18" style="display:block;flex-shrink:0;image-rendering:pixelated"></canvas>Atoms</button>
+          <button class="awheel-item active" data-view="trails" style="display:flex;align-items:center;gap:5px"><canvas id="atomsModeIcon" width="22" height="18" style="display:block;flex-shrink:0;image-rendering:pixelated"></canvas>Trails</button>
+          <button class="awheel-item" data-view="shells" style="display:flex;align-items:center;gap:5px">Shells</button>
           <button class="awheel-item" data-view="outline" style="display:flex;align-items:center;gap:5px"><canvas id="outlineModeIcon" width="22" height="18" style="display:block;flex-shrink:0;image-rendering:pixelated"></canvas>Outline</button>
         </div>
       </div>
@@ -2090,7 +2091,11 @@ function zoomFromSlider(v) {
 // helpers it needed — wrapDelta for minimum-image collisions, wrapOffsets for
 // drawing a body on both sides of an edge — are gone; git has them.)
 let viewZoom = 1.0;
-let showAtoms = true;
+// 'trails'  — the electron trails this sim has always drawn
+// 'shells'   — the bonds sim's shells picture: a band at each occupied shell
+//              radius, electrons as dots on it rather than as paths
+// 'outline'  — space-filling
+let viewMode = 'trails';
 let running = false;
 
 // Atomic masses, in units where H = 1. Used for collision impulses and for the
@@ -3070,17 +3075,49 @@ function drawWorld() {
   drawWalls();
   if (document.getElementById('showFields').checked) drawFieldHeatmap(ctx);
 
-  if (showAtoms) {
+  if (viewMode === 'outline') {
+    drawSpaceFilling();   // all bodies at once: the layer is shared
+  } else if (viewMode === 'shells') {
+    // Bands first, under everything, then the electrons as dots on them.
+    for (const b of world.bodies) for (const p of bodyAtoms(b)) drawAtomShells(ctx, p);
+    for (const b of world.bodies) drawElectronsAsDots(b);
+    for (const b of world.bodies) for (const p of bodyAtoms(b)) drawNucleus(ctx, p.x, p.y);
+  } else {
     for (const b of world.bodies) {
       drawElectrons(b);
       for (const p of bodyAtoms(b)) drawNucleus(ctx, p.x, p.y);
     }
-  } else {
-    drawSpaceFilling();   // all bodies at once: the layer is shared
   }
 
   ctx.restore();
   drawEnergyGraph();
+}
+
+// ── Shells view, on the main tab ────────────────────────────────────────────
+// The same picture the One Bond tab draws, applied to every atom in the world:
+// a band at each occupied shell and the electrons as dots sitting on it rather
+// than as trails behind them.
+//
+// Colour is by ELEMENT here, not by atom. The One Bond tab colours its two
+// atoms apart because the whole question there is whose electrons are whose;
+// with a dozen molecules on screen that would be noise, and the element colours
+// are what the rest of the sim already speaks.
+const SHELL_DOT_R = 9;    // smaller than the One Bond tab's 17 — a world of
+                          // molecules, not one bond filling the screen
+
+function drawAtomShells(c, p) {
+  drawShellBands(c, p.x, p.y, p.el, valenceRadius(p.el),
+                 ELEMENTS[p.el].rgb, nucleusDiameter / 2);
+}
+
+function drawElectronsAsDots(b, dc = ctx) {
+  if (!b.electrons) return;
+  const ca = Math.cos(b.angle), sa = Math.sin(b.angle);
+  for (const e of b.electrons) {
+    if (e.kind === 'lone' && !showLonePairs) continue;
+    drawElectronDot(dc, b.x + e.x * ca - e.y * sa, b.y + e.x * sa + e.y * ca,
+                    ELEMENTS[e.el].rgb, false, SHELL_DOT_R);
+  }
 }
 
 // ─── Main loop ────────────────────────────────────────────────────────────────
@@ -3284,7 +3321,7 @@ function setViewModeActive(targetBtn) {
 }
 document.querySelectorAll('.awheel-item[data-view]').forEach(btn => {
   btn.addEventListener('click', () => {
-    showAtoms = btn.dataset.view === 'atoms';
+    viewMode = btn.dataset.view;
     setViewModeActive(btn);
     logAction('View: ' + btn.dataset.view);
   });
@@ -4074,11 +4111,22 @@ const SHELL_FRAC  = { H: [1], He: [1], O: [0.149, 1] };
 // are countable, and at 0.149 an oxygen's inner shell lands at 13 px inside an
 // 18.6 px nucleus — its two inner electrons buried. bonds hits the same problem
 // and solves it the same way, clamping shell 0 out to 1.4x the nucleus radius.
-function shellRadius(el, sh, z) {
+function shellRadius(el, sh, z, nucR) {
   const vr = valenceRadius(el) * z;
   const r = vr * ((SHELL_FRAC[el] || [1])[sh] ?? 1);
   const last = (ATOM_SHELLS[el] || [1]).length - 1;
-  return sh === last ? r : Math.max(r, bondTabNucleusR(el) * 1.4);
+  // `nucR` defaults to the One Bond tab's enlarged nucleus. The main tab's is
+  // the plain 6 px sprite, so it passes its own and the inner shell is not
+  // shoved outwards for a clearance it does not need.
+  const nr = nucR != null ? nucR : bondTabNucleusR(el);
+  return sh === last ? r : Math.max(r, nr * 1.4);
+}
+
+// Accepts '#rrggbb' or an 'r,g,b' triple, returns 'r,g,b'.
+function _rgbOf(col) {
+  return col[0] === '#'
+    ? col.match(/\w\w/g).map(h => parseInt(h, 16)).join(',')
+    : col;
 }
 
 // Colour-coded per ATOM, not per element — an O-O has two oxygens and you still
@@ -4273,40 +4321,41 @@ function stepBondDots() {
 
 // One glowing dot: soft halo, tinted core. Inner-shell electrons are dimmer,
 // the way bonds draws them.
-function drawElectronDot(c, x, y, hex, dim) {
-  const rgb = hex.match(/\w\w/g).map(h => parseInt(h, 16)).join(',');
-  const g = c.createRadialGradient(x, y, 0, x, y, BOND_DOT_GLOW);
+function drawElectronDot(c, x, y, hex, dim, R) {
+  const rgb = _rgbOf(hex);
+  R = R || BOND_DOT_GLOW;
+  const g = c.createRadialGradient(x, y, 0, x, y, R);
   g.addColorStop(0,    'rgba(' + rgb + ',' + (dim ? 0.26 : 0.55) + ')');
   g.addColorStop(0.45, 'rgba(' + rgb + ',' + (dim ? 0.10 : 0.22) + ')');
   g.addColorStop(1,    'rgba(' + rgb + ',0)');
   c.fillStyle = g;
-  c.beginPath(); c.arc(x, y, BOND_DOT_GLOW, 0, Math.PI * 2); c.fill();
+  c.beginPath(); c.arc(x, y, R, 0, Math.PI * 2); c.fill();
   c.fillStyle = 'rgba(' + rgb + ',' + (dim ? 0.4 : 0.92) + ')';
-  c.beginPath(); c.arc(x, y, BOND_DOT_CORE, 0, Math.PI * 2); c.fill();
+  c.beginPath(); c.arc(x, y, Math.max(1.5, R / 5.7), 0, Math.PI * 2); c.fill();
 }
 
 // The shell bands: a gradient ring peaking at each occupied shell radius. The
 // outer shell's band is three times as wide, which is what makes the valence
 // shell read as the thick one the bond happens in.
-function drawShellBands(c, at, side, z) {
-  const shells = ATOM_SHELLS[at.el] || [1];
-  const fracs  = SHELL_FRAC[at.el] || [1];
-  const vr = valenceRadius(at.el) * z;
+// A gradient band at each occupied shell radius, from the bonds sim's shells
+// view. The outer shell's band is three times as wide, which is what makes the
+// valence shell read as the thick one the bonding happens in.
+function drawShellBands(c, x, y, el, vr, outerHex, nucR) {
+  const shells = ATOM_SHELLS[el] || [1];
   for (let sh = 0; sh < shells.length; sh++) {
     const isOuter = sh === shells.length - 1;
-    const r = shellRadius(at.el, sh, z);
+    const r = shellRadius(el, sh, vr / valenceRadius(el), nucR);
     const hwBase = vr * 0.13;
     const hw = isOuter ? hwBase * 3 : hwBase;
-    const hex = isOuter ? ATOM_E_COLOUR[side] : INNER_E_COLOUR;
-    const rgb = hex.match(/\w\w/g).map(h => parseInt(h, 16)).join(',');
+    const rgb = _rgbOf(isOuter ? outerHex : INNER_E_COLOUR);
     const cc = t => 'rgba(' + rgb + ',' + (t * 0.30).toFixed(3) + ')';
-    const g = c.createRadialGradient(at.x, at.y, Math.max(0, r - hw), at.x, at.y, r + hw);
+    const g = c.createRadialGradient(x, y, Math.max(0, r - hw), x, y, r + hw);
     g.addColorStop(0.00, cc(0));    g.addColorStop(0.25, cc(0.08));
     g.addColorStop(0.38, cc(0.65)); g.addColorStop(0.50, cc(1.00));
     g.addColorStop(0.62, cc(0.65)); g.addColorStop(0.75, cc(0.08));
     g.addColorStop(1.00, cc(0));
     c.fillStyle = g;
-    c.beginPath(); c.arc(at.x, at.y, r + hw, 0, Math.PI * 2); c.fill();
+    c.beginPath(); c.arc(x, y, r + hw, 0, Math.PI * 2); c.fill();
   }
 }
 
@@ -4356,8 +4405,8 @@ function drawBondTab() {
     { width: BOND_FIELD_WIDTH, gain: BOND_FIELD_GAIN, colormap: BOND_COLORMAP });
 
   // Shell bands under everything, so the electrons sit on top of their shells.
-  drawShellBands(ctx, A, 0, z);
-  drawShellBands(ctx, B, 1, z);
+  drawShellBands(ctx, A.x, A.y, A.el, valenceRadius(A.el) * z, ATOM_E_COLOUR[0]);
+  drawShellBands(ctx, B.x, B.y, B.el, valenceRadius(B.el) * z, ATOM_E_COLOUR[1]);
 
   // The two nuclei. No halo around them: the only glow on this screen should
   // be the bond's. An atom-coloured cloud at the valence radius read as a
@@ -4504,7 +4553,7 @@ document.getElementById('bondReset').addEventListener('click', () => {
               ' (call runPerfTest() for the full table)');
 })();
 
-setViewModeActive(document.querySelector('.awheel-item[data-view="atoms"]'));
+setViewModeActive(document.querySelector('.awheel-item[data-view="trails"]'));
 updateGraphBtn();
 updateEnergyNote();
 document.getElementById('energyBar').classList.add('visible');
