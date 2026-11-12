@@ -735,8 +735,33 @@ keeps running underneath for the trails view; shells just ignores it. Measured
 over 10 s: the drawn electron moved **10.3 px** while the simulated orbit angle
 advanced **75 radians**, about twelve laps.
 
-The only thing that should move them is the molecule itself rotating, and that
-still does, because these are body-local coordinates.
+### ...but they still move
+
+```javascript
+let shellWobble = 0;                 // own accumulator, advanced every frame
+const SHELL_WOBBLE_AMP = 0.075;      // x the shell radius
+const SHELL_WOBBLE_HZ  = 0.62;
+```
+
+With the ring spin off and the bonding electrons seated, the shells view had
+nothing moving in it at all. **Paused, it looked switched off rather than
+held** — which is what the default view changing from trails to shells cost.
+
+So each electron wobbles **about its seat**, rather than running a lap of the
+ring. That is the distinction the spin got wrong: an electron is somewhere,
+imprecisely, not racing round a track. On a 38.1 px shell it drifts about
+**4.6 x 3.3 px**.
+
+The two frequencies are deliberately not a round ratio so a pair never settles
+into lockstep, and a per-electron seed keeps each on its own schedule.
+
+**Its accumulator advances every frame whether or not the sim is running**,
+because an atom does not stop being an atom when you press pause. Verified:
+paused, with the molecule itself held perfectly still, **1807 pixels change in
+half a second**. Both tabs use it.
+
+The other thing that moves them is the molecule itself rotating, and that still
+does, because these are body-local coordinates.
 
 **A bonded atom's non-bonding electrons sit on the far side from the bond**,
 spread over `loneArcFrac` of the ring centred on the direction away from its
@@ -1128,8 +1153,33 @@ keeps running underneath for the trails view; shells just ignores it. Measured
 over 10 s: the drawn electron moved **10.3 px** while the simulated orbit angle
 advanced **75 radians**, about twelve laps.
 
-The only thing that should move them is the molecule itself rotating, and that
-still does, because these are body-local coordinates.
+### ...but they still move
+
+```javascript
+let shellWobble = 0;                 // own accumulator, advanced every frame
+const SHELL_WOBBLE_AMP = 0.075;      // x the shell radius
+const SHELL_WOBBLE_HZ  = 0.62;
+```
+
+With the ring spin off and the bonding electrons seated, the shells view had
+nothing moving in it at all. **Paused, it looked switched off rather than
+held** — which is what the default view changing from trails to shells cost.
+
+So each electron wobbles **about its seat**, rather than running a lap of the
+ring. That is the distinction the spin got wrong: an electron is somewhere,
+imprecisely, not racing round a track. On a 38.1 px shell it drifts about
+**4.6 x 3.3 px**.
+
+The two frequencies are deliberately not a round ratio so a pair never settles
+into lockstep, and a per-electron seed keeps each on its own schedule.
+
+**Its accumulator advances every frame whether or not the sim is running**,
+because an atom does not stop being an atom when you press pause. Verified:
+paused, with the molecule itself held perfectly still, **1807 pixels change in
+half a second**. Both tabs use it.
+
+The other thing that moves them is the molecule itself rotating, and that still
+does, because these are body-local coordinates.
 
 **A bonded atom's non-bonding electrons sit on the far side from the bond**,
 spread over `loneArcFrac` of the ring centred on the direction away from its

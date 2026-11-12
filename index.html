@@ -3184,6 +3184,21 @@ const SHELL_DOT_R = 9;    // smaller than the One Bond tab's 17 — a world of
 // right, and falls out of these being body-local coordinates.
 const shellSpin = 0;      // rad/s round the ring — none
 
+// ...but still alive. With the ring spin off and the bonding electrons seated,
+// the shells view had nothing moving in it at all: paused, it looked switched
+// off rather than held. This is the life that was lost when the default view
+// changed from trails to shells.
+//
+// It is a wobble about the seat, not a lap of the ring — each electron drifts a
+// little around where it lives. That is the distinction the spin got wrong: an
+// electron is somewhere, imprecisely, rather than racing round a track.
+//
+// Driven by its own accumulator, advanced every frame whether or not the sim is
+// running, because an atom does not stop being an atom when you press pause.
+let shellWobble = 0;
+const SHELL_WOBBLE_AMP = 0.075;   // x the shell radius
+const SHELL_WOBBLE_HZ  = 0.62;
+
 // The Reactions shells view pulls its bonding electrons towards the middle of
 // the bond by `bondCentreHold`, the same number the One Bond tab holds its
 // shared pair with. 0 leaves them wherever the figure-8 has them, which in this
@@ -3191,6 +3206,15 @@ const shellSpin = 0;      // rad/s round the ring — none
 // midpoint.
 
 let shellPhase = 0;       // kept so the draw path needs no special case
+
+// Offset of one electron from its seat this frame. The two frequencies are
+// deliberately not a round ratio, so a pair never settles into lockstep, and
+// `seed` keeps every electron on its own schedule.
+function shellWobbleAt(seed, r) {
+  const a = SHELL_WOBBLE_AMP * r;
+  return [a * Math.sin(shellWobble * SHELL_WOBBLE_HZ + seed),
+          a * Math.cos(shellWobble * SHELL_WOBBLE_HZ * 1.37 + seed * 2.3)];
+}
 
 function drawAtomShells(c, p) {
   drawShellBands(c, p.x, p.y, p.el, valenceRadius(p.el),
@@ -3216,8 +3240,9 @@ function drawElectronsAsDots(b, dc = ctx) {
       const px = -dy / L, py = dx / L;                 // across the bond
       const spread = (valenceRadius(ai.el) + valenceRadius(ak.el)) / 2 * 0.3;
       const off = spread * e.seatDir * (1 + e.seatTier * 0.6);
-      lx = mx + px * off;
-      ly = my + py * off;
+      const [wx, wy] = shellWobbleAt(e.seatDir * 2.1 + e.seatTier * 1.3 + e.i, spread);
+      lx = mx + px * off + wx;
+      ly = my + py * off + wy;
     } else {
       // Sitting in its seat ON the shell, not running round it and not floating
       // inside it. The radius comes from `shellRadius`, the same function that
@@ -3232,8 +3257,9 @@ function drawElectronsAsDots(b, dc = ctx) {
       const outer = (ATOM_SHELLS[at.el] || [1]).length - 1;
       const r = shellRadius(at.el, outer, 1, nucleusDiameter / 2);
       const ang = e.angle0 + shellPhase * (b.bonds.length === 0 ? loneSpeedFree : 1);
-      lx = at.lx + r * Math.cos(ang);
-      ly = at.ly + r * Math.sin(ang);
+      const [wx, wy] = shellWobbleAt(e.angle0 * 3.1 + e.i, r);
+      lx = at.lx + r * Math.cos(ang) + wx;
+      ly = at.ly + r * Math.sin(ang) + wy;
     }
     drawElectronDot(dc, b.x + lx * ca - ly * sa, b.y + lx * sa + ly * ca,
                     ELEMENTS[e.el].rgb, false, SHELL_DOT_R);
@@ -3283,7 +3309,8 @@ function worldLoop(now) {
   // are already drawn on page load, before GO is ever pressed.
   // Once a frame, never per sub-step: the phase logic is tuned in per-frame units.
   stepElectrons(dt);
-  shellPhase += shellSpin * dt;
+  shellPhase  += shellSpin * dt;
+  shellWobble += dt;
   drawWorld();
 }
 
@@ -4553,6 +4580,7 @@ function stepBondTab(dt) {
   if (!bondTab.dots.length && !bondTab.shellE.length) initBondElectrons();
   bondTab.wobble += dt;
   bondTab.spin += shellSpin * dt;
+  shellWobble += dt;      // the shells breathe on this tab too
   stepBondDots();
 }
 
@@ -4616,7 +4644,8 @@ function drawBondTab() {
     const at = [A, B][e.side];
     const r  = shellRadius(at.el, e.shell, z);
     const ang = e.ang + bondTab.spin;
-    drawElectronDot(ctx, at.x + Math.cos(ang) * r, at.y + Math.sin(ang) * r,
+    const [wx, wy] = shellWobbleAt(e.ang * 3.1 + e.side * 1.9 + e.shell, r);
+    drawElectronDot(ctx, at.x + Math.cos(ang) * r + wx, at.y + Math.sin(ang) * r + wy,
                     e.inner ? INNER_E_COLOUR : ELEMENTS[at.el].rgb, e.inner);
   }
 
