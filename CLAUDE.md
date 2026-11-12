@@ -716,6 +716,28 @@ the inner shell stays where the physics puts it.
 Dots are `SHELL_DOT_R` = 9 px against the One Bond tab's 17 — a world of
 molecules, not one bond filling the screen.
 
+**Real nuclei here too**, not the "+" sprite: an oxygen should look like eight
+protons and eight neutrons wherever you meet it. `WORLD_NUCLEON_R` is 3.2
+against the One Bond tab's 6, because this view has a dozen molecules in it, and
+that puts an O's nucleus at **9.9 px** of radius against its 38.1 px valence
+shell.
+
+**The inner shell is drawn with its electrons.** Reactions models only valence
+electrons — bonding and lone pairs are all it ever needs — so an inner shell had
+a band round it and *nothing on it*. `drawInnerElectrons` fills them in straight
+from `ATOM_SHELLS` rather than simulating them, because nothing is ever going to
+happen to them: they are there to say the atom has an inside. Grey, dimmed, and
+smaller than the valence dots.
+
+**The inner-shell clamp went 1.4 → 1.8 nucleus radii.** With a real packed
+nucleus rather than a sprite there is more to clear, and at 1.4 the inner shell
+sat 4 px off the nucleons and read as part of them. At 1.8 an oxygen's lands at
+**17.9 px** — 8 px clear of a 9.9 px nucleus, and well inside the 38.1 px
+valence shell. Shared with the One Bond tab, where it moves the inner shell
+26.1 → 33.5 against a 111.3 px valence shell.
+
+Cost in shells view with all this: **0.56 ms/frame**.
+
 ### Shells electrons sit still, and outward
 
 ```javascript
@@ -1133,6 +1155,28 @@ the inner shell stays where the physics puts it.
 
 Dots are `SHELL_DOT_R` = 9 px against the One Bond tab's 17 — a world of
 molecules, not one bond filling the screen.
+
+**Real nuclei here too**, not the "+" sprite: an oxygen should look like eight
+protons and eight neutrons wherever you meet it. `WORLD_NUCLEON_R` is 3.2
+against the One Bond tab's 6, because this view has a dozen molecules in it, and
+that puts an O's nucleus at **9.9 px** of radius against its 38.1 px valence
+shell.
+
+**The inner shell is drawn with its electrons.** Reactions models only valence
+electrons — bonding and lone pairs are all it ever needs — so an inner shell had
+a band round it and *nothing on it*. `drawInnerElectrons` fills them in straight
+from `ATOM_SHELLS` rather than simulating them, because nothing is ever going to
+happen to them: they are there to say the atom has an inside. Grey, dimmed, and
+smaller than the valence dots.
+
+**The inner-shell clamp went 1.4 → 1.8 nucleus radii.** With a real packed
+nucleus rather than a sprite there is more to clear, and at 1.4 the inner shell
+sat 4 px off the nucleons and read as part of them. At 1.8 an oxygen's lands at
+**17.9 px** — 8 px clear of a 9.9 px nucleus, and well inside the 38.1 px
+valence shell. Shared with the One Bond tab, where it moves the inner shell
+26.1 → 33.5 against a 111.3 px valence shell.
+
+Cost in shells view with all this: **0.56 ms/frame**.
 
 ### Shells electrons sit still, and outward
 

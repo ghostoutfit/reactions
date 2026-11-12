@@ -3197,8 +3197,10 @@ function drawWorld() {
   } else if (viewMode === 'shells') {
     // Bands first, under everything, then the electrons as dots on them.
     for (const b of world.bodies) for (const p of bodyAtoms(b)) drawAtomShells(ctx, p);
+    for (const b of world.bodies) for (const p of bodyAtoms(b)) drawInnerElectrons(ctx, p);
     for (const b of world.bodies) drawElectronsAsDots(b);
-    for (const b of world.bodies) for (const p of bodyAtoms(b)) drawNucleus(ctx, p.x, p.y);
+    for (const b of world.bodies) for (const p of bodyAtoms(b))
+      drawNucleons(ctx, p.x, p.y, p.el, shellWobble, WORLD_NUCLEON_R);
   } else {
     for (const b of world.bodies) {
       drawElectrons(b);
@@ -3221,6 +3223,15 @@ function drawWorld() {
 // are what the rest of the sim already speaks.
 const SHELL_DOT_R = 9;    // smaller than the One Bond tab's 17 — a world of
                           // molecules, not one bond filling the screen
+
+// The real packed nucleus here too, not the "+" sprite — an oxygen should look
+// like eight protons and eight neutrons wherever you meet it. Drawn with a
+// smaller nucleon than the One Bond tab's 6 px, because this view has a dozen
+// molecules in it rather than one bond filling the screen: 3.2 puts an oxygen's
+// nucleus at 9.9 px of radius against a 38.1 px valence shell, big enough to
+// count the particles and small enough to still be an atom.
+const WORLD_NUCLEON_R = 3.2;
+function worldNucleusR(el) { return bondTabNucleusR(el, WORLD_NUCLEON_R); }
 
 // ── Shells-view tuning ──────────────────────────────────────────────────────
 // A shell is a place an electron lives, not a racetrack. The trails view wants
@@ -3266,7 +3277,29 @@ function shellWobbleAt(seed, r) {
 
 function drawAtomShells(c, p) {
   drawShellBands(c, p.x, p.y, p.el, valenceRadius(p.el),
-                 ELEMENTS[p.el].rgb, nucleusDiameter / 2);
+                 ELEMENTS[p.el].rgb, worldNucleusR(p.el));
+}
+
+// The inner shells' electrons. Reactions models only valence electrons — the
+// bonding and the lone pairs are all it ever needs — so an inner shell had a
+// band drawn round it and nothing on it. These are drawn straight from the
+// configuration rather than simulated, because nothing is ever going to happen
+// to them: they are there to say the atom has an inside.
+function drawInnerElectrons(c, p) {
+  const shells = ATOM_SHELLS[p.el] || [1];
+  const vr = valenceRadius(p.el);
+  const nucR = worldNucleusR(p.el);
+  for (let sh = 0; sh < shells.length - 1; sh++) {
+    const r = shellRadius(p.el, sh, 1, nucR);
+    const n = shells[sh];
+    for (let i = 0; i < n; i++) {
+      const ang = (i / n) * Math.PI * 2 + sh * 0.7;
+      const [wx, wy] = shellWobbleAt(ang * 2.7 + sh * 1.3, r);
+      drawElectronDot(c, p.x + Math.cos(ang) * r + wx,
+                         p.y + Math.sin(ang) * r + wy,
+                      INNER_E_COLOUR, true, SHELL_DOT_R * 0.8);
+    }
+  }
 }
 
 function drawElectronsAsDots(b, dc = ctx) {
@@ -3303,7 +3336,7 @@ function drawElectronsAsDots(b, dc = ctx) {
       // the electron at 0.54 of its own band, 17.5 px adrift on an oxygen.
       const at = b.atoms[e.i];
       const outer = (ATOM_SHELLS[at.el] || [1]).length - 1;
-      const r = shellRadius(at.el, outer, 1, nucleusDiameter / 2);
+      const r = shellRadius(at.el, outer, 1, worldNucleusR(at.el));
       const ang = e.angle0 + shellPhase * (b.bonds.length === 0 ? loneSpeedFree : 1);
       const [wx, wy] = shellWobbleAt(e.angle0 * 3.1 + e.i, r);
       lx = at.lx + r * Math.cos(ang) + wx;
@@ -4264,16 +4297,16 @@ function nucleusFor(el) {
 }
 
 // Radius in canvas px of this tab's nucleus for `el`.
-function bondTabNucleusR(el) {
-  return nucleusFor(el).sphereR / NUC_PARTICLE_R * NUC_NUCLEON_R;
+function bondTabNucleusR(el, nucleonR) {
+  return nucleusFor(el).sphereR / NUC_PARTICLE_R * (nucleonR || NUC_NUCLEON_R);
 }
 
 // bonds' particle look: soft-edged base, a glowing core, and a + on protons.
 // Drawn back to front by z so the ball reads as a ball.
-function drawNucleons(c, cx, cy, el, wobble) {
+function drawNucleons(c, cx, cy, el, wobble, nucleonR) {
   const nuc = nucleusFor(el);
-  const k = NUC_NUCLEON_R / NUC_PARTICLE_R;
-  const R = NUC_NUCLEON_R;
+  const R = nucleonR || NUC_NUCLEON_R;
+  const k = R / NUC_PARTICLE_R;
   const sorted = [...nuc.pts].sort((a, b) =>
     (a.lz - b.lz) || ((a.type === 'proton') - (b.type === 'proton')));
   for (const p of sorted) {
@@ -4332,8 +4365,11 @@ function shellRadius(el, sh, z, nucR) {
   // `nucR` defaults to the One Bond tab's enlarged nucleus. The main tab's is
   // the plain 6 px sprite, so it passes its own and the inner shell is not
   // shoved outwards for a clearance it does not need.
+  // 1.8, not bonds' 1.4. With a real packed nucleus rather than a sprite there
+  // is more to clear, and an inner shell sitting 4 px off the nucleons read as
+  // part of them rather than as a shell of its own.
   const nr = nucR != null ? nucR : bondTabNucleusR(el);
-  return sh === last ? r : Math.max(r, nr * 1.4);
+  return sh === last ? r : Math.max(r, nr * 1.8);
 }
 
 // Accepts '#rrggbb' or an 'r,g,b' triple, returns 'r,g,b'.
