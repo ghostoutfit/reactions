@@ -3409,7 +3409,14 @@ function worldLoop(now) {
   if (bondTab.on) { stepBondTab(dt); drawBondTab(); return; }
   // The sandbox has no physics at all — only the shells' wobble, so a scene
   // you are not touching still looks alive.
-  if (sandbox.on) { shellWobble += dt; drawSandbox(); return; }
+  if (sandbox.on) {
+    shellWobble += dt;
+    // Squashed pairs spring apart here, so the scene keeps resolving itself
+    // whether or not you are touching it.
+    if (sbRelax()) { sbRebuildBonds(); sbUpdateReadout(); }
+    drawSandbox();
+    return;
+  }
 
   stepTemperature(rawDt);
   if (running) {
@@ -5006,12 +5013,23 @@ const sandbox = {
   atoms: [],          // { el, x, y }  canvas coords
   bonds: [],          // { i, k, r0, D, work, bonded }  rebuilt every change
   drag: -1,
+  dragMol: null,      // { idx[], ox[], oy[] } when a BOND is the handle
   hover: -1,
+  hoverBond: -1,
   spawnAt: 0,         // walks the spawn point so molecules do not stack
 };
 
-// How many bonds this element may hold. H takes one, O two — so an O already
-// holding two H ignores a third, and the sandbox only ever makes real species.
+// Atoms the pointer is currently holding: they are where your hand put them, so
+// the separation pass below must never move them.
+function sbPinned() {
+  if (sandbox.dragMol) return new Set(sandbox.dragMol.idx);
+  return sandbox.drag >= 0 ? new Set([sandbox.drag]) : new Set();
+}
+
+// How many bonds this element may hold, counted in BOND ORDER rather than in
+// bonds: H takes one, O two — so an O already holding two H ignores a third,
+// and an O=O, being a double bond, uses up both of each oxygen's slots the way
+// it really does. The sandbox only ever makes real species.
 function sbValence(el) { return el === 'H' ? 1 : el === 'O' ? 2 : 0; }
 
 // Which pairs are actually bonded. Nearest first, each taken only while both
@@ -5035,16 +5053,18 @@ function sbRebuildBonds() {
       // the repulsive wall and releases almost nothing. Ranking by distance let
       // a crushed H-H outrank a perfect O-H and steal its atom — dropping a
       // third H beside a finished water pulled one of its bonds apart.
-      cand.push({ i, k, r, r0, D, work, gain: D * (1 - work) });
+      cand.push({ i, k, r, r0, D, work, order: bondOrder(A[i].el, A[k].el),
+                  gain: D * (1 - work) });
     }
   }
   cand.sort((a, b) => b.gain - a.gain);
   sandbox.bonds = [];
   for (const c of cand) {
     if (c.gain <= 0.5) continue;          // nothing worth calling a bond
-    if (used[c.i] >= sbValence(A[c.i].el) || used[c.k] >= sbValence(A[c.k].el)) continue;
-    used[c.i]++; used[c.k]++;
-    sandbox.bonds.push({ i: c.i, k: c.k, r0: c.r0, D: c.D,
+    if (used[c.i] + c.order > sbValence(A[c.i].el)) continue;
+    if (used[c.k] + c.order > sbValence(A[c.k].el)) continue;
+    used[c.i] += c.order; used[c.k] += c.order;
+    sandbox.bonds.push({ i: c.i, k: c.k, r0: c.r0, D: c.D, order: c.order,
       work: c.work, contact: sbContact(c.r, c.r0) });
   }
 }
@@ -5121,6 +5141,77 @@ function sbSnapAll() {
   sbRebuildBonds();
 }
 
+// SEPARATION. Nothing here has momentum, but atoms still cannot be squashed
+// into one another: any pair closer than its natural length pushes apart a
+// share of the overlap every frame until it sits exactly there. So shoving two
+// atoms together does not pile them up — they spring back out and settle at the
+// neutral distance, which is also how a dragged atom ends up bonded at the
+// right length instead of buried in its partner.
+//
+// Whatever the pointer is holding is pinned: the push goes entirely into the
+// free end, so the hand always wins and the other atom slides away from it.
+const SB_PUSH = 0.35;              // share of the overlap removed per sweep
+const SB_SETTLED = 0.05;           // px; below this the pair counts as settled
+const SB_RELAX_ITERS = 3;          // sweeps per frame
+const SB_STUCK = 0.3;              // px of net push below which an atom is stuck
+const SB_EJECT = 2.5;              // px per sweep for an atom pushed out of a trap
+function sbRelax() {
+  const A = sandbox.atoms;
+  if (A.length < 2) return false;
+  const pinned = sbPinned();
+  let any = false;
+  for (let it = 0; it < SB_RELAX_ITERS; it++) {
+    // Accumulate every pair's correction first, then move: a sequential sweep
+    // lets the order of the pairs decide where a crowded atom ends up.
+    const mx = new Float64Array(A.length), my = new Float64Array(A.length);
+    const hits = new Int32Array(A.length);
+    const sx = new Float64Array(A.length), sy = new Float64Array(A.length);
+    let moved = false;
+    for (let i = 0; i < A.length; i++) {
+      for (let k = i + 1; k < A.length; k++) {
+        const target = bondLen(A[i].el, A[k].el);
+        let dx = A[k].x - A[i].x, dy = A[k].y - A[i].y;
+        let d = Math.hypot(dx, dy);
+        if (d >= target - SB_SETTLED) continue;
+        const pi = pinned.has(i), pk = pinned.has(k);
+        if (pi && pk) continue;               // both in hand: leave them be
+        if (d < 1e-3) {                       // exactly stacked: any direction
+          const a = Math.random() * Math.PI * 2;
+          dx = Math.cos(a); dy = Math.sin(a); d = 1;
+        }
+        const ux = dx / d, uy = dy / d;
+        const push = (target - d) * SB_PUSH;
+        // One free end takes the whole correction; two free ends split it.
+        const si = pi ? 0 : (pk ? 1 : 0.5), sk = pk ? 0 : (pi ? 1 : 0.5);
+        if (!pi) { mx[i] -= ux * push * si * 2; my[i] -= uy * push * si * 2;
+                   hits[i]++; sx[i] += A[k].x; sy[i] += A[k].y; }
+        if (!pk) { mx[k] += ux * push * sk * 2; my[k] += uy * push * sk * 2;
+                   hits[k]++; sx[k] += A[i].x; sy[k] += A[i].y; }
+        moved = true;
+      }
+    }
+    if (!moved) break;
+    any = true;
+    for (let i = 0; i < A.length; i++) {
+      if (!hits[i]) continue;
+      let dx = mx[i], dy = my[i];
+      // An atom shoved into the middle of a held molecule gets pushes from
+      // several sides that nearly cancel, and would sit there squashed. When
+      // the net is that small, eject it away from the crowd instead, which is
+      // always a way out.
+      if (hits[i] > 1 && Math.hypot(dx, dy) < SB_STUCK) {
+        const ox = A[i].x - sx[i] / hits[i], oy = A[i].y - sy[i] / hits[i];
+        const L = Math.hypot(ox, oy);
+        const a = L > 1e-3 ? Math.atan2(oy, ox) : Math.random() * Math.PI * 2;
+        dx = Math.cos(a) * SB_EJECT; dy = Math.sin(a) * SB_EJECT;
+      }
+      A[i].x = Math.max(12, Math.min(canvas.width - 12, A[i].x + dx));
+      A[i].y = Math.max(world.top + 12, Math.min(canvas.height - 12, A[i].y + dy));
+    }
+  }
+  return any;
+}
+
 // ── Drawing ─────────────────────────────────────────────────────────────────
 // Reactions' scale and its shells picture, atom for atom, so a sandbox oxygen
 // is the same object as one in the world: real nucleus, grey inner shell, its
@@ -5152,7 +5243,20 @@ function drawSandbox() {
   sbDrawValenceElectrons();
   for (const p of A) drawNucleons(ctx, p.x, p.y, p.el, shellWobble, WORLD_NUCLEON_R);
 
-  // A ring on the atom under the pointer says it is the handle.
+  // A line along the bond under the pointer says the whole molecule is the
+  // handle; a ring says the single atom is.
+  const hb = sandbox.bonds[sandbox.hoverBond];
+  if (sandbox.hoverBond >= 0 && hb && A[hb.i] && A[hb.k]) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    const a1 = A[hb.i], a2 = A[hb.k];
+    ctx.beginPath();
+    ctx.moveTo(a1.x + (a2.x - a1.x) * 0.3, a1.y + (a2.y - a1.y) * 0.3);
+    ctx.lineTo(a1.x + (a2.x - a1.x) * 0.7, a1.y + (a2.y - a1.y) * 0.7);
+    ctx.stroke();
+    ctx.lineCap = 'butt';
+  }
   if (sandbox.hover >= 0 && A[sandbox.hover]) {
     const p = A[sandbox.hover];
     ctx.strokeStyle = 'rgba(255,255,255,0.22)';
@@ -5177,23 +5281,36 @@ function sbDrawValenceElectrons() {
   const bondsOf = A.map(() => []);
   for (const b of sandbox.bonds) { bondsOf[b.i].push(b); bondsOf[b.k].push(b); }
 
+  // One shared PAIR per unit of bond order, each pair one electron from either
+  // atom in that atom's colour: two dots in an H-H, four in an O=O — two from
+  // each oxygen. The pairs are stepped along the bond axis so a double bond
+  // reads as two pairs side by side rather than four dots in a line.
   for (const b of sandbox.bonds) {
     const pi = A[b.i], pk = A[b.k];
     const mx = (pi.x + pk.x) / 2, my = (pi.y + pk.y) / 2;
     const dx = pk.x - pi.x, dy = pk.y - pi.y, L = Math.hypot(dx, dy) || 1;
-    const px = -dy / L, py = dx / L;
+    const ux = dx / L, uy = dy / L;
+    const px = -uy, py = ux;
     const spread = (valenceRadius(pi.el) + valenceRadius(pk.el)) / 2 * 0.3;
-    for (let q = 0; q < 2; q++) {
-      const off = spread * (q ? 1 : -1);
-      const [wx, wy] = shellWobbleAt(b.i * 3.3 + b.k * 1.7 + q * 2.1, spread);
-      drawElectronDot(ctx, mx + px * off + wx, my + py * off + wy,
-                      ELEMENTS[q ? pk.el : pi.el].rgb, false, SHELL_DOT_R);
+    const n = b.order || 1;
+    for (let pr = 0; pr < n; pr++) {
+      const along = n === 1 ? 0 : (pr / (n - 1) - 0.5) * spread * 1.8;
+      for (let q = 0; q < 2; q++) {
+        const off = spread * (q ? 1 : -1);
+        const [wx, wy] = shellWobbleAt(b.i * 3.3 + b.k * 1.7 + pr * 5.9 + q * 2.1, spread);
+        drawElectronDot(ctx, mx + ux * along + px * off + wx,
+                             my + uy * along + py * off + wy,
+                        ELEMENTS[q ? pk.el : pi.el].rgb, false, SHELL_DOT_R);
+      }
     }
   }
 
   A.forEach((p, i) => {
     const mine = bondsOf[i];
-    const lone = Math.max(0, (VALENCE[p.el] || 0) - mine.length);
+    // What is left after the sharing: an electron per unit of bond order has
+    // gone into the gap, so an O in an O=O keeps four, not five.
+    const shared = mine.reduce((s, b) => s + (b.order || 1), 0);
+    const lone = Math.max(0, (VALENCE[p.el] || 0) - shared);
     if (!lone) return;
     let ax = 0, ay = 0;
     for (const b of mine) {
@@ -5237,20 +5354,71 @@ function sbPointer(ev) {
            y: (ev.clientY - r.top)  * (canvas.height / r.height) };
 }
 
-function sbHit(p) {
+function sbHit(p, frac) {
+  const f = frac == null ? 0.8 : frac;
   let best = -1, bestD = Infinity;
   sandbox.atoms.forEach((a, i) => {
     const d = Math.hypot(p.x - a.x, p.y - a.y);
-    if (d < valenceRadius(a.el) * 0.8 && d < bestD) { best = i; bestD = d; }
+    if (d < valenceRadius(a.el) * f && d < bestD) { best = i; bestD = d; }
   });
   return best;
 }
 
+// The bond itself is a handle: grab the gap between two atoms and the whole
+// molecule they belong to moves as one rigid piece, so you can rearrange a
+// finished water without pulling it apart one atom at a time.
+//
+// Bonded atoms overlap heavily — a bond is 0.72 of the two radii summed — so an
+// atom's own grab disc covers the entire bond, and testing atoms first made the
+// bond unreachable: the midpoint of water's O-H grabbed the oxygen. Each
+// nucleus therefore keeps a tight disc that wins outright, the middle of the
+// bond claims the band between them, and the atom's wide disc is the fallback.
+const SB_BOND_GRAB = 16;          // px from the segment that counts as a hit
+const SB_ATOM_NEAR = 0.45;        // of the valence radius: the nucleus's own disc
+const SB_BOND_BAND = 0.3;         // the middle 40% of the bond is the bond's
+function sbHitBond(p) {
+  const A = sandbox.atoms;
+  let best = -1, bestD = SB_BOND_GRAB;
+  sandbox.bonds.forEach((b, n) => {
+    const a1 = A[b.i], a2 = A[b.k];
+    const dx = a2.x - a1.x, dy = a2.y - a1.y, L2 = dx * dx + dy * dy;
+    if (!L2) return;
+    // Nearest point on the segment, kept off the ends so the atoms keep theirs.
+    let t = ((p.x - a1.x) * dx + (p.y - a1.y) * dy) / L2;
+    t = Math.max(SB_BOND_BAND, Math.min(1 - SB_BOND_BAND, t));
+    const d = Math.hypot(p.x - (a1.x + dx * t), p.y - (a1.y + dy * t));
+    if (d < bestD) { best = n; bestD = d; }
+  });
+  return best;
+}
+
+// What the pointer is over: at most one of an atom and a bond, by the order of
+// precedence above.
+function sbResolve(p) {
+  const near = sbHit(p, SB_ATOM_NEAR);
+  if (near >= 0) return { atom: near, bond: -1 };
+  const bond = sbHitBond(p);
+  if (bond >= 0) return { atom: -1, bond };
+  return { atom: sbHit(p), bond: -1 };
+}
+
+// The molecule a given bond sits in, as a rigid group pinned to the pointer.
+function sbGrabMolecule(bondN, p) {
+  const b = sandbox.bonds[bondN];
+  const mol = sbMolecules().find(m => m.idx.includes(b.i));
+  const idx = mol ? mol.idx : [b.i, b.k];
+  return { idx,
+    ox: idx.map(i => sandbox.atoms[i].x - p.x),
+    oy: idx.map(i => sandbox.atoms[i].y - p.y) };
+}
+
 function sbDown(ev) {
   if (!sandbox.on) return;
-  const i = sbHit(sbPointer(ev));
-  if (i < 0) return;
-  sandbox.drag = i;
+  const p = sbPointer(ev);
+  const h = sbResolve(p);
+  if (h.atom >= 0) sandbox.drag = h.atom;
+  else if (h.bond >= 0) sandbox.dragMol = sbGrabMolecule(h.bond, p);
+  else return;
   canvas.style.cursor = 'grabbing';
   ev.preventDefault();
 }
@@ -5258,21 +5426,44 @@ function sbDown(ev) {
 function sbMove(ev) {
   if (!sandbox.on) return;
   const p = sbPointer(ev);
-  if (sandbox.drag < 0) {
-    sandbox.hover = sbHit(p);
-    canvas.style.cursor = sandbox.hover >= 0 ? 'grab' : '';
+  if (sandbox.drag < 0 && !sandbox.dragMol) {
+    const h = sbResolve(p);
+    sandbox.hover = h.atom;
+    sandbox.hoverBond = h.bond;
+    canvas.style.cursor = (h.atom >= 0 || h.bond >= 0) ? 'grab' : '';
     return;
   }
-  const a = sandbox.atoms[sandbox.drag];
-  a.x = Math.max(12, Math.min(canvas.width - 12, p.x));
-  a.y = Math.max(world.top + 12, Math.min(canvas.height - 12, p.y));
+  if (sandbox.dragMol) {
+    // Rigid: the group keeps its shape, and the clamp is applied to the group
+    // as a whole so a molecule never deforms against an edge.
+    const g = sandbox.dragMol;
+    let lo = -Infinity, hi = Infinity, top = -Infinity, bot = Infinity;
+    g.idx.forEach((_, q) => {
+      lo = Math.max(lo, 12 - g.ox[q]);
+      hi = Math.min(hi, canvas.width - 12 - g.ox[q]);
+      top = Math.max(top, world.top + 12 - g.oy[q]);
+      bot = Math.min(bot, canvas.height - 12 - g.oy[q]);
+    });
+    // A molecule wider than the canvas has no legal spot, so it just follows.
+    const cx = hi >= lo ? Math.min(hi, Math.max(lo, p.x)) : p.x;
+    const cy = bot >= top ? Math.min(bot, Math.max(top, p.y)) : p.y;
+    g.idx.forEach((i, q) => {
+      sandbox.atoms[i].x = cx + g.ox[q];
+      sandbox.atoms[i].y = cy + g.oy[q];
+    });
+  } else {
+    const a = sandbox.atoms[sandbox.drag];
+    a.x = Math.max(12, Math.min(canvas.width - 12, p.x));
+    a.y = Math.max(world.top + 12, Math.min(canvas.height - 12, p.y));
+  }
   sbRebuildBonds();     // live, so the number moves with your hand
   sbUpdateReadout();
 }
 
 function sbUp() {
-  if (sandbox.drag < 0) return;
+  if (sandbox.drag < 0 && !sandbox.dragMol) return;
   sandbox.drag = -1;
+  sandbox.dragMol = null;
   canvas.style.cursor = '';
   // Settle into the real shape only once you let go: snapping mid-drag would
   // fight the hand.

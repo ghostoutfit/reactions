@@ -1911,9 +1911,14 @@ the moves the tab is for:
 
 ### Bonding
 
-**Capped by valence** — H takes one bond, O two — so the sandbox only ever makes
-real species and the total cannot be driven down by piling atoms together. A
-third H dropped on a finished water is ignored.
+**Capped by valence** — H takes one, O two — so the sandbox only ever makes real
+species and the total cannot be driven down by piling atoms together. A third H
+dropped on a finished water is ignored.
+
+The cap counts **bond order, not bonds**: an O=O is a double bond and uses up
+both of each oxygen's slots, the way it really does. So an intact O₂ is
+saturated and ignores a passing H — you have to pull it apart first, which is the
+point of the tab.
 
 **Pairs are ranked by the energy they would release, `D × (1 - work)`, not by
 how close they are.** Closeness is the wrong measure and ranking by it was a
@@ -1935,6 +1940,68 @@ and neighbours keep the side they were already on so they do not swap.
 Verified: a built H₂O lands at **104.5°** with both O–H at **49 px**, the
 natural length.
 
+### Atoms cannot be squashed
+
+Nothing here has momentum, but a pair closer than its natural length still
+pushes apart — `sbRelax()`, three sweeps a frame, each removing 70% of the
+overlap — until it sits exactly there. So shoving two atoms together does not
+pile them up: they spring back out and settle at the neutral distance, which is
+also how a dragged atom ends up bonded at the right length instead of buried in
+its partner.
+
+```javascript
+const SB_PUSH = 0.35;        // share of the overlap removed per sweep
+const SB_SETTLED = 0.05;     // px; below this the pair counts as settled
+const SB_RELAX_ITERS = 3;    // sweeps per frame
+```
+
+Whatever the pointer holds is **pinned** — the push goes entirely into the free
+end, so the hand always wins and the other atom slides away from it. Corrections
+are accumulated over a whole sweep and applied together; applying them as they
+are found let the order of the pairs decide where a crowded atom ended up.
+
+Two things it needs on top of the plain rule:
+
+- **Exactly stacked atoms** have no direction to separate along, so a pair
+  inside 0.001 px is given a random one.
+- **An atom shoved into the middle of a held molecule** gets pushes from several
+  sides that nearly cancel, and would sit there squashed indefinitely. When the
+  net is under `SB_STUCK` = 0.3 px it is ejected away from the centroid of
+  whatever is overlapping it, 2.5 px a sweep, which is always a way out.
+
+Measured: an H₂ squashed to 2 px apart is back at **43.17** of its natural 43.20
+within two frames, an O₂ at **54.83** of 54.86, and both hold there. An
+untouched scene drifts **0.00 px** over 60 frames — no jitter. Worst case, a
+water dragged by its bond straight onto a loose O: the O works its way out in
+about 25 frames and settles at 62 px, past the 54.9 natural, with the water's
+own geometry untouched (104.5°, both O–H at 49.03) and the total back at 1074.
+
+### Dragging: an atom, or a whole molecule
+
+An **atom** is a handle, and so is a **bond** — grab the gap between two atoms
+and the molecule they belong to moves as one rigid piece, so you can rearrange a
+finished water without pulling it apart one atom at a time. The group is
+translation-only and clamped as a whole, so a molecule never deforms against an
+edge. A line along the bond under the pointer says the molecule is the handle; a
+ring says the single atom is.
+
+The hit test's order of precedence took a fix. Bonded atoms **overlap heavily** —
+a bond is 0.72 of the two radii summed — so an atom's grab disc covers the entire
+bond, and testing atoms first made bonds unreachable: the midpoint of water's
+O–H grabbed the oxygen. Now each nucleus keeps a tight disc that wins outright,
+the middle 40% of the bond claims the band between them, and the atom's wide
+disc is the fallback:
+
+```javascript
+const SB_ATOM_NEAR = 0.45;   // of the valence radius: the nucleus's own disc
+const SB_BOND_BAND = 0.3;    // the middle 40% of the bond is the bond's
+const SB_BOND_GRAB = 16;     // px from that segment
+```
+
+Verified on a water: the O–H midpoint resolves to the **bond**, each nucleus to
+its own **atom**. Dragging by the bond moved all three atoms by exactly
+(−220, +140) and left the lone O alone, geometry and energy unchanged.
+
 ### Range
 
 ```javascript
@@ -1949,6 +2016,21 @@ neighbour stop counting.
 
 Scale and rendering are Reactions': same nuclei, same shells, same electron
 seating. 0.60 ms/frame with 12 atoms.
+
+### Electrons: one shared pair per unit of bond order
+
+A bond holds **two electrons per unit of order**, one of each pair from either
+atom and drawn in that atom's colour — two dots in an H–H, **four in an O=O, two
+from each oxygen**. The pairs are stepped along the bond axis so a double bond
+reads as two pairs side by side rather than four dots in a line.
+
+What is left over is lone, and the count is taken from the **order** too, not
+from the number of bonds: an electron per unit of order has gone into the gap,
+so an O in an O=O keeps four, not five. (It was five — `VALENCE − bonds.length`
+is only right for single bonds.)
+
+Counted off the renderer with 1 O₂ + 1 H₂ on screen: 18 electron dots — 4 in the
+O=O gap, 4 lone on each oxygen, 2 in the H–H, and 2 inner-shell per oxygen.
 
 ## Energy graph
 
