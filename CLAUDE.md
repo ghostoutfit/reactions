@@ -2062,6 +2062,89 @@ is only right for single bonds.)
 Counted off the renderer with 1 O₂ + 1 H₂ on screen: 18 electron dots — 4 in the
 O=O gap, 4 lone on each oxygen, 2 in the H–H, and 2 inner-shell per oxygen.
 
+## Recombination — the other half of the reaction
+
+Once the scene has come apart, the atoms find each other again and make
+**water**, which is the reaction this whole sim is pointed at: 2 H₂ + O₂ → 2 H₂O.
+Verified end to end — a default scene run through breaking and then
+recombination finished as **4 H₂O and nothing else**.
+
+**It only opens once every original molecule has come apart**, and the condition
+is `world.bodies.every(b => b.els.length === 1)`, latched the first frame it is
+true. The latch is the whole trick: forming the first OH makes the condition
+false again, and the gate must not slam behind it.
+
+Only the two steps towards water pull on each other:
+
+```
+H + O -> OH        OH + H -> H2O
+```
+
+Not H + H, not O + O — hydrogen and oxygen going back to H₂ and O₂ is the
+reaction running backwards and there is nothing to watch in it. The bonding site
+is the oxygen where there is one (in an OH it still has a slot free), otherwise
+the atom itself.
+
+### Distances are in contact widths, not bond lengths
+
+This is not a detail, and it is why the first attempt never formed anything in
+20 seconds of trying. A bond is 0.72 of the two radii summed, so **bonded atoms
+overlap** — and the collision solver treats them as hard spheres right up until
+they are one body. An O and an H touch at **68 px** and their bond is **49 px**,
+so waiting for bond length waits forever. Capture therefore happens **on
+contact**: a slow enough touch sticks instead of bouncing, and the new molecule's
+own geometry then pulls the pair in to 49.
+
+```javascript
+let recombRange   = 1.6;    // x contact width: where the pull starts
+let recombPull    = 420;    // force, px/s^2 at mass 1 — an H feels it 16x an O
+const RECOMB_SNAP = 1.03;   // x contact width: close enough to stick
+```
+
+The pull is a **constant force inside the range**, which makes the field
+conservative: whatever it puts in on the way down it takes back on the way out,
+so a near miss costs the books nothing. What it does put in while a pair is
+closing is tallied as `pullWork` and handed back at the join, or dropped when the
+pair drifts apart.
+
+**Capture needs the bond to be able to hold them**: the pair's relative kinetic
+energy must not exceed the bond's own energy. Two atoms crashing together faster
+than that do not stick in the real world either — they have nowhere to put the
+excess. Measured on a live scene, a typical approach was 53,000 against an O–H
+bond's 181,000, so ordinary encounters capture and only the hardest bounce off.
+
+### The pull comes out as spin
+
+```javascript
+spinE = KE(a) + KE(b) + released - KE(drift) - pullWork
+```
+
+Momentum fixes the drift, so the drift's share is not ours to give; everything
+else goes into the new molecule's **rotation** — which is where the approach was
+always heading, since two atoms falling together about a common centre ARE a
+rotation once something holds them at a fixed distance. The speed band then
+sells that spin for linear speed at the next collision, which is the existing
+machinery doing exactly what is wanted, so no new path out had to be invented.
+Sampled a few seconds after forming, the molecules' spins are already back at 0
+and the energy is in their translation.
+
+`makeBody` grew a **bent triatomic** for this: a three-atom chain opens to
+`H2O_ANGLE` about its middle atom instead of lying in a row, and the body-local
+origin moved from the midpoint of the row to the **centre of mass** — the same
+point for an H₂ or an O₂, so nothing that existed before moved, but not the same
+for an OH or a water, and the energy split above is about exactly that point.
+
+Fields falls and motion rises as it runs, because fields is One Bond's
+expression and forming a bond pays part of what the atoms owed: measured
+**6,000 → 2,436** over one run while the motion bar rose by the same, with the
+bar total constant at 19,158 across 34 joins and 22 breaks. A scene also reaches
+a real equilibrium — water forms, gets hit hard, comes apart, re-forms.
+
+Note the straggler problem: `breakSlow` cools the world as it breaks, so the last
+intact molecule can take a very long time to go, and until it does the gate stays
+shut. Sometimes all six break in 5 s, sometimes five break and the last holds out
+past 20 s.
+
 ## The energy bar chart
 
 Two bars down the right-hand side of the Reactions tab — **Energy of Motion**
@@ -2075,6 +2158,41 @@ split and no toggle for it. And the units are **kJ/mol**, not keV.
 The panel is 320 px and `syncWorldBox` takes that off `world.w`, so the walls
 stop at its left edge and nothing can be hidden behind it — the same rule that
 keeps the box above the energy bar.
+
+### The zero is raised, and it says so
+
+Honest bars are honestly useless here: at High a molecule carries about
+2990 kJ/mol of motion and its bond is worth 436, so breaking every bond in the
+scene moves 2740 of 20,649 — the motion bar twitches by a tenth and the story is
+lost. So **both bars are drawn from a raised zero**, and the panel prints
+`zero raised N kJ/mol — this is the change, not the total` under the title. A
+distorted axis that does not admit it is a lie; one that does is a magnifying
+glass.
+
+```javascript
+let barZeroAt    = 0.96;   // of the all-bonds-broken motion
+let fieldsZeroKJ = 0;      // the field bar reads big already
+motionZero = barZeroAt x (totalKJ - SB_FREE_ATOM x atoms)
+```
+
+The motion zero is a fraction of the motion the run would **still** have with
+every bond broken — `totalKJ` less a free atom each — which is the lowest the bar
+can go while bonds are the only thing spending. So the fraction doubles as a
+promise about what survives: at 0.96 the bar keeps 4% of that floor, and no
+composition or temperature can push it through zero. Defined off `totalKJ`, it
+needs no anchoring of its own; the temperature carries it. Both are dev sliders
+("Motion zero at", "Fields zero") because they are tuned against the picture.
+
+Measured, default scene at High:
+
+| | raw | with the raised zero |
+|---|---|---|
+| motion, start → all broken | 17,389 → 14,649 (−16%) | **3,362 → 622 (−82%)** |
+| fields, start → all broken | 3,260 → 6,000 | unchanged, it needs no help |
+| start ratio motion : fields | 5.3 : 1 | **1.03 : 1** |
+
+The shown sum stayed at **6,622 every sample** across a whole run: what is taken
+off is a constant, so the total still is.
 
 ### The exchange rate
 

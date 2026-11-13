@@ -1384,6 +1384,10 @@ const BOND_ENERGY_MAX = 498;
 // the Reactions bar chart both read in it, so it lives here with the energies
 // rather than inside any one tab.
 const SB_FREE_ATOM = 500;
+
+// Water's bend, as water actually is. Both the sandbox's snap and makeBody's
+// bent triatomic use it, so there is one angle, not two.
+const H2O_ANGLE = 104.5 * Math.PI / 180;
 function bondEnergy(elA, elB) {
   return BOND_ENERGY[[elA, elB].sort().join('-')] || 400;
 }
@@ -2347,17 +2351,44 @@ let nextBodyId = 0;
 // Build a rigid body from a list of element symbols. Atom positions are stored
 // once in body-local coordinates; world positions are derived each frame from
 // (x, y, angle), so the molecule can never stretch or come apart.
-function makeBody(els, x, y, heading, speed, spin, nominal = speed) {
+// Where a species' atoms sit, in body-local coordinates before the centre of
+// mass is taken out. A chain in a row, except for a BENT TRIATOMIC — water, the
+// one the sandbox builds and recombination makes here — whose two outer atoms
+// open to the real angle about the middle one instead of lying in a line.
+function moleculeGeometry(els) {
+  if (els.length === 3) {
+    const h = H2O_ANGLE / 2;
+    const r1 = bondLen(els[0], els[1]), r2 = bondLen(els[1], els[2]);
+    return [
+      { el: els[0], lx: Math.cos(h) * r1, ly:  Math.sin(h) * r1 },
+      { el: els[1], lx: 0,                ly:  0 },
+      { el: els[2], lx: Math.cos(h) * r2, ly: -Math.sin(h) * r2 },
+    ];
+  }
   const offs = [0];
   for (let k = 1; k < els.length; k++) offs.push(offs[k - 1] + bondLen(els[k - 1], els[k]));
-  const mid = (offs[0] + offs[offs.length - 1]) / 2;
+  return els.map((el, k) => ({ el, lx: offs[k], ly: 0 }));
+}
 
-  const atoms = els.map((el, k) => ({
-    el,
-    lx: offs[k] - mid,            // body-local, along the molecule axis
-    ly: 0,
-    r: ATOM_RADIUS * ELEMENTS[el].rScale,
-    m: ATOMIC_MASS[el] || 1,
+function makeBody(els, x, y, heading, speed, spin, nominal = speed) {
+  // Taken out about the CENTRE OF MASS, not the midpoint of the row. For an H2
+  // or an O2 they are the same point, so nothing that existed before this moves;
+  // for an OH or a water they are not, and the recombination energy below is
+  // split between drift and spin about exactly this point.
+  const geo = moleculeGeometry(els);
+  let mx = 0, my = 0, mt = 0;
+  for (const g of geo) {
+    const m = ATOMIC_MASS[g.el] || 1;
+    mx += g.lx * m; my += g.ly * m; mt += m;
+  }
+  mx /= mt || 1; my /= mt || 1;
+
+  const atoms = geo.map((g) => ({
+    el: g.el,
+    lx: g.lx - mx,
+    ly: g.ly - my,
+    r: ATOM_RADIUS * ELEMENTS[g.el].rScale,
+    m: ATOMIC_MASS[g.el] || 1,
   }));
 
   const mass = atoms.reduce((a, at) => a + at.m, 0);
@@ -2545,6 +2576,7 @@ function spawnWorld() {
   }
   spinCapHits = 0; floorTopUps = 0; energyCreated = 0; fieldsReturned = 0;
   breakCount = 0; vibPeak = 0; breakCostPaid = 0;
+  joinCount = 0; recombLatched = false;
   resetEnergyTrace();
   updateSpeciesCounters();
 }
@@ -2638,6 +2670,9 @@ function stepWorld(dt) {
   // never inside it, where splicing world.bodies would shift the loop's indices
   // out from under it and let a pair be missed or tested twice.
   stepDissociation();
+  // And the other direction: atoms that have found each other again. After the
+  // dissociation pass, for the same reason — it splices world.bodies too.
+  stepRecombination(dt);
 }
 
 // Velocity of a point on a rigid body, including its spin.
@@ -3183,6 +3218,168 @@ function breakBody(b) {
   return made;
 }
 
+// ─── Recombination ────────────────────────────────────────────────────────────
+// Atoms find each other again and make WATER, which is the reaction this whole
+// sim is pointed at: 2 H2 + O2 -> 2 H2O, and now you can watch the second half
+// of it instead of just the pulling-apart.
+//
+// IT ONLY STARTS ONCE EVERY ORIGINAL MOLECULE HAS COME APART. Until then the
+// scene is about breaking bonds, and letting a stray H latch onto an O while
+// three H2 are still intact would muddle the two halves. The condition is
+// latched the first frame it is true — forming the first OH makes it false
+// again, and the gate must not slam behind it.
+//
+// Only the two steps towards water pull on each other:
+//     H + O  -> OH          OH + H -> H2O
+// Not H + H, not O + O. Hydrogen and oxygen going back to H2 and O2 is the
+// reaction running backwards, and there is nothing to see in it.
+// DISTANCES ARE IN CONTACT WIDTHS, NOT BOND LENGTHS, and that is not a detail:
+// a bond is 0.72 of the two radii summed, so bonded atoms OVERLAP, and the
+// collision solver — which treats them as hard spheres right up until they are
+// one body — will not let them anywhere near that. An O and an H touch at 68 px
+// and their bond is 49 px, so waiting for bond length meant waiting forever.
+// Capture therefore happens ON CONTACT: a slow enough touch sticks instead of
+// bouncing, and the molecule's own geometry then pulls them to 49.
+let recombineOn   = true;     // dev toggle
+let recombRange   = 1.6;      // x contact width: where the pull starts
+let recombPull    = 420;      // force, px/s^2 x mass=1; an H feels it 16x an O
+const RECOMB_SNAP = 1.03;     // x contact width: close enough to stick
+
+// Which atom of a body is the one that would do the bonding: the oxygen if it
+// has one (it has a slot free, being in an OH), otherwise its only atom.
+function recombSite(b) {
+  const o = b.atoms.findIndex(at => at.el === 'O');
+  return o >= 0 ? o : 0;
+}
+
+// What a and b would make together, or null if they would make nothing.
+function joinEls(a, b) {
+  const n = [...a.els, ...b.els].sort().join('');
+  if (n === 'HO')  return ['O', 'H'];
+  if (n === 'HHO') return ['H', 'O', 'H'];
+  return null;
+}
+
+function siteWorldPos(b, i) {
+  const ca = Math.cos(b.angle), sa = Math.sin(b.angle), at = b.atoms[i];
+  return [b.x + at.lx * ca - at.ly * sa, b.y + at.lx * sa + at.ly * ca];
+}
+
+function bodyKE(b) {
+  return 0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy)
+       + 0.5 * b.inertia * b.spin * b.spin;
+}
+
+// THE PULL IS HANDED OVER AS SPIN.
+//
+// Momentum fixes the drift, so the drift's share of the energy is not ours to
+// give. Everything else — what the two bodies had, plus the bond's own energy,
+// less that drift — goes into the new molecule's rotation, which is exactly
+// where the approach was always heading: two atoms falling together about a
+// common centre ARE a rotation once something holds them at a fixed distance.
+//
+// The speed band then sells that spin for linear speed at the next collision,
+// which is the existing machinery doing precisely what is wanted here, so there
+// is no new path for it to leave by.
+//
+// `pullWork` is subtracted because the pull put it in: without that the sim
+// would gain the approach AND the bond energy, and the bars only grant the bond.
+function joinBodies(a, b, els) {
+  const ia = world.bodies.indexOf(a), ib = world.bodies.indexOf(b);
+  if (ia < 0 || ib < 0) return null;
+  const M = a.mass + b.mass;
+  const cvx = (a.mass * a.vx + b.mass * b.vx) / M;
+  const cvy = (a.mass * a.vy + b.mass * b.vy) / M;
+  const cx  = (a.mass * a.x  + b.mass * b.x)  / M;
+  const cy  = (a.mass * a.y  + b.mass * b.y)  / M;
+
+  const nb = withElectrons(makeBody(els, cx, cy, 0, 0, 0, speciesSpeed(els)));
+  nb.vx = cvx; nb.vy = cvy;
+  // Lie the molecule along the line the two came together on, so it appears
+  // where they are rather than snapping to some arbitrary heading.
+  const [ax, ay] = siteWorldPos(a, recombSite(a));
+  const [bx, by] = siteWorldPos(b, recombSite(b));
+  nb.angle = Math.atan2(by - ay, bx - ax);
+
+  const released = bondEnergy(a.atoms[recombSite(a)].el, b.atoms[recombSite(b)].el)
+                 / kjPerSim();
+  const keCom = 0.5 * M * (cvx * cvx + cvy * cvy);
+  const spinE = Math.max(0, bodyKE(a) + bodyKE(b) + released - keCom
+                            - (a.pullWork || 0) - (b.pullWork || 0));
+  nb.spin = (a.spin + b.spin >= 0 ? 1 : -1) * Math.sqrt(2 * spinE / nb.inertia);
+  nb.flare = Math.max(a.flare, b.flare, 1);     // it lights up as it forms
+
+  world.bodies.splice(Math.max(ia, ib), 1);
+  world.bodies.splice(Math.min(ia, ib), 1, nb);
+  joinCount++;
+  return nb;
+}
+
+let joinCount = 0;            // diagnostics: molecules put back together
+let recombLatched = false;    // every original molecule has come apart
+
+function stepRecombination(dt) {
+  if (!recombineOn) return;
+  if (!recombLatched) {
+    if (!world.bodies.length || !world.bodies.every(b => b.els.length === 1)) return;
+    recombLatched = true;
+    logAction('All atoms separated — recombination open');
+  }
+
+  const B = world.bodies;
+  for (const b of B) b.pullNear = false;
+  const joins = [];
+
+  for (let i = 0; i < B.length; i++) {
+    for (let k = i + 1; k < B.length; k++) {
+      const els = joinEls(B[i], B[k]);
+      if (!els) continue;
+      const si = recombSite(B[i]), sk = recombSite(B[k]);
+      const [x1, y1] = siteWorldPos(B[i], si);
+      const [x2, y2] = siteWorldPos(B[k], sk);
+      const touch = B[i].atoms[si].r + B[k].atoms[sk].r;
+      let dx = x2 - x1, dy = y2 - y1;
+      const d = Math.hypot(dx, dy) || 1e-6;
+      if (d > recombRange * touch) continue;
+      const ux = dx / d, uy = dy / d;
+
+      if (d <= RECOMB_SNAP * touch) {
+        // Capture only if the bond could actually hold them. Two atoms crashing
+        // together faster than the bond is worth do not stick in the real world
+        // either — they need somewhere to put the excess, and there is nowhere.
+        const mu = (B[i].mass * B[k].mass) / (B[i].mass + B[k].mass);
+        const rvx = B[k].vx - B[i].vx, rvy = B[k].vy - B[i].vy;
+        const keRel = 0.5 * mu * (rvx * rvx + rvy * rvy);
+        const bondSim = bondEnergy(B[i].atoms[si].el, B[k].atoms[sk].el) / kjPerSim();
+        if (keRel <= bondSim) { joins.push([B[i], B[k], els]); continue; }
+      }
+
+      // Otherwise pull, equal and opposite, a constant force inside the range.
+      // Constant means the field is conservative: whatever the pull puts in on
+      // the way down it takes back on the way out, so a near miss costs nothing.
+      const F = recombPull;
+      B[i].vx += ux * F / B[i].mass * dt;  B[i].vy += uy * F / B[i].mass * dt;
+      B[k].vx -= ux * F / B[k].mass * dt;  B[k].vy -= uy * F / B[k].mass * dt;
+      const w = F * Math.max(0, -( (rvDot(B[i], B[k], ux, uy)) )) * dt;
+      B[i].pullWork = (B[i].pullWork || 0) + w / 2;
+      B[k].pullWork = (B[k].pullWork || 0) + w / 2;
+      B[i].pullNear = B[k].pullNear = true;
+    }
+  }
+
+  // A pair that drifted apart again owes nothing: the force took its own work
+  // back on the way out, so the tally goes with it.
+  for (const b of B) if (!b.pullNear) b.pullWork = 0;
+
+  for (const [a, b, els] of joins) joinBodies(a, b, els);
+  if (joins.length) updateSpeciesCounters();
+}
+
+// Closing speed along the line between two bodies, negative when approaching.
+function rvDot(a, b, ux, uy) {
+  return (b.vx - a.vx) * ux + (b.vy - a.vy) * uy;
+}
+
 function stepDissociation() {
   if (!world.breaking.length) return;
   for (const b of world.breaking) breakBody(b);
@@ -3265,6 +3462,37 @@ let totalKJ = 0;
 function anchorEnergyTotal() { totalKJ = fieldsKJ() + kjPerSim() * energyOfMotion(); }
 function motionKJ() { return Math.max(0, totalKJ - fieldsKJ()); }
 
+// ─── Where the bars count from ────────────────────────────────────────────────
+// Honest bars, honestly useless: at High a molecule carries about 2990 kJ/mol of
+// motion and its bond is worth 436, so breaking every bond in the scene moves
+// 2740 of 20,649 — the motion bar twitches by a tenth and the story is lost.
+//
+// So both bars are drawn from a RAISED ZERO. This is a deliberate distortion and
+// it is labelled as one on the panel.
+//
+// The motion zero is a fraction of the motion the run would still have with
+// EVERY bond broken — `totalKJ` less a free atom each — which is the lowest the
+// bar can go while bonds are the only thing spending. So the fraction is also a
+// promise about what survives: at 0.96 the bar keeps 4% of that floor, and no
+// composition or temperature can push it through zero. Being defined off
+// `totalKJ` it needs no anchoring of its own; the temperature carries it.
+//
+// With the default scene at High that turns a 16% drop into an 82% one:
+//   motion 17,389 -> 14,649  becomes  3,326 -> 586
+//   fields  3,260 ->  6,000  unchanged, it needs no help
+// and the two bars start level instead of six to one, which is the ratio being
+// asked for. The sum of the two is still a constant, because what is taken off
+// is a constant.
+let barZeroAt   = 0.96;   // of the all-bonds-broken motion
+let fieldsZeroKJ = 0;     // kJ/mol taken off the field bar; it reads big already
+
+function worldAtomCount() {
+  return world.bodies.reduce((a, b) => a + b.els.length, 0);
+}
+function motionZeroKJ() {
+  return barZeroAt * Math.max(0, totalKJ - SB_FREE_ATOM * worldAtomCount());
+}
+
 // ─── Formula readout ──────────────────────────────────────────────────────────
 const SUBS = '\u2080\u2081\u2082\u2083\u2084\u2085\u2086\u2087\u2088\u2089';
 const sub = (n) => String(n).split('').map(d => SUBS[+d]).join('');
@@ -3274,6 +3502,9 @@ const sub = (n) => String(n).split('').map(d => SUBS[+d]).join('');
 function formulaOf(els) {
   const count = {};
   for (const e of els) count[e] = (count[e] || 0) + 1;
+  // The hydroxyl radical is written OH by everyone, though strict Hill ordering
+  // would make it HO. Water stays H2O, which Hill gets right.
+  if (els.length === 2 && count.H === 1 && count.O === 1) return 'OH';
   const rank = (e) => e === 'C' ? 0 : e === 'H' ? 1 : 2;
   return Object.keys(count)
     .sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))
@@ -3760,8 +3991,9 @@ function drawBarChart() {
   c.restore();
 
   const noData = world.bodies.length === 0;
-  const fields = noData ? 0 : fieldsKJ();
-  const motion = noData ? 0 : motionKJ();
+  const mZero  = motionZeroKJ();
+  const fields = noData ? 0 : Math.max(0, fieldsKJ() - fieldsZeroKJ);
+  const motion = noData ? 0 : Math.max(0, motionKJ() - mZero);
   const bars = [
     { label: 'Energy of Motion', value: motion,
       color: LIGHT ? '#222' : '#ff2060', glow: 'rgba(255,20,80,0.9)' },
@@ -3771,13 +4003,17 @@ function drawBarChart() {
   if (LIGHT) bars.forEach(b => { b.glow = 'rgba(0,0,0,0)'; });
 
   // Layout — fusion's, with room on the left for the kJ/mol axis
-  const yAxisW = 52, padR = 10, labelH = 46, controlH = 8, titleH = 30;
+  // titleH leaves room for the title AND the raised-zero note under it, so the
+  // chart's top gridline and its axis label start below both.
+  const yAxisW = 52, padR = 10, labelH = 46, controlH = 8, titleH = 44;
   const chartH   = H - labelH - controlH - titleH;
   const baseline = H - labelH - controlH;
   const chartTop = titleH;
   const chartX   = yAxisW;
   const chartW   = W - yAxisW - padR;
-  const maxVal   = Math.max(1, totalKJ);
+  // Full scale is what the two bars add up to, which is the run's total less
+  // the two zeros — all three being constants, the pair always fills the chart.
+  const maxVal   = Math.max(1, totalKJ - mZero - fieldsZeroKJ);
 
   // Gridlines, five of them, with the axis labelled in kJ/mol
   c.save();
@@ -3863,8 +4099,21 @@ function drawBarChart() {
   c.fillStyle   = tCol;
   c.font        = 'bold 13px Inter, system-ui, sans-serif';
   c.textAlign   = 'center';
-  c.fillText(noData ? 'No molecules' : 'Total ' + fmtKJ(totalKJ), W / 2, 19);
+  c.fillText(noData ? 'No molecules' : 'Total ' + fmtKJ(maxVal), W / 2, 17);
   c.restore();
+
+  // Say that the zero is raised, in fusion's own voice for its "not to scale"
+  // line. A distorted axis that does not admit it is a lie; one that does is a
+  // magnifying glass.
+  if (!noData && (mZero > 0.5 || fieldsZeroKJ > 0.5)) {
+    c.save();
+    c.fillStyle = LIGHT ? 'rgba(0,0,0,0.45)' : 'rgba(180,180,220,0.45)';
+    c.font      = '9px Inter, system-ui, sans-serif';
+    c.textAlign = 'center';
+    c.fillText('zero raised ' + Math.round(mZero).toLocaleString() +
+               ' kJ/mol — this is the change, not the total', W / 2, 28);
+    c.restore();
+  }
 
   c.restore();
 }
@@ -4084,6 +4333,21 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
       'Off, “fragments slow to” runs and the slowdown is dramatised.</div>' +
     '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
     '<div style="font-size:9px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.4;margin-top:8px;">' +
+      'Bar chart zero</div>' +
+    row('devBarZero', 'Motion zero at', 0, 0.99, 0.01, barZeroAt, '#00e5ff') +
+    row('devFieldsZero','Fields zero',   0, 3000, 50,  fieldsZeroKJ, '#00e5ff') +
+    '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
+    '<div style="font-size:9px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.4;margin-top:8px;">' +
+      'Recombination</div>' +
+    '<label style="display:flex;align-items:center;gap:7px;margin:9px 0 2px;cursor:pointer;">' +
+      '<input type="checkbox" id="devRecomb" style="margin:0">' +
+      '<span>Atoms recombine as water</span>' +
+    '</label>' +
+    '<div id="devRecombNote" style="opacity:0.45;font-size:10px;margin-left:21px;"></div>' +
+    row('devRecombPull', 'Pull',  0, 2000, 20,  recombPull,  '#4dff9f') +
+    row('devRecombRange','Reach', 1.2, 4, 0.1, recombRange, '#4dff9f') +
+    '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
+    '<div style="font-size:9px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.4;margin-top:8px;">' +
       'Energy in fields</div>' +
     '<label style="display:flex;justify-content:space-between;align-items:center;margin:9px 0 3px;">' +
       '<span>Colour ramp</span>' +
@@ -4168,6 +4432,28 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   bind('devColFull', v => colourFull = v, false, v => Math.round(v * 100) + '% of cap');
   bind('devVibTau', v => VIB_TAU     = v, false, v => v.toFixed(1) + ' s');
   bind('devVibGlow', v => VIB_GLOW   = v, false, v => v.toFixed(2));
+  bind('devBarZero', v => barZeroAt  = v, false,
+       v => Math.round(v * 100) + '% of the broken floor');
+  bind('devFieldsZero', v => fieldsZeroKJ = v, false, v => Math.round(v) + ' kJ/mol');
+  bind('devRecombPull', v => recombPull  = v, false, v => Math.round(v) + ' px/s²');
+  bind('devRecombRange', v => recombRange = v, false, v => v.toFixed(1) + '× natural');
+
+  // Recombination on/off, and whether it has opened yet
+  const rec = panel.querySelector('#devRecomb');
+  const recNote = panel.querySelector('#devRecombNote');
+  const syncRecNote = () => {
+    recNote.textContent = !recombineOn ? 'Atoms stay apart once broken'
+      : recombLatched ? 'Open — H + O make OH, OH + H make water'
+      : 'Waiting for every original molecule to come apart';
+  };
+  rec.checked = recombineOn;
+  syncRecNote();
+  setInterval(() => { if (panel.style.display !== 'none') syncRecNote(); }, 500);
+  rec.addEventListener('change', () => {
+    recombineOn = rec.checked;
+    syncRecNote();
+    logAction('Recombination ' + (recombineOn ? 'on' : 'off'));
+  });
   bind('devBreakSlow', v => breakSlow = v, false,
        v => v.toFixed(2) + '\u00d7 (' + (v * Math.SQRT2).toFixed(2) + '\u00d7 parent)');
   bind('devBreakK', v => breakKick     = v, false, v => v.toFixed(2) + '\u00d7');
@@ -5380,7 +5666,8 @@ const SB_RANGE = 0.5;
 function sbWork(r, r0)    { return bondWorkFraction(r0 + (r - r0) / SB_RANGE, r0); }
 function sbContact(r, r0) { return bondContact(r0 + (r - r0) / SB_RANGE, r0); }
 
-const H2O_ANGLE = 104.5 * Math.PI / 180;   // the bend, as water actually is
+// H2O_ANGLE is declared up with the bond energies: makeBody needs it to build a
+// water in the world, so it cannot live down here in the sandbox.
 
 const sandbox = {
   on: false,
