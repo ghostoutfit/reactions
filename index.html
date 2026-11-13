@@ -155,6 +155,12 @@
     flex-wrap: wrap;
   }
 
+  /* Every tab's control row sits 20px below the tab bar. The boxes carry their
+     labels above their own top edge, so without this the label rides up into
+     the tab bar's band and collides with the tabs. The same offset on all
+     three rows keeps the boxes at one height whichever tab you are on. */
+  #reactionsControls, #bondControls, #sandboxControls { margin-top: 20px; }
+
   /* ── Buttons ───────────────────────────────────────────────────────────── */
   .btn {
     padding: 4px 14px;
@@ -177,6 +183,27 @@
     color: rgba(255,255,255,0.38);
     border-color: rgba(255,255,255,0.12);
   }
+
+  /* Sandbox ADD buttons: a picture of the molecule with its formula under it.
+     The canvas is drawn at 164x104 and shown at half that, so it is a 2x asset
+     on any display. Both buttons get the same box whatever is in it, so neither
+     one shifts when the other is hovered. */
+  .btn.sb-add {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+    width: 86px;
+    padding: 3px 0 4px;
+    line-height: 1;
+  }
+  .btn.sb-add .sb-thumb {
+    width: 82px;
+    height: 52px;
+    display: block;
+    pointer-events: none;     /* the button takes the click, not the canvas */
+  }
+  .btn.sb-add span { font-size: 10px; letter-spacing: 1px; }
 
   /* Go idle (▶) — accent2 themed */
   #goBtn {
@@ -708,8 +735,10 @@
 <div id="toolbar">
   <div class="toolbar-row">
     <div id="tabBar">
-      <button class="tab-btn" data-tab="reactions">Reactions</button>
+      <!-- In the order the sim is meant to be read: one bond on its own, then
+           bonds breaking in a crowd, then build your own. -->
       <button class="tab-btn active" data-tab="bond">One Bond</button>
+      <button class="tab-btn" data-tab="reactions">Reactions</button>
       <button class="tab-btn" data-tab="sandbox">Sandbox</button>
     </div>
     <div style="display:flex;align-items:center;gap:6px;margin-left:auto;">
@@ -837,10 +866,16 @@
        screen, so there was nothing to click. -->
   <div class="toolbar-row" id="sandboxControls" style="display:none;">
     <div class="ctrl-box-pink" style="align-items:stretch;">
-      <span class="ctrl-box-label ctrl-box-label-pink">ADD</span>
-      <div style="display:flex;gap:6px;align-items:center;padding:8px 0;">
-        <button id="sbAddH2" class="btn">H&#8322;</button>
-        <button id="sbAddO2" class="btn">O&#8322;</button>
+      <!-- Each button is a picture of the molecule it places, drawn into its
+           canvas by the scene's own renderer (see sbThumb). The canvas is the
+           label, so the box needs no heading. -->
+      <div style="display:flex;gap:6px;align-items:center;padding:6px 0;">
+        <button id="sbAddH2" class="btn sb-add" title="Add an H2">
+          <canvas class="sb-thumb"></canvas><span>H&#8322;</span>
+        </button>
+        <button id="sbAddO2" class="btn sb-add" title="Add an O2">
+          <canvas class="sb-thumb"></canvas><span>O&#8322;</span>
+        </button>
       </div>
       <div style="display:flex;flex-direction:column;gap:5px;justify-content:center;padding:8px 0;min-width:120px;">
         <span style="font-size:9px;letter-spacing:0.07em;text-transform:uppercase;opacity:0.5;">In the scene</span>
@@ -5240,7 +5275,7 @@ function drawSandbox() {
   for (const p of A) drawShellBands(ctx, p.x, p.y, p.el, valenceRadius(p.el),
                                     ELEMENTS[p.el].rgb, worldNucleusR(p.el));
   for (const p of A) drawInnerElectrons(ctx, p);
-  sbDrawValenceElectrons();
+  sbDrawValenceElectrons(ctx, A, sandbox.bonds);
   for (const p of A) drawNucleons(ctx, p.x, p.y, p.el, shellWobble, WORLD_NUCLEON_R);
 
   // A line along the bond under the pointer says the whole molecule is the
@@ -5276,16 +5311,15 @@ function drawSandbox() {
 // Valence electrons: the bonding ones seated in each bond's gap, the rest
 // fanned on the far side from whatever the atom is bonded to — the same two
 // rules the Reactions shells view follows.
-function sbDrawValenceElectrons() {
-  const A = sandbox.atoms;
+function sbDrawValenceElectrons(c, A, bonds) {
   const bondsOf = A.map(() => []);
-  for (const b of sandbox.bonds) { bondsOf[b.i].push(b); bondsOf[b.k].push(b); }
+  for (const b of bonds) { bondsOf[b.i].push(b); bondsOf[b.k].push(b); }
 
   // One shared PAIR per unit of bond order, each pair one electron from either
   // atom in that atom's colour: two dots in an H-H, four in an O=O — two from
   // each oxygen. The pairs are stepped along the bond axis so a double bond
   // reads as two pairs side by side rather than four dots in a line.
-  for (const b of sandbox.bonds) {
+  for (const b of bonds) {
     const pi = A[b.i], pk = A[b.k];
     const mx = (pi.x + pk.x) / 2, my = (pi.y + pk.y) / 2;
     const dx = pk.x - pi.x, dy = pk.y - pi.y, L = Math.hypot(dx, dy) || 1;
@@ -5298,7 +5332,7 @@ function sbDrawValenceElectrons() {
       for (let q = 0; q < 2; q++) {
         const off = spread * (q ? 1 : -1);
         const [wx, wy] = shellWobbleAt(b.i * 3.3 + b.k * 1.7 + pr * 5.9 + q * 2.1, spread);
-        drawElectronDot(ctx, mx + ux * along + px * off + wx,
+        drawElectronDot(c, mx + ux * along + px * off + wx,
                              my + uy * along + py * off + wy,
                         ELEMENTS[q ? pk.el : pi.el].rgb, false, SHELL_DOT_R);
       }
@@ -5325,10 +5359,52 @@ function sbDrawValenceElectrons() {
         ? facing + (lone === 1 ? 0 : (q / (lone - 1) - 0.5) * arc)
         : facing + q * Math.PI * 2 * 0.6180339887498949;
       const [wx, wy] = shellWobbleAt(ang * 3.1 + i, r);
-      drawElectronDot(ctx, p.x + Math.cos(ang) * r + wx, p.y + Math.sin(ang) * r + wy,
+      drawElectronDot(c, p.x + Math.cos(ang) * r + wx, p.y + Math.sin(ang) * r + wy,
                       ELEMENTS[p.el].rgb, false, SHELL_DOT_R);
     }
   });
+}
+
+// ── The ADD buttons' pictures ───────────────────────────────────────────────
+// Each button carries a picture of the molecule it places, drawn by the same
+// renderer the scene uses — field lobe, real nucleus, shells and electrons —
+// rather than a drawing of its own, so the button and the thing it makes cannot
+// drift apart. An O2 at rest is 131 px wide including both halos, so the
+// thumbnail is drawn 1:1 into a box that size and shown at half, which gives it
+// the crispness of a 2x asset for free.
+const SB_THUMB_W = 164, SB_THUMB_H = 104, SB_THUMB_SHRINK = 0.8;
+function sbThumb(cv, els) {
+  cv.width = SB_THUMB_W; cv.height = SB_THUMB_H;
+  const c = cv.getContext('2d');
+  const r0 = bondLen(els[0], els[1]);
+  const cx = SB_THUMB_W / 2, cy = SB_THUMB_H / 2;
+  const A = [{ el: els[0], x: cx - r0 / 2, y: cy },
+             { el: els[1], x: cx + r0 / 2, y: cy }];
+  const bonds = [{ i: 0, k: 1, r0, D: bondEnergy(els[0], els[1]),
+                   order: bondOrder(els[0], els[1]),
+                   work: 0, contact: sbContact(r0, r0) }];
+  // An O2 and both its halos just fill the box, so everything is drawn a little
+  // under size about the centre and the glow has room to fall off instead of
+  // being cut at the edge. The field is drawn with drawImage, so it follows
+  // this transform along with the atoms.
+  const k = SB_THUMB_SHRINK;
+  c.setTransform(k, 0, 0, k, (1 - k) * SB_THUMB_W / 2, (1 - k) * SB_THUMB_H / 2);
+
+  // The scene's own lobe for a bond at rest: work 0, so the floor of the ramp.
+  const b = bonds[0];
+  drawFieldHeatmap(c, [{
+    x1: A[0].x, y1: A[0].y, x2: A[1].x, y2: A[1].y,
+    mag: b.D / BOND_ENERGY_MAX * BOND_FIELD_FLOOR * b.contact
+         * BOND_FIELD_GAIN * BOND_FIELD_BOOST,
+    squeeze: BOND_FIELD_SQUEEZE, load: 0,
+  }], SB_THUMB_W, SB_THUMB_H,
+    { width: BOND_FIELD_WIDTH, gain: BOND_FIELD_GAIN, colormap: BOND_COLORMAP });
+
+  for (const p of A) drawShellBands(c, p.x, p.y, p.el, valenceRadius(p.el),
+                                    ELEMENTS[p.el].rgb, worldNucleusR(p.el));
+  for (const p of A) drawInnerElectrons(c, p);
+  sbDrawValenceElectrons(c, A, bonds);
+  for (const p of A) drawNucleons(c, p.x, p.y, p.el, 0, WORLD_NUCLEON_R);
 }
 
 // ── Placing, dragging, reading out ──────────────────────────────────────────
@@ -5518,6 +5594,13 @@ document.getElementById('sbClear').addEventListener('click', () => {
 })();
 
 setViewModeActive(document.querySelector('.awheel-item[data-view="shells"]'));
+
+// The ADD buttons' pictures, painted once. They have to come after the quality
+// tier is picked: the field buffer's resolution is read from it, and the
+// heatmap resizes that shared buffer to whatever box it is handed, so this also
+// has to happen before the world loop starts rather than between its frames.
+sbThumb(document.querySelector('#sbAddH2 .sb-thumb'), ['H', 'H']);
+sbThumb(document.querySelector('#sbAddO2 .sb-thumb'), ['O', 'O']);
 // The sim opens on One Bond. It is the one that explains what a bond IS, and
 // the Reactions tab is easier to read once you have pulled one apart by hand.
 // applyTab does the whole switch — rows, energy bar, world box — so there is

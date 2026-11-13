@@ -1391,10 +1391,17 @@ bond *is*, and a world full of them is easier to read once you have pulled one
 apart by hand. `applyTab('bond')` runs at init rather than a second copy of
 that state being written into the markup, so there is one path into it.
 
-A second tab, using fission's tab bar unchanged — same shape, same glow, where
-it used to carry a "Temperature" tab beside the main one. `applyTab` swaps which
+Using fission's tab bar unchanged — same shape, same glow, where it used to
+carry a "Temperature" tab beside the main one. `applyTab` swaps which
 `toolbar-row` is shown and sets `bondTab.on`; the world loop returns early and
 calls `drawBondTab()` instead, so no physics runs and no electrons step.
+
+The bar reads in the order the sim is meant to be taken: **One Bond, Reactions,
+Sandbox** — one bond on its own, then bonds breaking in a crowd, then build your
+own. Every tab's control row carries `margin-top: 20px`, because the boxes hang
+their labels above their own top edge and without it the label rides up into the
+tab bar's band; the same offset on all three keeps the boxes at one height
+whichever tab you are on.
 
 One bond, big, with nothing else on screen. A dropdown picks **H–H, O–O or
 O–H**; drag either nucleus and **both** move, symmetrically about the centre, so
@@ -2017,6 +2024,29 @@ neighbour stop counting.
 Scale and rendering are Reactions': same nuclei, same shells, same electron
 seating. 0.60 ms/frame with 12 atoms.
 
+### The ADD buttons are pictures
+
+Each button carries a **picture of the molecule it places**, drawn by `sbThumb()`
+through the scene's own renderer — field lobe, real nucleus, shells, electrons —
+so the button and the thing it makes cannot drift apart. The box needs no
+heading once the pictures are there, so the **ADD** label is gone.
+
+An O₂ at rest is 131 px wide including both halos, so the thumbnail is drawn
+1:1 into a 164×104 box and shown at 82×52: a 2× asset for free. Everything is
+drawn at `SB_THUMB_SHRINK` = 0.8 about the centre, because at full size the
+halo was cut off at the edge instead of falling away. The field is blitted with
+`drawImage`, so it follows that transform along with the atoms.
+
+Two things it has to be sequenced around: the field buffer's resolution comes
+from the quality tier, so the thumbnails are painted **after** the startup
+benchmark; and the heatmap resizes that one shared buffer to whatever box it is
+handed, so they are painted **before** the world loop starts rather than
+between its frames.
+
+`sbDrawValenceElectrons(c, A, bonds)` takes its context and arrays as arguments
+for this — it used to read the sandbox's own globals, and the thumbnails are not
+the sandbox.
+
 ### Electrons: one shared pair per unit of bond order
 
 A bond holds **two electrons per unit of order**, one of each pair from either
@@ -2099,9 +2129,10 @@ Dormant, kept because the next round of work wants it. None of it is live:
 `origin` is **`github.com/ghostoutfit/reactions`**. (The fission remote was
 removed when this repo was copied, so nothing here can reach fission.)
 
-GitHub Pages is **not enabled** on that repo — the API 404s — so there is no
-`ghostoutfit.github.io/reactions/` URL yet. Open `index.html` locally, or serve
-the directory, until it is switched on.
+GitHub Pages **is** enabled — legacy build from `main` at `/`, status `built` —
+so a push publishes to **https://ghostoutfit.github.io/reactions/**. Check it
+with `gh api repos/ghostoutfit/reactions/pages` rather than assuming; this file
+said it was off for a while after it had been switched on.
 
 This sim is deliberately **not** on the SSP site. It was briefly built to
 `sim.ssp.org/reactions/` and that was removed: reactions lives only in
