@@ -2062,6 +2062,98 @@ is only right for single bonds.)
 Counted off the renderer with 1 O₂ + 1 H₂ on screen: 18 electron dots — 4 in the
 O=O gap, 4 lone on each oxygen, 2 in the H–H, and 2 inner-shell per oxygen.
 
+## The energy bar chart
+
+Two bars down the right-hand side of the Reactions tab — **Energy of Motion**
+and **Energy in Fields** — ported from fusion's panel: same dark panel, same
+left-edge glow, same dim fill under a glow under a crisp neon outline, dashed on
+the field bar, labels in two lines below the baseline. What changed is the
+contents: **two bars, never three.** Fusion could split its field bar into
+Electric and Nuclear; a bond's field is one thing, so there is nothing here to
+split and no toggle for it. And the units are **kJ/mol**, not keV.
+
+The panel is 320 px and `syncWorldBox` takes that off `world.w`, so the walls
+stop at its left edge and nothing can be hidden behind it — the same rule that
+keeps the box above the energy bar.
+
+### The exchange rate
+
+Sim units are pixels and masses where H = 1; One Bond's scale is kJ/mol. They are
+pinned together at the one place they actually touch: **a collision that just
+breaks a bond has, by definition, delivered exactly that bond's dissociation
+energy.**
+
+```javascript
+D = kJperSim x breakEnergy x (D / BOND_ENERGY_MAX) x doseUnit()
+  =>  kJperSim = BOND_ENERGY_MAX / (breakEnergy x doseUnit())      // = 0.00256
+```
+
+D cancels, which it has to — otherwise an O=O and an H–H would disagree about
+what a kJ is. `launchSpeed()` carries no temperature, so `doseUnit()` and this
+rate are both constants: changing the temperature moves energy about, never the
+exchange rate.
+
+Verified by loading one bond to its break threshold and reading the total:
+
+| scene | at rest | half loaded | at the threshold |
+|---|---|---|---|
+| one H₂ | 564 | 782 | **1000** |
+| one O₂ | 502 | — | **1000** |
+
+1000 is two free atoms, so a bond loaded to breaking has had its whole
+dissociation energy put in — for both pairs, off one rate.
+
+### Fields is One Bond's number, exactly
+
+```javascript
+fields = SB_FREE_ATOM x atoms  -  sum over bonds of D  +  stored
+```
+
+Every atom carries 500 on its own and each bond discounts its dissociation
+energy by what it is still owed, so **breaking a bond makes fields go UP** — the
+remainder gets paid. Cross-checked against One Bond: a lone H₂ reads **564**, a
+lone O₂ **502**, the default scene (4 H₂ + 2 O₂) **3260**, all exact.
+
+### The total is a constant, and motion is the remainder
+
+`totalKJ` is anchored once per spawn at `fields + kJperSim x energyOfMotion()`,
+and moves only when the temperature buttons genuinely put energy in or take it
+out (`stepTemperature` adds `kJperSim x ΔKE`). `motionKJ()` is then
+`totalKJ - fieldsKJ()`. So for a given collection of molecules at a given
+starting speed the two bars always add to the same number. Measured over a run
+at High: the sum sat at **20,649 every sample** while fields climbed 3260 → 5565
+across five breaks; held constant again at 16,683 after switching to Low, and
+tracked back up on the way to High.
+
+**Motion is derived rather than measured, and that is the trade-off to know
+about.** Measured, it does not balance, because two things in the sim are
+deliberately not energy accounting:
+
+| | measured | what the bars say |
+|---|---|---|
+| dissociation, 5 breaks | 11,626 kJ/mol spent | 2,180 (5 bonds' worth) |
+| speed band floor top-ups | +1,743 kJ/mol from nowhere | not counted |
+
+`breakSlow` drops a fragment to a quarter of its speed — about 94% of its
+energy, where the bond it lost was worth 436 of the ~2990 kJ/mol an H₂ carries
+at High. That dramatisation was asked for and the molecules on screen still do
+it; what it is not is accounting. So **after bonds start breaking the molecules
+hold less energy than the motion bar says.**
+
+`exactBreakCost` (dev panel, "Dissociation costs exactly D") is the switch that
+makes them agree: the fragments keep their inherited velocities, the collision's
+over-delivery `(vib - threshold)` comes straight back out as motion, and only
+the velocities *relative* to the pair's centre of mass are scaled to land on the
+figure — scaling the whole velocities would undo the momentum the collision just
+settled. It also has to pin each fragment's `vTarget` to the speed it actually
+leaves with: left at its species' nominal, the speed band treats every free atom
+as under-speed and tops it up, measured at **28,000 kJ/mol across one run** —
+worse than the dramatisation the mode exists to remove.
+
+With it on, measured motion came within **28%** of the bar (10,645 vs 14,789)
+against **84%** off; the rest is the speed band. **Default off** — it halves the
+visible slowdown, which was tuned on purpose.
+
 ## Energy graph
 
 **Hidden by default** — SHOW LINE GRAPH on the energy bar brings it back,

@@ -931,6 +931,14 @@
   </div>
 </div>
 
+<!-- Energy bar chart. Fusion's panel, ported: same dark panel, same left-edge
+     glow, same neon bars with a dashed outline on the field one. It sits over
+     the right-hand strip of the canvas, which the world box is narrowed to
+     leave empty, so nothing can be hidden behind it. Reactions tab only.
+     pointer-events:none — it is a readout, there is nothing to click. -->
+<div id="barPanel" style="position:fixed;right:0;z-index:20;overflow:hidden;pointer-events:none;display:none;">
+  <canvas id="barChartCanvas"></canvas>
+</div>
 
 <!-- Bug report modal -->
 <div id="bugModal" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(2,1,12,0.85);backdrop-filter:blur(6px);align-items:center;justify-content:center;">
@@ -1001,6 +1009,12 @@ const canvas   = document.getElementById('canvas');
 const ctx      = canvas.getContext('2d');
 const graphCanvas = document.getElementById('energyGraph');
 const graphCtx    = graphCanvas.getContext('2d');
+// The energy bar chart's own canvas, over the right-hand strip. Declared here
+// with the other canvases because `syncWorldBox` measures the panel's width
+// when it places the walls, and that runs long before the drawing code.
+const BAR_PANEL_W = 320;
+const barChartCanvas = document.getElementById('barChartCanvas');
+const barCtx         = barChartCanvas.getContext('2d');
 
 // ─── Field heatmap buffers ────────────────────────────────────────────────────
 // The field is accumulated as floats at low resolution, then colour-mapped once
@@ -1364,6 +1378,12 @@ setFieldRamp(fieldRamp);
 // impact is strong enough to pull apart.
 const BOND_ENERGY = { 'H-H': 436, 'H-O': 463, 'O-O': 498 };
 const BOND_ENERGY_MAX = 498;
+
+// What a free atom carries on its own, kJ/mol, so that a pair fully apart reads
+// 1000 and a bonded one reads 1000 - D. One Bond set this scale; the Sandbox and
+// the Reactions bar chart both read in it, so it lives here with the energies
+// rather than inside any one tab.
+const SB_FREE_ATOM = 500;
 function bondEnergy(elA, elB) {
   return BOND_ENERGY[[elA, elB].sort().join('-')] || 400;
 }
@@ -2312,8 +2332,13 @@ function syncWorldBox() {
   const sbH  = sbEl.classList.contains('visible') ? sbEl.offsetHeight : 0;
   const oldW = world.w, oldH = world.h;
   world.top = tbH;
-  world.w   = canvas.width;
+  // The bar chart owns the right-hand strip on the Reactions tab, so the walls
+  // stop short of it. Same reason the box stops above the energy bar: a
+  // molecule must never be behind an opaque panel looking like it vanished.
+  const barsW = (!bondTab.on && !sandbox.on) ? BAR_PANEL_W : 0;
+  world.w   = Math.max(200, canvas.width - barsW);
   world.h   = Math.max(120, canvas.height - tbH - sbH);
+  syncBarPanel();
   return { oldW, oldH };
 }
 
@@ -2439,7 +2464,12 @@ function stepTemperature(rawDt) {
   if (Math.abs(tempTarget - tempCurrent) < 1e-4) { tempCurrent = tempTarget; return; }
   const next = tempCurrent + (tempTarget - tempCurrent) * (1 - Math.exp(-rawDt / TEMP_TAU));
   const k = next / tempCurrent;
+  // Turning the temperature up puts energy into the world from outside the
+  // physics, so the bar chart's total has to follow it. This is the only thing
+  // that moves that total between spawns.
+  const before = energyOfMotion();
   for (const b of world.bodies) { b.vx *= k; b.vy *= k; b.spin *= k; b.vTarget *= k; }
+  totalKJ += kjPerSim() * (energyOfMotion() - before);
   tempCurrent = next;
 }
 
@@ -3034,6 +3064,69 @@ function queueIfBroken(b, energy) {
   b.vibN = 1;
 }
 
+// DISSOCIATION COSTS EXACTLY WHAT THE BOND WAS WORTH.
+//
+// The bar chart reads energy in kJ/mol and its total is a constant, so the
+// fragments have to leave with precisely the energy the books say. In sim units
+// the bond needs `breakThreshold(b)` doses — that is what one dissociation
+// energy IS on this scale, see kjPerSim() — and the collision that triggered the
+// break has already handed over `b.vib`, which is at or past that. So:
+//
+//     fragments carry = the molecule's energy + (what was handed over - what the
+//                       bond needed)
+//
+// i.e. the over-delivery comes straight back out as motion, and the net loss is
+// one dissociation energy, no more.
+//
+// The fragments are built with their inherited velocities and the outward kick,
+// then only the velocities RELATIVE to the pair's centre of mass are scaled to
+// land on that figure. Scaling the whole velocities instead would change the
+// pair's momentum, which the collision already settled.
+//
+// OFF BY DEFAULT, and that is a decision, not an oversight. `breakSlow` runs
+// instead: fragments drop to a quarter of their speed, which at High is about
+// six times what the bond was worth. That dramatisation was asked for — the
+// slowdown has to be unmissable on screen — and it is why the molecules hold
+// LESS energy than the bar chart says they do once bonds start going. The bars
+// are the accounting and stay exact either way; this switch is what makes the
+// molecules agree with them, at the price of a much gentler slowdown.
+//
+// The speed band is the other half of that gap: it tops slow fragments back up
+// to their species' nominal speed, which is energy from nowhere (counted in
+// `energyCreated`). Turning this on without turning the band off closes most of
+// the gap but not all of it.
+let exactBreakCost = false;   // dev panel: "Dissociation costs exactly D"
+
+function payExactBreakCost(b, made) {
+  const keBefore = 0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy)
+                 + 0.5 * b.inertia * b.spin * b.spin;
+  const over   = Math.max(0, b.vib - breakThreshold(b)) * doseUnit();
+  const target = Math.max(0, keBefore + over);
+
+  const M = made.reduce((a, f) => a + f.mass, 0) || 1;
+  const cvx = made.reduce((a, f) => a + f.mass * f.vx, 0) / M;
+  const cvy = made.reduce((a, f) => a + f.mass * f.vy, 0) / M;
+  const keCom = 0.5 * M * (cvx * cvx + cvy * cvy);
+  const keRel = made.reduce((a, f) =>
+    a + 0.5 * f.mass * ((f.vx - cvx) ** 2 + (f.vy - cvy) ** 2), 0);
+
+  if (target >= keCom && keRel > 1e-9) {
+    // Normal case: the drift is left alone and the fly-apart carries the rest.
+    const s = Math.sqrt((target - keCom) / keRel);
+    for (const f of made) {
+      f.vx = cvx + (f.vx - cvx) * s;
+      f.vy = cvy + (f.vy - cvy) * s;
+    }
+  } else {
+    // The bond cost more than the pair's drift is worth, so the drift has to
+    // pay as well: scale everything, momentum included. Rare, and the only way
+    // to keep the total honest when a slow molecule loses a strong bond.
+    const keNow = keCom + keRel;
+    const s = keNow > 1e-9 ? Math.sqrt(Math.max(0, target) / keNow) : 0;
+    for (const f of made) { f.vx *= s; f.vy *= s; }
+  }
+}
+
 // Replace one body with one free atom per atom it had. Each fragment keeps the
 // velocity that its own atom actually had at that instant — the body's velocity
 // plus the spin's contribution at that offset — so a molecule that was spinning
@@ -3042,6 +3135,9 @@ function breakBody(b) {
   const idx = world.bodies.indexOf(b);
   if (idx < 0) return [];
   const ca = Math.cos(b.angle), sa = Math.sin(b.angle);
+  // With exactBreakCost on, the fragments are not slowed by a tuned factor;
+  // they are slowed by exactly what the bond cost, below.
+  const slow = exactBreakCost ? 1 : breakSlow;
 
   // Outward unit vector per atom, from the molecule's centre: the direction the
   // bond was holding it in against.
@@ -3053,17 +3149,27 @@ function breakBody(b) {
     // what the speed band will hold it at from now on; the scaling is what
     // makes the drop happen at the instant the bond goes rather than over the
     // next few collisions.
-    const nominal = speciesSpeed([at.el]) * breakSlow;
+    const nominal = speciesSpeed([at.el]) * slow;
     const kick = breakKick * nominal;
 
     const f = withElectrons(makeBody([at.el], b.x + rx, b.y + ry, 0, 0, 0, nominal));
-    f.vx = vx * breakSlow + kick * rx / len;
-    f.vy = vy * breakSlow + kick * ry / len;
+    f.vx = vx * slow + kick * rx / len;
+    f.vy = vy * slow + kick * ry / len;
     f.spin = 0;                 // a lone atom has nothing to spin about
     f.flare = b.flare;
     f.fromBreak = true;
     return f;
   });
+
+  if (exactBreakCost) {
+    payExactBreakCost(b, made);
+    // And the band must hold each fragment at the speed it actually leaves
+    // with. Left at its species' nominal, the band treats every free atom as
+    // under-speed and tops it up out of nowhere — measured at 28,000 kJ/mol
+    // across one run, which is worse than the dramatisation this mode exists
+    // to remove.
+    for (const f of made) f.vTarget = Math.hypot(f.vx, f.vy);
+  }
 
   // What the dissociation took out of the world, counted the way the speed
   // band's invention and the vibration leak are.
@@ -3102,6 +3208,62 @@ function energyOfMotion() {
     a + 0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy)
       + 0.5 * b.inertia * b.spin * b.spin, 0);
 }
+
+// ─── The kJ/mol scale ─────────────────────────────────────────────────────────
+// Everything above is in sim units — pixels, masses where H = 1. The bar chart
+// reads in kJ/mol, One Bond's scale, and the conversion is pinned at the one
+// place where the two scales actually touch:
+//
+//   A collision that JUST breaks a bond has, by definition, delivered exactly
+//   that bond's dissociation energy. `breakThreshold(b)` dose units <-> D kJ/mol.
+//
+// The threshold is itself `breakEnergy x D / BOND_ENERGY_MAX`, so D cancels and
+// a single rate serves every pair — which it has to, or an O=O and an H-H would
+// disagree about what a kJ is:
+//
+//   D = kJ x breakEnergy x (D / BOND_ENERGY_MAX) x doseUnit()
+//   =>  kJ per sim unit = BOND_ENERGY_MAX / (breakEnergy x doseUnit())
+//
+// `doseUnit()` is a nominal H2's kinetic energy at temperature 1 and
+// `launchSpeed()` carries no temperature, so this rate is a constant: changing
+// the temperature moves the energy, never the exchange rate.
+function kjPerSim() { return BOND_ENERGY_MAX / (breakEnergy * doseUnit()); }
+
+// Energy in fields, in kJ/mol, by One Bond's reckoning exactly: every atom
+// carries SB_FREE_ATOM on its own, and each bond discounts its dissociation
+// energy by however much of it the bond is still owed. A bond at rest owes all
+// of D; one holding collision energy owes less, because that energy has already
+// been put in; breaking it pays the remainder, which is why fields RISES when a
+// molecule comes apart.
+function fieldsKJ() {
+  let e = 0, stored = 0;
+  for (const b of world.bodies) {
+    e += b.els.length * SB_FREE_ATOM;
+    for (const [i, k] of b.bonds) e -= bondEnergy(b.atoms[i].el, b.atoms[k].el);
+    stored += b.vib;
+  }
+  return e + stored * doseUnit() * kjPerSim();
+}
+
+// THE TOTAL IS A CONSTANT, and motion is read off it as the remainder.
+//
+// It is anchored once per spawn from what the world actually has — the atoms it
+// was given and the speed they were given — and moved only when energy is
+// genuinely put in or taken out from outside the physics, which here means the
+// temperature buttons. So for a given collection of molecules at a given
+// starting speed the two bars always add up to the same number, which is the
+// whole point of showing them side by side.
+//
+// Motion is the derived one rather than the measured one on purpose. Measured,
+// it does not balance: `breakSlow` drops a fragment to a quarter of its speed —
+// about 94% of its kinetic energy — where the bond it just lost was only worth
+// 436 of the ~2990 kJ/mol an H2 carries at High. That dramatisation was asked
+// for and is still exactly what the molecules on screen do; what it is not is
+// energy accounting, and the bars are the accounting. Measured motion also
+// carries the speed band's floor top-ups, which are energy from nowhere.
+let totalKJ = 0;
+function anchorEnergyTotal() { totalKJ = fieldsKJ() + kjPerSim() * energyOfMotion(); }
+function motionKJ() { return Math.max(0, totalKJ - fieldsKJ()); }
 
 // ─── Formula readout ──────────────────────────────────────────────────────────
 const SUBS = '\u2080\u2081\u2082\u2083\u2084\u2085\u2086\u2087\u2088\u2089';
@@ -3470,6 +3632,7 @@ function worldLoop(now) {
   shellPhase  += shellSpin * dt;
   shellWobble += dt;
   drawWorld();
+  drawBarChart();
 }
 
 function startWorldLoop() {
@@ -3496,6 +3659,7 @@ let energyAtSpawn   = 1;           // energy at spawn, the 100% line
 function resetEnergyTrace() {
   energyTrace = [];
   energyAtSpawn = Math.max(1e-6, energyOfMotion());
+  anchorEnergyTotal();
 }
 
 function sampleEnergy() {
@@ -3564,6 +3728,163 @@ function drawEnergyGraph() {
     stroke('motion', motionCol, motionGlow, 3, 10, 0.55);
     stroke('motion', motionCol, motionGlow, 1.5, 0, 1.0);
   }
+}
+
+// ─── Energy bar chart ─────────────────────────────────────────────────────────
+// Fusion's panel, with its UI kept and its contents changed: two bars, never
+// three, because there is nothing here to split "energy in fields" into — a
+// bond's field is one thing. Units are kJ/mol, One Bond's scale, not keV.
+//
+// Full scale is the run's own total, so the two bars always fill the chart
+// between them and you read one going up as the other comes down.
+function fmtKJ(v) { return Math.round(v) + ' kJ/mol'; }
+
+function drawBarChart() {
+  const c = barCtx;
+  const W = BAR_PANEL_W, H = barChartCanvas.height;
+  if (H < 2) return;
+  c.clearRect(0, 0, W, H);
+  const LIGHT = document.body.classList.contains('screenshot-mode');
+
+  c.save();
+  c.fillStyle = LIGHT ? 'rgba(255,255,255,0.96)' : 'rgba(4,3,20,0.88)';
+  c.fillRect(0, 0, W, H);
+
+  // Left border glow
+  c.save();
+  c.shadowColor = LIGHT ? 'rgba(0,0,0,0)' : 'rgba(0,200,255,0.4)';
+  c.shadowBlur  = LIGHT ? 0 : 12;
+  c.strokeStyle = LIGHT ? 'rgba(0,0,0,0.20)' : 'rgba(0,180,255,0.25)';
+  c.lineWidth   = 1;
+  c.beginPath(); c.moveTo(0, 0); c.lineTo(0, H); c.stroke();
+  c.restore();
+
+  const noData = world.bodies.length === 0;
+  const fields = noData ? 0 : fieldsKJ();
+  const motion = noData ? 0 : motionKJ();
+  const bars = [
+    { label: 'Energy of Motion', value: motion,
+      color: LIGHT ? '#222' : '#ff2060', glow: 'rgba(255,20,80,0.9)' },
+    { label: 'Energy in Fields', value: fields,
+      color: LIGHT ? '#666' : '#c46cff', glow: 'rgba(196,108,255,0.9)', dashed: true },
+  ];
+  if (LIGHT) bars.forEach(b => { b.glow = 'rgba(0,0,0,0)'; });
+
+  // Layout — fusion's, with room on the left for the kJ/mol axis
+  const yAxisW = 52, padR = 10, labelH = 46, controlH = 8, titleH = 30;
+  const chartH   = H - labelH - controlH - titleH;
+  const baseline = H - labelH - controlH;
+  const chartTop = titleH;
+  const chartX   = yAxisW;
+  const chartW   = W - yAxisW - padR;
+  const maxVal   = Math.max(1, totalKJ);
+
+  // Gridlines, five of them, with the axis labelled in kJ/mol
+  c.save();
+  for (let i = 0; i <= 5; i++) {
+    const py = baseline - (i / 5) * chartH;
+    const isBaseline = i === 0;
+    c.strokeStyle = isBaseline
+      ? (LIGHT ? 'rgba(0,0,0,0.55)' : 'rgba(0,200,255,0.7)')
+      : (LIGHT ? 'rgba(0,0,0,0.15)' : 'rgba(0,200,255,0.2)');
+    c.lineWidth = isBaseline ? 2 : 1.5;
+    if (isBaseline) { c.shadowColor = LIGHT ? 'rgba(0,0,0,0)' : 'rgba(0,200,255,1)'; c.shadowBlur = LIGHT ? 0 : 8; }
+    else c.shadowBlur = 0;
+    c.beginPath(); c.moveTo(0, py); c.lineTo(W, py); c.stroke();
+    if (i > 0) {
+      c.save();
+      c.shadowBlur = 0;
+      c.fillStyle = LIGHT ? 'rgba(0,0,0,0.5)' : 'rgba(180,180,220,0.55)';
+      c.font = '9px Inter, system-ui, sans-serif';
+      c.textAlign = 'right';
+      c.textBaseline = 'middle';
+      c.fillText(Math.round((i / 5) * maxVal).toLocaleString(), chartX - 5, py);
+      c.restore();
+    }
+  }
+  c.restore();
+
+  const barW = chartW / bars.length;
+  c.textAlign = 'center';
+
+  bars.forEach((bar, i) => {
+    const barPx  = Math.max(0, Math.min(1, bar.value / maxVal)) * chartH;
+    const x      = chartX + i * barW + barW * 0.1;
+    const bw     = barW * 0.8;
+    const barTop = baseline - barPx;
+
+    if (!noData && barPx > 0) {
+      const r = Math.min(6, bw / 2, barPx / 2);
+
+      c.save();                                   // dim fill
+      c.fillStyle = bar.color; c.globalAlpha = 0.22;
+      c.beginPath(); c.roundRect(x, barTop, bw, barPx, [r, r, 2, 2]); c.fill();
+      c.restore();
+
+      c.save();                                   // outer glow
+      if (bar.dashed) c.setLineDash([5, 3]);
+      c.shadowColor = bar.glow; c.shadowBlur = 22;
+      c.strokeStyle = bar.color; c.lineWidth = 3; c.globalAlpha = 0.5;
+      c.beginPath(); c.roundRect(x, barTop, bw, barPx, [r, r, 2, 2]); c.stroke();
+      c.restore();
+
+      c.save();                                   // crisp neon outline
+      if (bar.dashed) c.setLineDash([5, 3]);
+      c.shadowColor = bar.glow; c.shadowBlur = 6;
+      c.strokeStyle = bar.color; c.lineWidth = 3;
+      c.beginPath(); c.roundRect(x, barTop, bw, barPx, [r, r, 2, 2]); c.stroke();
+      c.restore();
+
+      c.save();                                   // value, always a whole number
+      c.shadowColor = bar.glow; c.shadowBlur = 6;
+      c.fillStyle = bar.color;
+      c.font = 'bold 13px Inter, system-ui, sans-serif';
+      const clipped = barTop < chartTop + 14;
+      c.fillText(fmtKJ(bar.value), x + bw / 2, clipped ? chartTop + 14 : barTop - 5);
+      c.restore();
+    }
+
+    // Label below the baseline, two lines, fusion's sizes
+    c.save();
+    c.shadowColor = bar.glow; c.shadowBlur = 6;
+    c.fillStyle = bar.color;
+    c.font = 'bold 16px Inter, system-ui, sans-serif';
+    const words = bar.label.split(' ');
+    c.fillText(words.slice(0, 2).join(' '), x + bw / 2, baseline + 20);
+    c.fillText(words[2] || '',              x + bw / 2, baseline + 38);
+    c.restore();
+  });
+
+  // Title: the total these two always add up to
+  c.save();
+  const tCol = LIGHT ? '#000' : 'rgba(0,200,255,0.75)';
+  c.shadowColor = LIGHT ? 'rgba(0,0,0,0)' : tCol;
+  c.shadowBlur  = LIGHT ? 0 : 14;
+  c.fillStyle   = tCol;
+  c.font        = 'bold 13px Inter, system-ui, sans-serif';
+  c.textAlign   = 'center';
+  c.fillText(noData ? 'No molecules' : 'Total ' + fmtKJ(totalKJ), W / 2, 19);
+  c.restore();
+
+  c.restore();
+}
+
+// The panel is only on the Reactions tab, and the world box is narrowed to
+// leave its strip of canvas empty (see syncWorldBox).
+function syncBarPanel() {
+  const panel = document.getElementById('barPanel');
+  const show  = !bondTab.on && !sandbox.on;
+  panel.style.display = show ? '' : 'none';
+  if (!show) return;
+  const tbH  = document.getElementById('toolbar').offsetHeight;
+  const sbEl = document.getElementById('energyBar');
+  const sbH  = sbEl.style.display === 'none' ? 0
+             : (sbEl.classList.contains('visible') ? sbEl.offsetHeight : 0);
+  panel.style.top    = tbH + 'px';
+  panel.style.bottom = sbH + 'px';
+  panel.style.width  = BAR_PANEL_W + 'px';
+  barChartCanvas.width  = BAR_PANEL_W;
+  barChartCanvas.height = Math.max(1, window.innerHeight - tbH - sbH);
 }
 
 function updateEnergyPct() {
@@ -3754,6 +4075,13 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     row('devVibGlow','Heat glow',       0,   1, 0.05, VIB_GLOW,     '#ffc24a') +
     row('devBreakSlow','Fragments slow to', 0.2, 1.2, 0.05, breakSlow,  '#ffc24a') +
     row('devBreakK', 'Fragment kick',   0,   1, 0.02, breakKick,    '#ffc24a') +
+    '<label style="display:flex;align-items:center;gap:7px;margin:9px 0 2px;cursor:pointer;">' +
+      '<input type="checkbox" id="devExactBreak" style="margin:0">' +
+      '<span>Dissociation costs exactly D</span>' +
+    '</label>' +
+    '<div style="opacity:0.45;font-size:10px;margin-left:21px;">On, a break takes ' +
+      'only the bond’s own energy, so the molecules agree with the bar chart. ' +
+      'Off, “fragments slow to” runs and the slowdown is dramatised.</div>' +
     '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
     '<div style="font-size:9px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.4;margin-top:8px;">' +
       'Energy in fields</div>' +
@@ -3952,6 +4280,14 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     breakBonds = brk.checked;
     syncBreakNote();
     logAction('Bond breaking ' + (breakBonds ? 'on' : 'off'));
+  });
+
+  // Whether a break takes the bond's own energy or the tuned dramatisation
+  const xbr = panel.querySelector('#devExactBreak');
+  xbr.checked = exactBreakCost;
+  xbr.addEventListener('change', () => {
+    exactBreakCost = xbr.checked;
+    logAction('Exact dissociation cost ' + (exactBreakCost ? 'on' : 'off'));
   });
 
   // Speed band on/off — off is the pure elastic result
@@ -4935,6 +5271,7 @@ function applyTab(tab) {
   }
   syncWorldBox();
   syncSnapPanel();
+  if (tab === 'reactions') drawBarChart();
   logAction('Switched to ' + tab.toUpperCase() + ' tab');
 }
 
@@ -5031,7 +5368,9 @@ document.getElementById('bondReset').addEventListener('click', () => {
 //
 // For two atoms that is exactly One Bond's reading — 1000 apart, 1000-436 for
 // an H2 at rest — so the two tabs cannot disagree.
-const SB_FREE_ATOM = 500;         // kJ/mol carried by one free atom
+// SB_FREE_ATOM, the 500 kJ/mol a free atom carries, is declared up with
+// BOND_ENERGY_MAX: the Reactions bar chart reads in the same currency, and one
+// baseline in two places would be a bug waiting to happen.
 
 // RANGE. The whole interaction profile is half One Bond's, so a pair is fully
 // apart by about 2x its natural length instead of 4x. With a dozen atoms on one
