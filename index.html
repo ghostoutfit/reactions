@@ -710,6 +710,7 @@
     <div id="tabBar">
       <button class="tab-btn" data-tab="reactions">Reactions</button>
       <button class="tab-btn active" data-tab="bond">One Bond</button>
+      <button class="tab-btn" data-tab="sandbox">Sandbox</button>
     </div>
     <div style="display:flex;align-items:center;gap:6px;margin-left:auto;">
       <select id="qualitySelect">
@@ -830,6 +831,33 @@
     </div>
   </div>
 </div>
+  <!-- Sandbox controls. Same toolbar-row shell as the other tabs. -->
+  <div class="toolbar-row" id="sandboxControls" style="display:none;">
+    <div class="ctrl-box-pink" style="align-items:stretch;">
+      <span class="ctrl-box-label ctrl-box-label-pink">ADD</span>
+      <div style="display:flex;gap:6px;align-items:center;padding:8px 0;">
+        <button id="sbAddH2" class="btn">H&#8322;</button>
+        <button id="sbAddO2" class="btn">O&#8322;</button>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:5px;justify-content:center;padding:8px 0;min-width:120px;">
+        <span style="font-size:9px;letter-spacing:0.07em;text-transform:uppercase;opacity:0.5;">In the scene</span>
+        <span id="sbCount" style="font-size:14px;font-weight:700;color:var(--accent1);">nothing yet</span>
+      </div>
+      <button id="sbClear" class="btn" style="align-self:center;">Clear</button>
+    </div>
+
+    <div class="ctrl-box-blue" style="align-items:stretch;">
+      <span class="ctrl-box-label ctrl-box-label-blue">TOTAL ENERGY IN FIELDS</span>
+      <div style="display:flex;flex-direction:column;gap:5px;justify-content:center;padding:8px 0;min-width:210px;">
+        <span id="sbEnergy" style="font-size:22px;font-weight:700;color:#c46cff;text-shadow:0 0 10px rgba(196,108,255,0.7);">0 kJ/mol</span>
+        <span id="sbEnergyNote" style="font-size:11px;opacity:0.6;">500 per free atom, less what each bond holds</span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:3px;justify-content:center;padding:8px 10px;min-width:150px;">
+        <span id="sbFormula" style="font-size:12px;opacity:0.75;">&mdash;</span>
+        <span id="sbBreakdown" style="font-size:10px;opacity:0.5;line-height:1.5;">&mdash;</span>
+      </div>
+    </div>
+  </div>
 <div id="energyBar">
   <div id="energyBarLeft">
     <div id="energyGraphKey">
@@ -3375,6 +3403,9 @@ function worldLoop(now) {
   // moving unless a nucleus is being dragged. It still runs through this loop
   // so a drag repaints and the quality tier still governs the frame rate.
   if (bondTab.on) { stepBondTab(dt); drawBondTab(); return; }
+  // The sandbox has no physics at all — only the shells' wobble, so a scene
+  // you are not touching still looks alive.
+  if (sandbox.on) { shellWobble += dt; drawSandbox(); return; }
 
   stepTemperature(rawDt);
   if (running) {
@@ -4838,15 +4869,21 @@ window.addEventListener('pointerup', bondTabRelease);
 // ── Tab switching ─────────────────────────────────────────────────────────────
 function applyTab(tab) {
   bondTab.on = (tab === 'bond');
+  sandbox.on = (tab === 'sandbox');
   document.querySelectorAll('.tab-btn[data-tab]').forEach(b =>
     b.classList.toggle('active', b.dataset.tab === tab));
-  document.getElementById('reactionsControls').style.display = bondTab.on ? 'none' : '';
+  document.getElementById('reactionsControls').style.display = tab === 'reactions' ? '' : 'none';
   document.getElementById('bondControls').style.display = bondTab.on ? '' : 'none';
-  document.getElementById('energyBar').style.display = bondTab.on ? 'none' : '';
+  document.getElementById('sandboxControls').style.display = sandbox.on ? '' : 'none';
+  document.getElementById('energyBar').style.display = tab === 'reactions' ? '' : 'none';
   if (bondTab.on) {
     setRunning(false);
     bondTabReset();
     updateBondReadout();
+  } else if (sandbox.on) {
+    setRunning(false);
+    sbRebuildBonds();
+    sbUpdateReadout();
   } else {
     canvas.style.cursor = '';
   }
@@ -4933,6 +4970,345 @@ document.getElementById('bondSnapsClear').addEventListener('click', () => {
 
 document.getElementById('bondReset').addEventListener('click', () => {
   bondTabReset(); updateBondReadout();
+});
+
+// ─── Sandbox tab ──────────────────────────────────────────────────────────────
+// Atoms you place, pull apart and put back together in other combinations,
+// with the total energy held in every field read out as you go. No motion at
+// all: nothing moves unless you drag it.
+//
+// ENERGY. Free atoms are the baseline at HALF of One Bond's 1000, because that
+// 1000 is two of them. So every atom carries 500 and every bond discounts its
+// own dissociation energy by how bonded it is:
+//
+//     total = 500 x atoms  -  sum over bonds of  D x (1 - work)
+//
+// For two atoms that is exactly One Bond's reading — 1000 apart, 1000-436 for
+// an H2 at rest — so the two tabs cannot disagree.
+const SB_FREE_ATOM = 500;         // kJ/mol carried by one free atom
+
+// RANGE. The whole interaction profile is half One Bond's, so a pair is fully
+// apart by about 2x its natural length instead of 4x. With a dozen atoms on one
+// screen the long tail meant everything faintly bonded to everything; halving
+// it makes a neighbour's neighbour stop counting.
+const SB_RANGE = 0.5;
+function sbWork(r, r0)    { return bondWorkFraction(r0 + (r - r0) / SB_RANGE, r0); }
+function sbContact(r, r0) { return bondContact(r0 + (r - r0) / SB_RANGE, r0); }
+
+const H2O_ANGLE = 104.5 * Math.PI / 180;   // the bend, as water actually is
+
+const sandbox = {
+  on: false,
+  atoms: [],          // { el, x, y }  canvas coords
+  bonds: [],          // { i, k, r0, D, work, bonded }  rebuilt every change
+  drag: -1,
+  hover: -1,
+  spawnAt: 0,         // walks the spawn point so molecules do not stack
+};
+
+// How many bonds this element may hold. H takes one, O two — so an O already
+// holding two H ignores a third, and the sandbox only ever makes real species.
+function sbValence(el) { return el === 'H' ? 1 : el === 'O' ? 2 : 0; }
+
+// Which pairs are actually bonded. Nearest first, each taken only while both
+// atoms have a slot free, so a crowd resolves into real molecules rather than
+// everything faintly attached to everything.
+function sbRebuildBonds() {
+  const A = sandbox.atoms;
+  const used = A.map(() => 0);
+  const cand = [];
+  for (let i = 0; i < A.length; i++) {
+    for (let k = i + 1; k < A.length; k++) {
+      const r0 = bondLen(A[i].el, A[k].el);
+      const r  = Math.hypot(A[k].x - A[i].x, A[k].y - A[i].y);
+      // Past the range there is nothing to decide: they do not interact.
+      if (sbContact(r, r0) <= 0) continue;
+      const D = bondEnergy(A[i].el, A[k].el);
+      const work = sbWork(r, r0);
+      // Rank by the energy a pair would actually release, NOT by how close it
+      // is. Closeness is the wrong measure: a pair squashed to 0.46 of its
+      // natural length is nearer than one sitting exactly right, but it is up
+      // the repulsive wall and releases almost nothing. Ranking by distance let
+      // a crushed H-H outrank a perfect O-H and steal its atom — dropping a
+      // third H beside a finished water pulled one of its bonds apart.
+      cand.push({ i, k, r, r0, D, work, gain: D * (1 - work) });
+    }
+  }
+  cand.sort((a, b) => b.gain - a.gain);
+  sandbox.bonds = [];
+  for (const c of cand) {
+    if (c.gain <= 0.5) continue;          // nothing worth calling a bond
+    if (used[c.i] >= sbValence(A[c.i].el) || used[c.k] >= sbValence(A[c.k].el)) continue;
+    used[c.i]++; used[c.k]++;
+    sandbox.bonds.push({ i: c.i, k: c.k, r0: c.r0, D: c.D,
+      work: c.work, contact: sbContact(c.r, c.r0) });
+  }
+}
+
+function sbTotalEnergy() {
+  let e = sandbox.atoms.length * SB_FREE_ATOM;
+  for (const b of sandbox.bonds) e -= b.D * (1 - b.work);
+  return e;
+}
+
+// Connected components of the bond graph — the molecules.
+function sbMolecules() {
+  const n = sandbox.atoms.length;
+  const adj = Array.from({ length: n }, () => []);
+  for (const b of sandbox.bonds) { adj[b.i].push(b.k); adj[b.k].push(b.i); }
+  const seen = new Array(n).fill(false), out = [];
+  for (let i = 0; i < n; i++) {
+    if (seen[i]) continue;
+    const comp = [], stack = [i];
+    seen[i] = true;
+    while (stack.length) {
+      const j = stack.pop(); comp.push(j);
+      for (const q of adj[j]) if (!seen[q]) { seen[q] = true; stack.push(q); }
+    }
+    out.push({ idx: comp, adj });
+  }
+  return out;
+}
+
+function sbFormula(mol) {
+  const c = {};
+  for (const i of mol.idx) { const el = sandbox.atoms[i].el; c[el] = (c[el] || 0) + 1; }
+  return formulaOf(Object.entries(c).flatMap(([el, n]) => Array(n).fill(el)));
+}
+
+// Snap a molecule into the shape it actually has. The centre is whichever atom
+// holds the most bonds; its neighbours go at the natural length, and two of
+// them open to water's 104.5 degrees rather than lying in a line. The whole
+// arrangement is rotated to sit closest to where you dragged it, so snapping
+// moves the atoms as little as it can.
+function sbSnapMolecule(mol) {
+  const A = sandbox.atoms, idx = mol.idx;
+  if (idx.length < 2) return;
+  let c = idx[0];
+  for (const i of idx) if (mol.adj[i].length > mol.adj[c].length) c = i;
+  const nb = mol.adj[c];
+  if (!nb.length) return;
+
+  // Mean direction of the neighbours now, so the snap keeps the orientation.
+  let ax = 0, ay = 0;
+  for (const i of nb) { ax += A[i].x - A[c].x; ay += A[i].y - A[c].y; }
+  const base = (ax || ay) ? Math.atan2(ay, ax) : 0;
+  const spread = nb.length === 2 ? H2O_ANGLE : 0;
+
+  // Keep each neighbour on the side it is already on, so they do not swap.
+  const order = nb.slice().sort((p, q) => {
+    const ap = Math.atan2(A[p].y - A[c].y, A[p].x - A[c].x) - base;
+    const aq = Math.atan2(A[q].y - A[c].y, A[q].x - A[c].x) - base;
+    return Math.atan2(Math.sin(ap), Math.cos(ap)) - Math.atan2(Math.sin(aq), Math.cos(aq));
+  });
+  order.forEach((i, k) => {
+    const ang = base + (order.length === 1 ? 0 : (k / (order.length - 1) - 0.5) * spread);
+    const r = bondLen(A[c].el, A[i].el);
+    A[i].x = A[c].x + Math.cos(ang) * r;
+    A[i].y = A[c].y + Math.sin(ang) * r;
+  });
+  // Anything further out (none of the species here, but the graph allows it)
+  // is left where it is rather than guessed at.
+}
+
+function sbSnapAll() {
+  sbRebuildBonds();
+  for (const m of sbMolecules()) sbSnapMolecule(m);
+  sbRebuildBonds();
+}
+
+// ── Drawing ─────────────────────────────────────────────────────────────────
+// Reactions' scale and its shells picture, atom for atom, so a sandbox oxygen
+// is the same object as one in the world: real nucleus, grey inner shell, its
+// valence electrons seated on the outer ring.
+function drawSandbox() {
+  const W = canvas.width, H = canvas.height;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--bg') || '#05040f';
+  ctx.fillRect(0, 0, W, H);
+  const A = sandbox.atoms;
+
+  // One lobe per bond, through the same heatmap everything else uses.
+  if (sandbox.bonds.length) {
+    const segs = sandbox.bonds.map(b => ({
+      x1: A[b.i].x, y1: A[b.i].y, x2: A[b.k].x, y2: A[b.k].y,
+      mag: b.D / BOND_ENERGY_MAX
+           * (BOND_FIELD_FLOOR + (1 - BOND_FIELD_FLOOR) * b.work)
+           * b.contact * BOND_FIELD_GAIN * BOND_FIELD_BOOST,
+      squeeze: BOND_FIELD_SQUEEZE,
+      load: b.work,
+    }));
+    drawFieldHeatmap(ctx, segs, W, H,
+      { width: BOND_FIELD_WIDTH, gain: BOND_FIELD_GAIN, colormap: BOND_COLORMAP });
+  }
+
+  for (const p of A) drawShellBands(ctx, p.x, p.y, p.el, valenceRadius(p.el),
+                                    ELEMENTS[p.el].rgb, worldNucleusR(p.el));
+  for (const p of A) drawInnerElectrons(ctx, p);
+  sbDrawValenceElectrons();
+  for (const p of A) drawNucleons(ctx, p.x, p.y, p.el, shellWobble, WORLD_NUCLEON_R);
+
+  // A ring on the atom under the pointer says it is the handle.
+  if (sandbox.hover >= 0 && A[sandbox.hover]) {
+    const p = A[sandbox.hover];
+    ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, valenceRadius(p.el) * 0.55, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.font = '600 13px Inter, system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  for (const p of A) ctx.fillText(p.el, p.x, p.y + valenceRadius(p.el) + 18);
+  ctx.textAlign = 'left';
+}
+
+// Valence electrons: the bonding ones seated in each bond's gap, the rest
+// fanned on the far side from whatever the atom is bonded to — the same two
+// rules the Reactions shells view follows.
+function sbDrawValenceElectrons() {
+  const A = sandbox.atoms;
+  const bondsOf = A.map(() => []);
+  for (const b of sandbox.bonds) { bondsOf[b.i].push(b); bondsOf[b.k].push(b); }
+
+  for (const b of sandbox.bonds) {
+    const pi = A[b.i], pk = A[b.k];
+    const mx = (pi.x + pk.x) / 2, my = (pi.y + pk.y) / 2;
+    const dx = pk.x - pi.x, dy = pk.y - pi.y, L = Math.hypot(dx, dy) || 1;
+    const px = -dy / L, py = dx / L;
+    const spread = (valenceRadius(pi.el) + valenceRadius(pk.el)) / 2 * 0.3;
+    for (let q = 0; q < 2; q++) {
+      const off = spread * (q ? 1 : -1);
+      const [wx, wy] = shellWobbleAt(b.i * 3.3 + b.k * 1.7 + q * 2.1, spread);
+      drawElectronDot(ctx, mx + px * off + wx, my + py * off + wy,
+                      ELEMENTS[q ? pk.el : pi.el].rgb, false, SHELL_DOT_R);
+    }
+  }
+
+  A.forEach((p, i) => {
+    const mine = bondsOf[i];
+    const lone = Math.max(0, (VALENCE[p.el] || 0) - mine.length);
+    if (!lone) return;
+    let ax = 0, ay = 0;
+    for (const b of mine) {
+      const o = A[b.i === i ? b.k : b.i];
+      ax += p.x - o.x; ay += p.y - o.y;
+    }
+    const facing = (ax || ay) ? Math.atan2(ay, ax) : 0;
+    const arc = mine.length ? loneArcFrac * Math.PI * 2 : Math.PI * 2;
+    const r = shellRadius(p.el, (ATOM_SHELLS[p.el] || [1]).length - 1, 1, worldNucleusR(p.el));
+    for (let q = 0; q < lone; q++) {
+      const ang = mine.length
+        ? facing + (lone === 1 ? 0 : (q / (lone - 1) - 0.5) * arc)
+        : facing + q * Math.PI * 2 * 0.6180339887498949;
+      const [wx, wy] = shellWobbleAt(ang * 3.1 + i, r);
+      drawElectronDot(ctx, p.x + Math.cos(ang) * r + wx, p.y + Math.sin(ang) * r + wy,
+                      ELEMENTS[p.el].rgb, false, SHELL_DOT_R);
+    }
+  });
+}
+
+// ── Placing, dragging, reading out ──────────────────────────────────────────
+function sbSpawn(els) {
+  const cx = canvas.width / 2, cy = (world.top + canvas.height) / 2;
+  // Walk the spawn point round a ring so a second press does not land on top
+  // of the first.
+  const a = sandbox.spawnAt * 1.1;
+  const R = Math.min(canvas.width, canvas.height - world.top) * 0.28;
+  sandbox.spawnAt++;
+  const ox = cx + Math.cos(a) * R * (0.5 + 0.5 * Math.random());
+  const oy = cy + Math.sin(a) * R * (0.5 + 0.5 * Math.random());
+  const r0 = bondLen(els[0], els[1]);
+  sandbox.atoms.push({ el: els[0], x: ox - r0 / 2, y: oy });
+  sandbox.atoms.push({ el: els[1], x: ox + r0 / 2, y: oy });
+  sbRebuildBonds();
+  sbUpdateReadout();
+}
+
+function sbPointer(ev) {
+  const r = canvas.getBoundingClientRect();
+  return { x: (ev.clientX - r.left) * (canvas.width / r.width),
+           y: (ev.clientY - r.top)  * (canvas.height / r.height) };
+}
+
+function sbHit(p) {
+  let best = -1, bestD = Infinity;
+  sandbox.atoms.forEach((a, i) => {
+    const d = Math.hypot(p.x - a.x, p.y - a.y);
+    if (d < valenceRadius(a.el) * 0.8 && d < bestD) { best = i; bestD = d; }
+  });
+  return best;
+}
+
+function sbDown(ev) {
+  if (!sandbox.on) return;
+  const i = sbHit(sbPointer(ev));
+  if (i < 0) return;
+  sandbox.drag = i;
+  canvas.style.cursor = 'grabbing';
+  ev.preventDefault();
+}
+
+function sbMove(ev) {
+  if (!sandbox.on) return;
+  const p = sbPointer(ev);
+  if (sandbox.drag < 0) {
+    sandbox.hover = sbHit(p);
+    canvas.style.cursor = sandbox.hover >= 0 ? 'grab' : '';
+    return;
+  }
+  const a = sandbox.atoms[sandbox.drag];
+  a.x = Math.max(12, Math.min(canvas.width - 12, p.x));
+  a.y = Math.max(world.top + 12, Math.min(canvas.height - 12, p.y));
+  sbRebuildBonds();     // live, so the number moves with your hand
+  sbUpdateReadout();
+}
+
+function sbUp() {
+  if (sandbox.drag < 0) return;
+  sandbox.drag = -1;
+  canvas.style.cursor = '';
+  // Settle into the real shape only once you let go: snapping mid-drag would
+  // fight the hand.
+  sbSnapAll();
+  sbUpdateReadout();
+}
+
+canvas.addEventListener('pointerdown', sbDown);
+window.addEventListener('pointermove', sbMove);
+window.addEventListener('pointerup', sbUp);
+
+function sbUpdateReadout() {
+  const n = sandbox.atoms.length;
+  const eEl = document.getElementById('sbEnergy');
+  const cEl = document.getElementById('sbCount');
+  const fEl = document.getElementById('sbFormula');
+  const bEl = document.getElementById('sbBreakdown');
+  if (!eEl) return;
+  eEl.textContent = Math.round(sbTotalEnergy()) + ' kJ/mol';
+  cEl.textContent = n ? n + (n === 1 ? ' atom' : ' atoms') : 'nothing yet';
+
+  const tally = {};
+  for (const m of sbMolecules()) {
+    const f = m.idx.length === 1 ? formulaOf([sandbox.atoms[m.idx[0]].el]) : sbFormula(m);
+    tally[f] = (tally[f] || 0) + 1;
+  }
+  const names = Object.entries(tally).map(([f, c]) => (c > 1 ? c + ' ' : '') + f);
+  fEl.textContent = names.length ? names.join('  +  ') : '\u2014';
+  bEl.textContent = n
+    ? n + ' x ' + SB_FREE_ATOM + ' = ' + (n * SB_FREE_ATOM) + ', less ' +
+      Math.round(n * SB_FREE_ATOM - sbTotalEnergy()) + ' held in ' +
+      sandbox.bonds.length + (sandbox.bonds.length === 1 ? ' bond' : ' bonds')
+    : '\u2014';
+}
+
+document.getElementById('sbAddH2').addEventListener('click', () => sbSpawn(['H', 'H']));
+document.getElementById('sbAddO2').addEventListener('click', () => sbSpawn(['O', 'O']));
+document.getElementById('sbClear').addEventListener('click', () => {
+  sandbox.atoms = []; sandbox.bonds = []; sandbox.spawnAt = 0;
+  sbUpdateReadout(); logAction('Sandbox cleared');
 });
 
 // ─── Init ─────────────────────────────────────────────────────────────────────

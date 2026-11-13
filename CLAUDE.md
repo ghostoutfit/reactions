@@ -1883,6 +1883,73 @@ field controls' blue.
 `drawFieldHeatmap` grew optional `segs`, `boxW` and `boxH` arguments for this;
 with none it behaves exactly as before.
 
+## The Sandbox tab
+
+Atoms you place, pull apart and put back together in other combinations, with
+the total energy held in every field read out as you go. **No motion at all** —
+nothing moves unless you drag it, and energy of motion is not computed.
+
+### The energy
+
+```javascript
+const SB_FREE_ATOM = 500;   // kJ/mol carried by one free atom
+total = 500 x atoms  -  sum over bonds of  D x (1 - work)
+```
+
+Free atoms are the baseline at **half** of One Bond's 1000, because that 1000 is
+*two* of them. For two atoms this is exactly One Bond's reading — 1000 apart,
+1000 − 436 for an H₂ at rest — so the two tabs cannot disagree. Verified across
+the moves the tab is for:
+
+| scene | reads | = |
+|---|---|---|
+| 2 H₂ + O₂ | 1630 | 6×500 − (436+436+498) |
+| pull one H₂ apart | 2066 | 6×500 − (436+498) |
+| H₂ + O₂ | 1066 | 4×500 − (436+498) |
+| pull the O₂ apart | 1564 | 4×500 − 436 |
+| **H₂O + O** | **1074** | **4×500 − 2×463** |
+
+### Bonding
+
+**Capped by valence** — H takes one bond, O two — so the sandbox only ever makes
+real species and the total cannot be driven down by piling atoms together. A
+third H dropped on a finished water is ignored.
+
+**Pairs are ranked by the energy they would release, `D × (1 - work)`, not by
+how close they are.** Closeness is the wrong measure and ranking by it was a
+real bug: a pair squashed to 0.46 of its natural length is *nearer* than one
+sitting exactly right, but it is up the repulsive wall and releases almost
+nothing. Ranked by distance, a crushed H–H outranked a perfect O–H and stole its
+atom — dropping a third H beside a finished water **pulled one of its bonds
+apart**. Ranked by energy released, the water survives.
+
+### Geometry
+
+Molecules snap into the shape they actually have, but **only when you let go** —
+snapping mid-drag fights the hand. The centre is whichever atom holds the most
+bonds; neighbours go at the natural length, and two of them open to water's
+**104.5°** rather than lying in a line. The arrangement is rotated to sit
+closest to where you dragged it, so snapping moves atoms as little as it can,
+and neighbours keep the side they were already on so they do not swap.
+
+Verified: a built H₂O lands at **104.5°** with both O–H at **49 px**, the
+natural length.
+
+### Range
+
+```javascript
+const SB_RANGE = 0.5;
+```
+
+The whole interaction profile is half One Bond's, so a pair is fully apart by
+about **2.5×** its natural length instead of 4.07× — the span beyond natural,
+3.07, halving to 1.54. With a dozen atoms on one screen the long tail meant
+everything was faintly bonded to everything; halving it makes a neighbour's
+neighbour stop counting.
+
+Scale and rendering are Reactions': same nuclei, same shells, same electron
+seating. 0.60 ms/frame with 12 atoms.
+
 ## Energy graph
 
 **Hidden by default** — SHOW LINE GRAPH on the energy bar brings it back,
