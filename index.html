@@ -830,8 +830,11 @@
       </div>
     </div>
   </div>
-</div>
-  <!-- Sandbox controls. Same toolbar-row shell as the other tabs. -->
+
+  <!-- Sandbox controls. Same toolbar-row shell as the other tabs, and it has to
+       sit INSIDE #toolbar like them: dropped outside it, the row laid itself out
+       at y=0 over the tab bar and its buttons were clipped off the top of the
+       screen, so there was nothing to click. -->
   <div class="toolbar-row" id="sandboxControls" style="display:none;">
     <div class="ctrl-box-pink" style="align-items:stretch;">
       <span class="ctrl-box-label ctrl-box-label-pink">ADD</span>
@@ -858,6 +861,7 @@
       </div>
     </div>
   </div>
+</div>
 <div id="energyBar">
   <div id="energyBarLeft">
     <div id="energyGraphKey">
