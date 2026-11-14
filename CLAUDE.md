@@ -2285,6 +2285,41 @@ The panel is 320 px and `syncWorldBox` takes that off `world.w`, so the walls
 stop at its left edge and nothing can be hidden behind it — the same rule that
 keeps the box above the energy bar.
 
+### It is on all three tabs
+
+The panel is permanent now, and `barChartSpec()` is the one place that says what
+it shows. Every tab reads the same quantity in the same units — kJ/mol, One
+Bond's scale, 500 to a free atom — so a bar of a given height means the same
+thing wherever you are, and switching tabs does not switch rulers. What differs
+is the full scale, and in each case it is **the state that tab measures
+against**:
+
+| tab | bar | full scale | reads |
+|---|---|---|---|
+| One Bond | Fields | `SEPARATED_TOTAL`, 1000 | two free atoms. The pair sits down from the top by the depth of the well you picked — 564 of 1000 for a resting H–H, up to 874 at 2.2× natural |
+| Sandbox | Fields | 500 × atoms in the scene | every atom free. 1,066 of 2,000 for an H₂ + an O₂; the gap to the top is what the bonds have discounted |
+| Reactions | Motion + Fields | the run's constant total | unchanged |
+
+Only Reactions gets a motion bar, because only Reactions has motion. The other
+two are static instruments — nothing moves unless you drag it — so a second bar
+there would be a permanent zero. A lone bar keeps the width it would have in the
+two-bar layout and is centred, so the Fields bar is visibly the same object on
+all three tabs rather than a fat slab on two of them.
+
+Scale is per tab, but never per MOMENT: nothing here rescales as the value
+moves. The One Bond bar is always a fraction of 1000, so pulling a bond apart
+raises the bar instead of redrawing the axis under it. The Sandbox ceiling does
+move, but only when you add or delete an atom, because the ceiling IS the atom
+count.
+
+**`sceneW()`** is what made this cheap. The canvas is still the whole window —
+the background and the field buffer fill it — but everything that places
+something in the *scene* now measures `canvas.width − BAR_PANEL_W`: the walls,
+the One Bond pair and its zoom, its snapshot crop, where a sandbox molecule may
+be dropped, and every sandbox clamp. The snapshots column moves left of the
+panel for the same reason. Before this, that subtraction existed only inside
+`syncWorldBox` and only on Reactions.
+
 ### The zero is raised, and it says so
 
 Honest bars are honestly useless here: at High a molecule carries about

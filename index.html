@@ -1032,6 +1032,14 @@ const BAR_PANEL_W = 320;
 const barChartCanvas = document.getElementById('barChartCanvas');
 const barCtx         = barChartCanvas.getContext('2d');
 
+// The canvas is the full window, but the chart's panel sits over its right-hand
+// strip on every tab, so everything that places something in the SCENE — walls,
+// the One Bond pair, where a sandbox molecule may be dropped — measures against
+// this width rather than the canvas's own. Drawing that fills the whole canvas
+// (the background, the field buffer) still uses canvas.width: the panel is
+// painted over it.
+function sceneW() { return Math.max(200, canvas.width - BAR_PANEL_W); }
+
 // ─── Field heatmap buffers ────────────────────────────────────────────────────
 // The field is accumulated as floats at low resolution, then colour-mapped once
 // and blitted up to world size. There is no cache: every molecule moves every
@@ -1145,6 +1153,9 @@ window.addEventListener('resize', () => {
   // A narrower canvas can run the sandbox out of room, so the ADD buttons are
   // re-tested against the new size. Declared later; guard the load-time call.
   if (typeof sbSyncAddButtons === 'function') sbSyncAddButtons();
+  // The chart's canvas is sized against the window too, and on the two static
+  // tabs nothing else would repaint it until the next interaction.
+  if (typeof drawBarChart === 'function') drawBarChart();
 });
 
 // ─── Colormaps ────────────────────────────────────────────────────────────────
@@ -2355,11 +2366,10 @@ function syncWorldBox() {
   const sbH  = sbEl.classList.contains('visible') ? sbEl.offsetHeight : 0;
   const oldW = world.w, oldH = world.h;
   world.top = tbH;
-  // The bar chart owns the right-hand strip on the Reactions tab, so the walls
-  // stop short of it. Same reason the box stops above the energy bar: a
-  // molecule must never be behind an opaque panel looking like it vanished.
-  const barsW = (!bondTab.on && !sandbox.on) ? BAR_PANEL_W : 0;
-  world.w   = Math.max(200, canvas.width - barsW);
+  // The bar chart owns the right-hand strip on EVERY tab, so the walls stop
+  // short of it. Same reason the box stops above the energy bar: a molecule
+  // must never be behind an opaque panel looking like it vanished.
+  world.w   = sceneW();
   world.h   = Math.max(120, canvas.height - tbH - sbH);
   syncBarPanel();
   return { oldW, oldH };
@@ -3937,7 +3947,7 @@ function worldLoop(now) {
   // The One Bond tab is a static instrument: no physics, no electrons, nothing
   // moving unless a nucleus is being dragged. It still runs through this loop
   // so a drag repaints and the quality tier still governs the frame rate.
-  if (bondTab.on) { stepBondTab(dt); drawBondTab(); return; }
+  if (bondTab.on) { stepBondTab(dt); drawBondTab(); drawBarChart(); return; }
   // The sandbox has no physics at all — only the shells' wobble, so a scene
   // you are not touching still looks alive.
   if (sandbox.on) {
@@ -3946,6 +3956,7 @@ function worldLoop(now) {
     // whether or not you are touching it.
     if (sbRelax()) { sbRebuildBonds(); sbUpdateReadout(); }
     drawSandbox();
+    drawBarChart();
     return;
   }
 
@@ -4073,6 +4084,76 @@ function drawEnergyGraph() {
 // between them and you read one going up as the other comes down.
 function fmtKJ(v) { return Math.round(v) + ' kJ/mol'; }
 
+const FIELDS_COLOR = '#c46cff', FIELDS_GLOW = 'rgba(196,108,255,0.9)';
+const MOTION_COLOR = '#ff2060', MOTION_GLOW = 'rgba(255,20,80,0.9)';
+
+// WHAT THE CHART SHOWS, PER TAB.
+//
+// All three tabs read the same quantity in the same units — kJ/mol, One Bond's
+// scale, 500 to a free atom — so the same panel serves all three and a bar of a
+// given height means the same thing wherever you are. What changes is the full
+// scale, and in each case it is the state the tab is actually measuring against:
+//
+//   One Bond   two free atoms, 1000. The pair's reading is an absolute height
+//              on that scale, so the bar is full when they are apart and sits
+//              down by the depth of whichever well you picked.
+//   Sandbox    every atom in the scene free, 500 each. The bar is what the
+//              scene holds now; the gap to the top is what the bonds have
+//              discounted. It moves as you add atoms, which is right — the
+//              ceiling IS the number of atoms.
+//   Reactions  unchanged: the run's constant total, two bars sharing it.
+//
+// Only Reactions has a motion bar, because only Reactions has motion. The other
+// two are static instruments — nothing moves unless you drag it — so a second
+// bar there would be a permanent zero.
+function barChartSpec() {
+  const fieldsBar = v => ({ label: 'Energy in Fields', value: v,
+                            color: FIELDS_COLOR, glow: FIELDS_GLOW, dashed: true });
+  if (bondTab.on) {
+    const [a, b] = bondTabEls();
+    const work = bondWorkFraction(bondTab.sep, bondTab.r0);
+    const D = bondEnergy(a, b);
+    return {
+      bars: [fieldsBar(bondEnergyShown(a, b, work))],
+      max: SEPARATED_TOTAL,
+      title: 'Free atoms ' + fmtKJ(SEPARATED_TOTAL),
+      note: 'this ' + a + '–' + b + ' well is ' + D + ' deep',
+      noData: false,
+    };
+  }
+  if (sandbox.on) {
+    const n = sandbox.atoms.length;
+    return {
+      bars: [fieldsBar(n ? sbTotalEnergy() : 0)],
+      max: Math.max(1, n * SB_FREE_ATOM),
+      title: n ? 'All free ' + fmtKJ(n * SB_FREE_ATOM) : 'Nothing in the scene',
+      note: n ? n + ' free atoms × ' + SB_FREE_ATOM + ' is the top of the scale' : '',
+      noData: n === 0,
+    };
+  }
+  const noData = world.bodies.length === 0;
+  const mZero  = motionZeroKJ();
+  return {
+    bars: [
+      { label: 'Energy of Motion', value: noData ? 0 : Math.max(0, motionKJ() - mZero),
+        color: MOTION_COLOR, glow: MOTION_GLOW },
+      fieldsBar(noData ? 0 : Math.max(0, fieldsKJ() - fieldsZeroKJ)),
+    ],
+    // Full scale is what the two bars add up to, which is the run's total less
+    // the two zeros — all three being constants, the pair always fills the chart.
+    max: Math.max(1, totalKJ - mZero - fieldsZeroKJ),
+    title: noData ? 'No molecules' : 'Total ' + fmtKJ(totalKJ - mZero - fieldsZeroKJ),
+    // Say that the zero is raised, in fusion's own voice for its "not to scale"
+    // line. A distorted axis that does not admit it is a lie; one that does is a
+    // magnifying glass.
+    note: (!noData && (mZero > 0.5 || fieldsZeroKJ > 0.5))
+      ? 'zero raised ' + Math.round(mZero).toLocaleString() +
+        ' kJ/mol — this is the change, not the total'
+      : '',
+    noData,
+  };
+}
+
 function drawBarChart() {
   const c = barCtx;
   const W = BAR_PANEL_W, H = barChartCanvas.height;
@@ -4093,17 +4174,12 @@ function drawBarChart() {
   c.beginPath(); c.moveTo(0, 0); c.lineTo(0, H); c.stroke();
   c.restore();
 
-  const noData = world.bodies.length === 0;
-  const mZero  = motionZeroKJ();
-  const fields = noData ? 0 : Math.max(0, fieldsKJ() - fieldsZeroKJ);
-  const motion = noData ? 0 : Math.max(0, motionKJ() - mZero);
-  const bars = [
-    { label: 'Energy of Motion', value: motion,
-      color: LIGHT ? '#222' : '#ff2060', glow: 'rgba(255,20,80,0.9)' },
-    { label: 'Energy in Fields', value: fields,
-      color: LIGHT ? '#666' : '#c46cff', glow: 'rgba(196,108,255,0.9)', dashed: true },
-  ];
-  if (LIGHT) bars.forEach(b => { b.glow = 'rgba(0,0,0,0)'; });
+  const spec = barChartSpec();
+  const bars = spec.bars, noData = spec.noData;
+  if (LIGHT) bars.forEach((b, i) => {
+    b.color = i === 0 && bars.length > 1 ? '#222' : '#666';
+    b.glow = 'rgba(0,0,0,0)';
+  });
 
   // Layout — fusion's, with room on the left for the kJ/mol axis
   // titleH leaves room for the title AND the raised-zero note under it, so the
@@ -4114,9 +4190,7 @@ function drawBarChart() {
   const chartTop = titleH;
   const chartX   = yAxisW;
   const chartW   = W - yAxisW - padR;
-  // Full scale is what the two bars add up to, which is the run's total less
-  // the two zeros — all three being constants, the pair always fills the chart.
-  const maxVal   = Math.max(1, totalKJ - mZero - fieldsZeroKJ);
+  const maxVal   = spec.max;
 
   // Gridlines, five of them, with the axis labelled in kJ/mol
   c.save();
@@ -4143,12 +4217,17 @@ function drawBarChart() {
   }
   c.restore();
 
-  const barW = chartW / bars.length;
+  // A bar keeps the width it has in the two-bar layout however many there are,
+  // so the single Fields bar on One Bond and the Sandbox is the same object as
+  // the Fields bar on Reactions rather than a fat lone slab. One bar is centred
+  // in the chart; two sit side by side as before.
+  const barW   = chartW / 2;
+  const groupX = chartX + (chartW - barW * bars.length) / 2;
   c.textAlign = 'center';
 
   bars.forEach((bar, i) => {
     const barPx  = Math.max(0, Math.min(1, bar.value / maxVal)) * chartH;
-    const x      = chartX + i * barW + barW * 0.1;
+    const x      = groupX + i * barW + barW * 0.1;
     const bw     = barW * 0.8;
     const barTop = baseline - barPx;
 
@@ -4202,32 +4281,26 @@ function drawBarChart() {
   c.fillStyle   = tCol;
   c.font        = 'bold 13px Inter, system-ui, sans-serif';
   c.textAlign   = 'center';
-  c.fillText(noData ? 'No molecules' : 'Total ' + fmtKJ(maxVal), W / 2, 17);
+  c.fillText(spec.title, W / 2, 17);
   c.restore();
 
-  // Say that the zero is raised, in fusion's own voice for its "not to scale"
-  // line. A distorted axis that does not admit it is a lie; one that does is a
-  // magnifying glass.
-  if (!noData && (mZero > 0.5 || fieldsZeroKJ > 0.5)) {
+  if (spec.note) {
     c.save();
     c.fillStyle = LIGHT ? 'rgba(0,0,0,0.45)' : 'rgba(180,180,220,0.45)';
     c.font      = '9px Inter, system-ui, sans-serif';
     c.textAlign = 'center';
-    c.fillText('zero raised ' + Math.round(mZero).toLocaleString() +
-               ' kJ/mol — this is the change, not the total', W / 2, 28);
+    c.fillText(spec.note, W / 2, 28);
     c.restore();
   }
 
   c.restore();
 }
 
-// The panel is only on the Reactions tab, and the world box is narrowed to
-// leave its strip of canvas empty (see syncWorldBox).
+// The panel is on every tab now, and the scene is narrowed to leave its strip
+// of canvas empty (see sceneW and syncWorldBox).
 function syncBarPanel() {
   const panel = document.getElementById('barPanel');
-  const show  = !bondTab.on && !sandbox.on;
-  panel.style.display = show ? '' : 'none';
-  if (!show) return;
+  panel.style.display = '';
   const tbH  = document.getElementById('toolbar').offsetHeight;
   const sbEl = document.getElementById('energyBar');
   const sbH  = sbEl.style.display === 'none' ? 0
@@ -5317,7 +5390,7 @@ function bondTabReset() {
 // The two nuclei, in canvas coordinates, always symmetric about the centre.
 function bondTabAtoms() {
   const [ea, eb] = bondTabEls();
-  const cx = canvas.width / 2, cy = (world.top + canvas.height) / 2;
+  const cx = sceneW() / 2, cy = (world.top + canvas.height) / 2;
   const half = bondTab.sep * bondTabZoom() / 2;
   return [
     { x: cx - half, y: cy, el: ea },
@@ -5336,12 +5409,12 @@ function bondTabAtoms() {
 // window and keeps the scale honest while dragging.
 function bondTabZoom() {
   if (bondTab.r0 <= 0) return 1;
-  const span = Math.min(canvas.width * 0.62, (canvas.height - world.top) * 0.62);
+  const span = Math.min(sceneW() * 0.62, (canvas.height - world.top) * 0.62);
   const base = span / (bondTab.r0 * 3) * BOND_ZOOM;
   const [ea, eb] = bondTabEls();
   const reach = bondTab.r0 * BOND_MAX_MULT / 2
               + Math.max(valenceRadius(ea), valenceRadius(eb));
-  const fit = canvas.width * 0.46 / reach;
+  const fit = sceneW() * 0.46 / reach;
   return Math.min(base, fit);
 }
 
@@ -5686,7 +5759,7 @@ function applyTab(tab) {
   }
   syncWorldBox();
   syncSnapPanel();
-  if (tab === 'reactions') drawBarChart();
+  drawBarChart();
   logAction('Switched to ' + tab.toUpperCase() + ' tab');
 }
 
@@ -5717,9 +5790,9 @@ function takeBondSnapshot() {
   const [a, b] = bondTabEls();
   const work = bondWorkFraction(bondTab.sep, bondTab.r0);
 
-  const cw = Math.round(canvas.width * SNAP_CROP_W);
+  const cw = Math.round(sceneW() * SNAP_CROP_W);
   const ch = Math.round(cw / SNAP_ASPECT);
-  const sx = Math.round(canvas.width / 2 - cw / 2);
+  const sx = Math.round(sceneW() / 2 - cw / 2);
   const sy = Math.round((world.top + canvas.height) / 2 - ch / 2);
 
   const row = document.createElement('div');
@@ -5758,6 +5831,8 @@ function syncSnapPanel() {
   if (!bondTab.on) return;
   panel.style.top = (world.top + 12) + 'px';
   panel.style.maxHeight = (canvas.height - world.top - 28) + 'px';
+  // Clear of the bar chart, which owns the right-hand strip on this tab too.
+  panel.style.right = (BAR_PANEL_W + 14) + 'px';
 }
 
 document.getElementById('bondSnapBtn').addEventListener('click', takeBondSnapshot);
@@ -5999,7 +6074,7 @@ function sbRelax() {
         const a = L > 1e-3 ? Math.atan2(oy, ox) : Math.random() * Math.PI * 2;
         dx = Math.cos(a) * SB_EJECT; dy = Math.sin(a) * SB_EJECT;
       }
-      A[i].x = Math.max(12, Math.min(canvas.width - 12, A[i].x + dx));
+      A[i].x = Math.max(12, Math.min(sceneW() - 12, A[i].x + dx));
       A[i].y = Math.max(world.top + 12, Math.min(canvas.height - 12, A[i].y + dy));
     }
   }
@@ -6204,12 +6279,12 @@ function sbRoomFor(els) {
   const r0 = bondLen(els[0], els[1]);
   const rL = valenceRadius(els[0]), rR = valenceRadius(els[1]);
   const rT = Math.max(rL, rR);
-  const x0 = SB_EDGE + r0 / 2 + rL, x1 = canvas.width - SB_EDGE - r0 / 2 - rR;
+  const x0 = SB_EDGE + r0 / 2 + rL, x1 = sceneW() - SB_EDGE - r0 / 2 - rR;
   const y0 = world.top + SB_EDGE + rT, y1 = canvas.height - SB_EDGE - rT;
   if (x1 < x0 || y1 < y0) return null;
 
   const a = sandbox.spawnAt * 1.1;
-  const R = Math.min(canvas.width, canvas.height - world.top) * 0.28;
+  const R = Math.min(sceneW(), canvas.height - world.top) * 0.28;
   const px = (x0 + x1) / 2 + Math.cos(a) * R;
   const py = (y0 + y1) / 2 + Math.sin(a) * R;
 
@@ -6314,7 +6389,7 @@ function sbNudge(dx, dy) {
   let lo = -Infinity, hi = Infinity, top = -Infinity, bot = Infinity;
   for (const i of idx) {
     lo = Math.max(lo, 12 - A[i].x);
-    hi = Math.min(hi, canvas.width - 12 - A[i].x);
+    hi = Math.min(hi, sceneW() - 12 - A[i].x);
     top = Math.max(top, world.top + 12 - A[i].y);
     bot = Math.min(bot, canvas.height - 12 - A[i].y);
   }
@@ -6367,7 +6442,7 @@ function sbDrawSelection(c) {
   c.setLineDash([]);
 
   if (sbSelDeletable(idx)) {
-    const cx = Math.min(canvas.width - SB_X_R - 2, x1);
+    const cx = Math.min(sceneW() - SB_X_R - 2, x1);
     const cy = Math.max(world.top + SB_X_R + 2, y0);
     sandbox.xBox = { x: cx, y: cy, r: SB_X_R };
     c.fillStyle = 'rgba(12,10,20,0.92)';
@@ -6485,7 +6560,7 @@ function sbMove(ev) {
     let lo = -Infinity, hi = Infinity, top = -Infinity, bot = Infinity;
     g.idx.forEach((_, q) => {
       lo = Math.max(lo, 12 - g.ox[q]);
-      hi = Math.min(hi, canvas.width - 12 - g.ox[q]);
+      hi = Math.min(hi, sceneW() - 12 - g.ox[q]);
       top = Math.max(top, world.top + 12 - g.oy[q]);
       bot = Math.min(bot, canvas.height - 12 - g.oy[q]);
     });
@@ -6498,7 +6573,7 @@ function sbMove(ev) {
     });
   } else {
     const a = sandbox.atoms[sandbox.drag];
-    a.x = Math.max(12, Math.min(canvas.width - 12, p.x));
+    a.x = Math.max(12, Math.min(sceneW() - 12, p.x));
     a.y = Math.max(world.top + 12, Math.min(canvas.height - 12, p.y));
   }
   sbRebuildBonds();     // live, so the number moves with your hand
