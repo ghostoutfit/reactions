@@ -205,6 +205,17 @@
   }
   .btn.sb-add span { font-size: 10px; letter-spacing: 1px; }
 
+  /* Nothing to add: the scene has no spot left with room around it. The button
+     stays in place and stays readable — it is greyed, not hidden, so the row
+     never reflows and the picture still says what the button is for. */
+  .btn:disabled, .btn:disabled:hover {
+    opacity: 0.32;
+    cursor: not-allowed;
+    color: rgba(255,255,255,0.18);
+    border-color: rgba(255,255,255,0.06);
+  }
+  .btn.sb-add:disabled .sb-thumb { filter: grayscale(1); }
+
   /* Go idle (▶) — accent2 themed */
   #goBtn {
     border-color: var(--accent2);
@@ -783,6 +794,11 @@
             <button class="awheel-item temp-btn active" data-temp="high" style="flex:1 1 0;min-width:0;">HIGH</button>
           </div>
         </div>
+        <!-- Strong water: once a water has formed it is inert. It cannot break
+             and it cannot take energy into its fields, so every hit on it is
+             perfectly elastic. One button, same shell as the temp buttons, so
+             nothing in this box shifts when it turns on. -->
+        <button id="strongWaterBtn" class="awheel-item" style="align-self:stretch;">STRONG WATER</button>
         <div id="speciesCounters" style="display:flex;gap:5px;justify-content:center;">
           <div style="flex:1;background:rgba(255,255,255,0.05);border-radius:6px;padding:3px 5px;text-align:center;font-size:11px;color:var(--text-dim);line-height:1.5;white-space:nowrap;">
             <span id="sp1Count" style="font-size:9px;letter-spacing:0.05em;opacity:0.6;">&times;2&nbsp;</span><span id="sp1Formula" style="color:var(--accent1);font-weight:700">H&#8322;</span>
@@ -1126,6 +1142,9 @@ window.addEventListener('resize', () => {
   // The snapshot column is sized against the canvas, so it has to be re-fitted
   // too. Declared later in the file; guard for the call that fires during load.
   if (typeof syncSnapPanel === 'function') syncSnapPanel();
+  // A narrower canvas can run the sandbox out of room, so the ADD buttons are
+  // re-tested against the new size. Declared later; guard the load-time call.
+  if (typeof sbSyncAddButtons === 'function') sbSyncAddButtons();
 });
 
 // ─── Colormaps ────────────────────────────────────────────────────────────────
@@ -2884,7 +2903,9 @@ function collidePair(A, B) {
       // Only a molecule can hold vibration; a free atom has no bond to put it
       // in, so a hit on one stays perfectly elastic and the pair keeps all of
       // its motion. With nobody to take it, converting would just delete it.
-      const storers = (A.els.length > 1 ? 1 : 0) + (B.els.length > 1 ? 1 : 0);
+      // Strong water counts as having nowhere to put it, exactly like a free
+      // atom, so the hit stays elastic rather than quietly destroying energy.
+      const storers = (canStoreVib(A) ? 1 : 0) + (canStoreVib(B) ? 1 : 0);
       const conv    = storers ? fieldConvert : 0;
       const rest    = Math.sqrt(Math.max(0, 1 - conv));
       const jImp = -(1 + rest) * vn / invMassSum;
@@ -3063,8 +3084,32 @@ function bondLevels(b) {
 // because ONE collision was nearly enough and the bond was already loaded —
 // which is a story you can watch — rather than because a sixth mild knock
 // happened to tip a hidden accumulator over.
+// STRONG WATER. With it on, a water molecule is the end of the line: it cannot
+// break, and it cannot take energy into its fields either, so a hit on one is
+// perfectly elastic and bounces away with everything it arrived with.
+//
+// Those two halves are one rule, not two. A bond only breaks because its field
+// filled up past the threshold, so a molecule that never stores anything can
+// never break — and a molecule that could not break but still stored would be a
+// sink that swallows motion and never gives it back, which would drag the whole
+// world cold. Water is therefore excluded from the collision's `storers` count
+// in exactly the way a free atom already is: nobody there to take it, so the
+// restitution stays at 1 and the energy never leaves the motion in the first
+// place. Nothing is deleted and the bar chart's total still holds.
+let strongWater = false;
+function isWater(b) {
+  if (b.els.length !== 3) return false;
+  let h = 0, o = 0;
+  for (const el of b.els) { if (el === 'H') h++; else if (el === 'O') o++; }
+  return h === 2 && o === 1;
+}
+// Whether this body has a bond that can hold collision energy at all.
+function canStoreVib(b) {
+  return b.els.length > 1 && !(strongWater && isWater(b));
+}
+
 function queueIfBroken(b, energy) {
-  if (b.els.length < 2 || b.broken) return;
+  if (!canStoreVib(b) || b.broken) return;
   // Record how big a bite this was out of THIS body's motion, so the band lets
   // it run slow for a moment instead of buying the speed back off its spin.
   const ke = 0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy);
@@ -4189,6 +4234,23 @@ document.getElementById('qualitySelect').addEventListener('change', function () 
 
 document.querySelectorAll('.temp-btn').forEach(btn => {
   btn.addEventListener('click', () => setTemperature(btn.dataset.temp));
+});
+
+document.getElementById('strongWaterBtn').addEventListener('click', function () {
+  strongWater = !strongWater;
+  this.classList.toggle('active', strongWater);
+  // Whatever the waters are already holding goes back to their motion as the
+  // toggle flips, rather than sitting in a field that can no longer be refilled
+  // or released. The energy moves between the two bars; the total does not
+  // change, which is the same contract returnFieldEnergy keeps everywhere else.
+  if (strongWater) {
+    for (const b of world.bodies) {
+      if (!isWater(b) || !(b.vib > 0)) continue;
+      returnFieldEnergy(b, b.vib * doseUnit());
+      b.vib = 0; b.vibN = 0;
+    }
+  }
+  logAction('Strong water ' + (strongWater ? 'on' : 'off'));
 });
 
 function setViewModeActive(targetBtn) {
@@ -5552,6 +5614,7 @@ function applyTab(tab) {
     setRunning(false);
     sbRebuildBonds();
     sbUpdateReadout();
+    sbSyncAddButtons();   // the canvas may have resized while we were away
   } else {
     canvas.style.cursor = '';
   }
@@ -5678,6 +5741,10 @@ const sandbox = {
   hover: -1,
   hoverBond: -1,
   spawnAt: 0,         // walks the spawn point so molecules do not stack
+  sel: null,          // { kind: 'mol' | 'atom', anchor }  what a click selected
+  press: null,        // { x, y, hit }  where the pointer went down, to tell a
+                      //                click from a drag
+  xBox: null,         // the delete badge's box, in canvas px, when one is shown
 };
 
 // Atoms the pointer is currently holding: they are where your hand put them, so
@@ -5932,6 +5999,8 @@ function drawSandbox() {
   ctx.textAlign = 'center';
   for (const p of A) ctx.fillText(p.el, p.x, p.y + valenceRadius(p.el) + 18);
   ctx.textAlign = 'left';
+
+  sbDrawSelection(ctx);
 }
 
 // Valence electrons: the bonding ones seated in each bond's gap, the rest
@@ -6034,20 +6103,224 @@ function sbThumb(cv, els) {
 }
 
 // ── Placing, dragging, reading out ──────────────────────────────────────────
-function sbSpawn(els) {
-  const cx = canvas.width / 2, cy = (world.top + canvas.height) / 2;
-  // Walk the spawn point round a ring so a second press does not land on top
-  // of the first.
+// ROOM. A new molecule never lands on top of what is already there, or even
+// near it: every one of its atoms must sit SB_ROOM radii clear of every atom in
+// the scene, measured against the LARGER of the two so an oxygen demands the
+// gap an oxygen needs. Three radii is about 90 px for a pair of hydrogens —
+// twice their own bond length — so a fresh molecule is unmistakably its own
+// thing and the interaction profile (which has faded out by 2x the natural
+// length, see SB_RANGE) reads zero across the gap.
+//
+// The spot is found by scanning the whole legal area rather than by guessing
+// and retrying, so "there is nowhere left" is a fact about the scene and not
+// about how many times we rolled the dice. When the scan comes up empty the ADD
+// buttons grey out, which is the only honest thing to do: the alternative is a
+// button that silently does nothing.
+const SB_ROOM = 3;                 // clear space, in the larger atom's radii
+const SB_EDGE = 14;                // px kept between any atom and the edge
+const SB_ROOM_STEP = 12;           // px grid the scan walks
+
+// How much more than the required gap this spot has. Negative means too close.
+function sbClearance(x, y, el) {
+  let worst = Infinity;
+  for (const a of sandbox.atoms) {
+    const need = SB_ROOM * Math.max(valenceRadius(el), valenceRadius(a.el));
+    worst = Math.min(worst, Math.hypot(x - a.x, y - a.y) - need);
+  }
+  return worst;
+}
+
+// Where a new els[0]-els[1] pair can go, laid out horizontally, or null if
+// nowhere can. Among the spots that clear, the one nearest a walking ring
+// position wins, so repeated presses still fan out around the middle instead of
+// all piling into the same corner of the scan order.
+function sbRoomFor(els) {
+  const r0 = bondLen(els[0], els[1]);
+  const rL = valenceRadius(els[0]), rR = valenceRadius(els[1]);
+  const rT = Math.max(rL, rR);
+  const x0 = SB_EDGE + r0 / 2 + rL, x1 = canvas.width - SB_EDGE - r0 / 2 - rR;
+  const y0 = world.top + SB_EDGE + rT, y1 = canvas.height - SB_EDGE - rT;
+  if (x1 < x0 || y1 < y0) return null;
+
   const a = sandbox.spawnAt * 1.1;
   const R = Math.min(canvas.width, canvas.height - world.top) * 0.28;
+  const px = (x0 + x1) / 2 + Math.cos(a) * R;
+  const py = (y0 + y1) / 2 + Math.sin(a) * R;
+
+  let best = null, bestD = Infinity;
+  for (let y = y0; y <= y1; y += SB_ROOM_STEP) {
+    for (let x = x0; x <= x1; x += SB_ROOM_STEP) {
+      if (sbClearance(x - r0 / 2, y, els[0]) < 0) continue;
+      if (sbClearance(x + r0 / 2, y, els[1]) < 0) continue;
+      const d = Math.hypot(x - px, y - py);
+      if (d < bestD) { best = { x, y }; bestD = d; }
+    }
+  }
+  return best;
+}
+
+const SB_ADDABLE = [['sbAddH2', ['H', 'H']], ['sbAddO2', ['O', 'O']]];
+function sbSyncAddButtons() {
+  for (const [id, els] of SB_ADDABLE) {
+    const b = document.getElementById(id);
+    if (!b) continue;
+    const ok = !!sbRoomFor(els);
+    b.disabled = !ok;
+    b.title = ok ? 'Add an ' + sbSpecies(els)
+                 : 'No room left — delete or clear something first';
+  }
+}
+function sbSpecies(els) { return els[0] + '2'; }
+
+function sbSpawn(els) {
+  const spot = sbRoomFor(els);
+  if (!spot) { sbSyncAddButtons(); return; }
   sandbox.spawnAt++;
-  const ox = cx + Math.cos(a) * R * (0.5 + 0.5 * Math.random());
-  const oy = cy + Math.sin(a) * R * (0.5 + 0.5 * Math.random());
   const r0 = bondLen(els[0], els[1]);
-  sandbox.atoms.push({ el: els[0], x: ox - r0 / 2, y: oy });
-  sandbox.atoms.push({ el: els[1], x: ox + r0 / 2, y: oy });
+  sandbox.atoms.push({ el: els[0], x: spot.x - r0 / 2, y: spot.y });
+  sandbox.atoms.push({ el: els[1], x: spot.x + r0 / 2, y: spot.y });
   sbRebuildBonds();
   sbUpdateReadout();
+  sbSyncAddButtons();
+}
+
+// ── Selection: a dotted outline, the arrow keys, and the X ──────────────────
+// A click that does not drag selects instead of moving. Click the middle of a
+// molecule — the same band that makes the bond a drag handle — and the whole
+// molecule is outlined; click one atom's nucleus and only that atom is. Either
+// way the arrow keys then nudge what is outlined, which is the only way to
+// place something to the pixel: a drag is as precise as your hand.
+//
+// The X only appears on a molecule you ADDED and have not changed: an intact H2
+// or O2. Products are not deletable, and neither is a lone atom — a reaction
+// cannot lose atoms halfway through, and letting one vanish would quietly break
+// the energy accounting the whole tab is about. Clearing out a reactant you
+// decided you did not want is a different thing, and that is what this is for.
+const SB_CLICK_SLOP = 4;           // px of travel still counted as a click
+const SB_NUDGE = 4;                // px per arrow press (16 with shift)
+const SB_NUDGE_FAST = 16;
+const SB_SEL_PAD = 12;             // px between the outline and the atoms
+const SB_X_R = 11;                 // px radius of the delete badge
+
+// The atoms the current selection covers, or null if there is no selection.
+// A molecule is resolved from its anchor atom every time rather than stored, so
+// pulling an atom off a selected water re-reads as the smaller molecule instead
+// of outlining a group that no longer exists.
+function sbSelAtoms() {
+  const s = sandbox.sel;
+  if (!s || !sandbox.atoms[s.anchor]) return null;
+  if (s.kind === 'atom') return [s.anchor];
+  const m = sbMolecules().find(q => q.idx.includes(s.anchor));
+  return m ? m.idx : [s.anchor];
+}
+
+// Deletable: a whole molecule, two atoms, both the same element, bonded to each
+// other. That is exactly an untouched H2 or O2 — what the ADD buttons make.
+function sbSelDeletable(idx) {
+  if (!sandbox.sel || sandbox.sel.kind !== 'mol' || !idx || idx.length !== 2) return false;
+  const a = sandbox.atoms[idx[0]], b = sandbox.atoms[idx[1]];
+  return !!a && !!b && a.el === b.el;
+}
+
+function sbClearSel() { sandbox.sel = null; sandbox.xBox = null; }
+
+function sbDeleteSelection() {
+  const idx = sbSelAtoms();
+  if (!sbSelDeletable(idx)) return;
+  const name = sbSpecies([sandbox.atoms[idx[0]].el]);
+  const kill = new Set(idx);
+  sandbox.atoms = sandbox.atoms.filter((_, i) => !kill.has(i));
+  sbClearSel();
+  sbRebuildBonds();
+  sbUpdateReadout();
+  sbSyncAddButtons();
+  logAction('Sandbox: deleted an ' + name);
+}
+
+// Move the selection by whole pixels, clamped as a group so a molecule keeps
+// its shape against an edge — the same rule the rigid drag follows. No snap:
+// nudging an atom a few px off its natural length is a legitimate thing to
+// want, and it is what makes the energy readout move under your hand.
+function sbNudge(dx, dy) {
+  const idx = sbSelAtoms();
+  if (!idx) return;
+  const A = sandbox.atoms;
+  let lo = -Infinity, hi = Infinity, top = -Infinity, bot = Infinity;
+  for (const i of idx) {
+    lo = Math.max(lo, 12 - A[i].x);
+    hi = Math.min(hi, canvas.width - 12 - A[i].x);
+    top = Math.max(top, world.top + 12 - A[i].y);
+    bot = Math.min(bot, canvas.height - 12 - A[i].y);
+  }
+  const mx = hi >= lo ? Math.min(hi, Math.max(lo, dx)) : 0;
+  const my = bot >= top ? Math.min(bot, Math.max(top, dy)) : 0;
+  for (const i of idx) { A[i].x += mx; A[i].y += my; }
+  sbRebuildBonds();
+  sbUpdateReadout();
+  sbSyncAddButtons();
+}
+
+// The outline and its badge. Drawn last so it sits over the field and the
+// electrons, and the badge's box is recorded here — where its geometry already
+// is — so the click test cannot drift from what is on screen.
+function sbDrawSelection(c) {
+  sandbox.xBox = null;
+  const idx = sbSelAtoms();
+  if (!idx) return;
+  const A = sandbox.atoms;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const i of idx) {
+    const r = valenceRadius(A[i].el) + SB_SEL_PAD;
+    x0 = Math.min(x0, A[i].x - r); x1 = Math.max(x1, A[i].x + r);
+    y0 = Math.min(y0, A[i].y - r);
+    // The element letters hang below each atom, so the box has to clear them
+    // too or the outline cuts straight through the labels.
+    y1 = Math.max(y1, A[i].y + valenceRadius(A[i].el) + 24);
+  }
+  c.save();
+  c.setLineDash([5, 4]);
+  c.lineWidth = 1.5;
+  c.strokeStyle = 'rgba(255,255,255,0.72)';
+  if (idx.length === 1) {
+    // One atom: a ring reads as "this atom", where a box would read as "this
+    // little molecule".
+    c.beginPath();
+    c.arc(A[idx[0]].x, A[idx[0]].y, valenceRadius(A[idx[0]].el) + SB_SEL_PAD, 0, Math.PI * 2);
+    c.stroke();
+  } else {
+    const r = 10;
+    c.beginPath();
+    c.moveTo(x0 + r, y0);
+    c.arcTo(x1, y0, x1, y1, r);
+    c.arcTo(x1, y1, x0, y1, r);
+    c.arcTo(x0, y1, x0, y0, r);
+    c.arcTo(x0, y0, x1, y0, r);
+    c.closePath();
+    c.stroke();
+  }
+  c.setLineDash([]);
+
+  if (sbSelDeletable(idx)) {
+    const cx = Math.min(canvas.width - SB_X_R - 2, x1);
+    const cy = Math.max(world.top + SB_X_R + 2, y0);
+    sandbox.xBox = { x: cx, y: cy, r: SB_X_R };
+    c.fillStyle = 'rgba(12,10,20,0.92)';
+    c.beginPath(); c.arc(cx, cy, SB_X_R, 0, Math.PI * 2); c.fill();
+    c.strokeStyle = 'rgba(255,255,255,0.8)';
+    c.lineWidth = 1.5;
+    c.stroke();
+    const k = SB_X_R * 0.42;
+    c.beginPath();
+    c.moveTo(cx - k, cy - k); c.lineTo(cx + k, cy + k);
+    c.moveTo(cx + k, cy - k); c.lineTo(cx - k, cy + k);
+    c.stroke();
+  }
+  c.restore();
+}
+
+function sbHitX(p) {
+  const b = sandbox.xBox;
+  return !!b && Math.hypot(p.x - b.x, p.y - b.y) <= b.r + 3;
 }
 
 function sbPointer(ev) {
@@ -6117,11 +6390,14 @@ function sbGrabMolecule(bondN, p) {
 function sbDown(ev) {
   if (!sandbox.on) return;
   const p = sbPointer(ev);
+  // The badge takes the click before anything under it does, so the X is
+  // clickable even though it sits over the molecule's own grab area.
+  if (sbHitX(p)) { sbDeleteSelection(); ev.preventDefault(); return; }
   const h = sbResolve(p);
+  sandbox.press = { x: p.x, y: p.y, hit: h };
   if (h.atom >= 0) sandbox.drag = h.atom;
   else if (h.bond >= 0) sandbox.dragMol = sbGrabMolecule(h.bond, p);
-  else return;
-  canvas.style.cursor = 'grabbing';
+  if (sandbox.drag >= 0 || sandbox.dragMol) canvas.style.cursor = 'grabbing';
   ev.preventDefault();
 }
 
@@ -6132,7 +6408,8 @@ function sbMove(ev) {
     const h = sbResolve(p);
     sandbox.hover = h.atom;
     sandbox.hoverBond = h.bond;
-    canvas.style.cursor = (h.atom >= 0 || h.bond >= 0) ? 'grab' : '';
+    canvas.style.cursor = sbHitX(p) ? 'pointer'
+                        : (h.atom >= 0 || h.bond >= 0) ? 'grab' : '';
     return;
   }
   if (sandbox.dragMol) {
@@ -6162,15 +6439,33 @@ function sbMove(ev) {
   sbUpdateReadout();
 }
 
-function sbUp() {
-  if (sandbox.drag < 0 && !sandbox.dragMol) return;
+function sbUp(ev) {
+  const pr = sandbox.press;
+  const dragging = sandbox.drag >= 0 || !!sandbox.dragMol;
+  sandbox.press = null;
   sandbox.drag = -1;
   sandbox.dragMol = null;
   canvas.style.cursor = '';
+
+  // A press that went nowhere is a click: it selects what it landed on, or
+  // clears the selection if it landed on nothing. A press that moved was a
+  // drag, and a drag leaves the selection alone.
+  if (pr && ev) {
+    const p = sbPointer(ev);
+    if (Math.hypot(p.x - pr.x, p.y - pr.y) <= SB_CLICK_SLOP) {
+      if (pr.hit.atom >= 0) sandbox.sel = { kind: 'atom', anchor: pr.hit.atom };
+      else if (pr.hit.bond >= 0) {
+        const b = sandbox.bonds[pr.hit.bond];
+        if (b) sandbox.sel = { kind: 'mol', anchor: b.i };
+      } else sbClearSel();
+    }
+  }
+  if (!dragging) { sbSyncAddButtons(); return; }
   // Settle into the real shape only once you let go: snapping mid-drag would
   // fight the hand.
   sbSnapAll();
   sbUpdateReadout();
+  sbSyncAddButtons();
 }
 
 canvas.addEventListener('pointerdown', sbDown);
@@ -6205,7 +6500,27 @@ document.getElementById('sbAddH2').addEventListener('click', () => sbSpawn(['H',
 document.getElementById('sbAddO2').addEventListener('click', () => sbSpawn(['O', 'O']));
 document.getElementById('sbClear').addEventListener('click', () => {
   sandbox.atoms = []; sandbox.bonds = []; sandbox.spawnAt = 0;
-  sbUpdateReadout(); logAction('Sandbox cleared');
+  sbClearSel();
+  sbUpdateReadout(); sbSyncAddButtons(); logAction('Sandbox cleared');
+});
+
+// The arrow keys drive whatever is outlined; Escape drops the outline and
+// Delete removes a deletable molecule, so the X has a keyboard twin.
+document.addEventListener('keydown', e => {
+  if (!sandbox.on || !sandbox.sel) return;
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0],
+              ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+  if (d) {
+    const step = e.shiftKey ? SB_NUDGE_FAST : SB_NUDGE;
+    sbNudge(d[0] * step, d[1] * step);
+  } else if (e.key === 'Escape') {
+    sbClearSel();
+  } else if (e.key === 'Delete' || e.key === 'Backspace') {
+    sbDeleteSelection();
+  } else return;
+  e.preventDefault();
 });
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
@@ -6227,6 +6542,7 @@ setViewModeActive(document.querySelector('.awheel-item[data-view="shells"]'));
 // has to happen before the world loop starts rather than between its frames.
 sbThumb(document.querySelector('#sbAddH2 .sb-thumb'), ['H', 'H']);
 sbThumb(document.querySelector('#sbAddO2 .sb-thumb'), ['O', 'O']);
+sbSyncAddButtons();
 // The sim opens on One Bond. It is the one that explains what a bond IS, and
 // the Reactions tab is easier to read once you have pulled one apart by hand.
 // applyTab does the whole switch — rows, energy bar, world box — so there is

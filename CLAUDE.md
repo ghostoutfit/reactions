@@ -2062,6 +2062,64 @@ is only right for single bonds.)
 Counted off the renderer with 1 O₂ + 1 H₂ on screen: 18 electron dots — 4 in the
 O=O gap, 4 lone on each oxygen, 2 in the H–H, and 2 inner-shell per oxygen.
 
+### Room to place: three radii, or the button greys out
+
+A new molecule never lands on or beside what is already there. Every one of its
+atoms must sit **`SB_ROOM` (3) × the larger of the two valence radii** clear of
+every atom in the scene — about 90 px for a pair of hydrogens, twice their own
+bond length, and `SB_RANGE` has the interaction profile faded out well inside
+that, so a fresh molecule reads as zero against everything else.
+
+`sbRoomFor(els)` **scans the whole legal area** on a 12 px grid rather than
+guessing a spot and retrying. That matters for the greying out: "there is
+nowhere left" is then a fact about the scene, not about how many times we rolled
+the dice. Among the spots that clear, the one nearest a walking ring position
+wins, so repeated presses still fan out around the middle instead of filling the
+scan order corner-first.
+
+When the scan comes up empty, `sbSyncAddButtons()` **disables that ADD button**
+and retitles it. It is greyed, not hidden, so the row never reflows and the
+picture still says what the button is for. The two buttons are tested
+separately: an O₂ demands a bigger gap than an H₂, so it can grey out first.
+Re-tested after every spawn, drag, nudge, delete, clear, tab switch and resize —
+a narrower canvas can run the scene out of room on its own.
+
+Measured on a 1242×785 canvas: 45 H₂ fit before both buttons greyed, and the
+closest pair in different molecules sat 91 px apart against a 90 px requirement.
+
+### Selecting: a dotted outline, the arrow keys, and the X
+
+A click that does not move the pointer (`SB_CLICK_SLOP`, 4 px) **selects**
+instead of dragging. The target follows the same precedence the drag handles
+do — the middle band of a bond means the whole molecule, an atom's own nucleus
+means that atom — so there is one rule on screen, not two:
+
+- **Molecule** → a dashed rounded box around the group, padded clear of the
+  element letters that hang under each atom.
+- **One atom** → a dashed ring around that atom. A ring, because a box around a
+  single atom reads as "this little molecule".
+
+Either way the **arrow keys** then nudge what is outlined, 4 px a press and 16
+with shift, clamped as a group so a molecule keeps its shape against an edge.
+That is the only way to place something to the pixel; a drag is as precise as
+your hand. Nudging deliberately does **not** snap — putting an atom a few px off
+its natural length is a legitimate thing to want, and it is what makes the
+energy readout move under your hand. Escape drops the outline; Delete is the X's
+keyboard twin.
+
+A drag leaves the selection alone, and the selection is stored as an **anchor
+atom, not a list** — the molecule is resolved from it every frame, so pulling an
+atom off a selected water re-reads as the smaller molecule instead of outlining
+a group that no longer exists.
+
+**The X only appears on a molecule you added and have not changed**: two atoms,
+same element, bonded — exactly an intact H₂ or O₂. Products are not deletable,
+and neither is a lone atom: a reaction cannot lose atoms halfway through, and
+letting one vanish would quietly break the energy accounting this whole tab is
+about. Clearing out a reactant you decided you did not want is a different
+thing, and that is all this is for. `sbDrawSelection` records the badge's box
+where its geometry already is, so the click test cannot drift from what is drawn.
+
 ## Recombination — the other half of the reaction
 
 Once the scene has come apart, the atoms find each other again and make
@@ -2144,6 +2202,36 @@ Note the straggler problem: `breakSlow` cools the world as it breaks, so the las
 intact molecule can take a very long time to go, and until it does the gate stays
 shut. Sometimes all six break in 5 s, sometimes five break and the last holds out
 past 20 s.
+
+### Strong water
+
+A toggle in the Reactions tab's pink box. With it on, a water molecule is the
+end of the line: **it cannot break, and it cannot take energy into its fields
+either**, so a hit on one is perfectly elastic and bounces away with everything
+it arrived with. Same button shell as the temp buttons, so nothing in that box
+shifts when it turns on.
+
+Those two halves are **one rule, not two**, and the implementation is one line:
+water is left out of the collision's `storers` count in exactly the way a free
+atom already is.
+
+- A bond only ever breaks because its field filled past the threshold, so a
+  molecule that stores nothing can never break. The break half comes free.
+- The converse matters more: a molecule that could not break but still stored
+  would be a **sink that swallows motion and never gives it back**, dragging the
+  whole world cold. With no storer on either side the restitution stays at 1, so
+  the energy never leaves the motion in the first place — nothing is deleted and
+  the bar chart's total still holds.
+
+Flipping the toggle on hands back whatever the waters are already holding, via
+`returnFieldEnergy`, rather than stranding it in a field that can no longer be
+refilled or released. Measured on a mid-run flip: fields 2,992 → 2,810 and
+motion 17,113 → 17,295, total unchanged at 20,106.
+
+Measured over a 45 s run with it on: 8 joins, 4 waters, **not one water lost**,
+every water's `vib` exactly 0 throughout, bar total constant at 18,360. The same
+scene with it off broke a water 5 times and ran waters up to 1.22 doses of field
+energy.
 
 ## The energy bar chart
 
