@@ -2192,6 +2192,33 @@ origin moved from the midpoint of the row to the **centre of mass** — the same
 point for an H₂ or an O₂, so nothing that existed before moved, but not the same
 for an OH or a water, and the energy split above is about exactly that point.
 
+**Water's pivot is exaggerated on purpose.** Oxygen is 16 of water's 18, so the
+true centre of mass sits **3.34 px** from the O's nucleus towards the two
+hydrogens — 11% of the way to the midpoint between them — and a spin about it is
+indistinguishable on screen from a spin about the oxygen itself. The whole point
+of watching a water tumble is that it does *not* turn about the big atom, so
+`waterPivot` walks it out to **0.35**, putting the pivot 10.5 px off the nucleus
+and sending the oxygen round a **22 px circle** instead of a 6.7 px one. Dev
+slider, and `WATER_PIVOT_TRUE` (0.111) is marked `(true)` on it so the honest
+value is one drag away. Like the bar chart's raised zero, the number is wrong
+and the behaviour it shows is right.
+
+Nothing in the accounting pays for it. `inertia` is summed about whatever origin
+the body is built with, so the impulse solver, `energyOfMotion` and the collision
+response all use the same reference point and the same quadratic form. Measured:
+six waters, strong water on (so every hit is elastic), speed band off, 15 s of
+collisions — `energyOfMotion` finished on **exactly** its starting value, pivot
+at 0.35. What the offset really costs is subtler and is not energy: a free rigid
+body's rotation is only decoupled from its translation about the true COM, so
+this is a body spinning about a point it would not quite spin about. That is the
+distortion, and it is the one being asked for.
+
+`rebuildWaterPivots()` moves the pivot of every water already in the world when
+the slider changes — otherwise nothing happens until the next join and the
+slider cannot be judged by eye. The atoms stay exactly where they are on screen:
+the body's position absorbs the shift of its own origin, rotated into world
+space.
+
 Fields falls and motion rises as it runs, because fields is One Bond's
 expression and forming a bond pays part of what the atoms owed: measured
 **6,000 → 2,436** over one run while the motion bar rose by the same, with the
@@ -2227,6 +2254,17 @@ Flipping the toggle on hands back whatever the waters are already holding, via
 `returnFieldEnergy`, rather than stranding it in a field that can no longer be
 refilled or released. Measured on a mid-run flip: fields 2,992 → 2,810 and
 motion 17,113 → 17,295, total unchanged at 20,106.
+
+**The flash is a flash.** An ordinary bond's flare fades exponentially
+(`FLARE_TAU`, ~1.2 s to 2%), which is right when the colour is also reporting
+the energy the bond took in — the two tail off together. A strong water took
+nothing in, so its colour has nothing to report once the contact is over, and a
+slow exponential tail would read as a bond still holding something. It goes out
+**linearly inside a fixed window** instead, so `strongFlareSec` (dev slider,
+default 0.5 s) is literally how long the pink can last. Measured by driving the
+clock a frame at a time: 0.25 → 0.267 s, 0.5 → 0.517 s, 1.0 → 1.000 s, 1.5 →
+1.517 s, half gone at 0.267 s of a 0.5 s flash. The same water with the toggle
+off takes 1.183 s to fall to 2%.
 
 Measured over a 45 s run with it on: 8 joins, 4 waters, **not one water lost**,
 every water's `vib` exactly 0 throughout, bar total constant at 18,360. The same

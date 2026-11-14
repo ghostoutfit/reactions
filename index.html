@@ -2389,6 +2389,50 @@ function moleculeGeometry(els) {
   return els.map((el, k) => ({ el, lx: offs[k], ly: 0 }));
 }
 
+// WATER'S PIVOT, EXAGGERATED ON PURPOSE.
+//
+// A water's true centre of mass sits 3.3 px from the oxygen's nucleus towards
+// the two hydrogens — oxygen is 16 of the molecule's 18, so the real answer is
+// 11% of the way to the midpoint between the H's, and a spin about it is
+// indistinguishable on screen from a spin about the O itself. The point of
+// showing a water tumbling is that it does NOT turn about the big atom, so the
+// pivot is walked further out until you can see the oxygen itself going round.
+//
+// This is a deliberate distortion, like the bar chart's raised zero: the number
+// is wrong and the behaviour it shows is right. 0.11 on the slider is the
+// honest value if you want to see what it really looks like.
+let waterPivot = 0.35;             // of the way from O to the midpoint of the H's
+const WATER_PIVOT_TRUE = 0.111;
+
+// Water's pivot in the geometry's own coordinates, or null for anything else.
+// moleculeGeometry puts the oxygen at the origin with both hydrogens out at
+// +lx, so the bisector IS the x axis and the midpoint of the H's is their mean.
+function waterPivotLocal(els, geo) {
+  if (els.length !== 3 || els[0] !== 'H' || els[1] !== 'O' || els[2] !== 'H') return null;
+  return { x: waterPivot * (geo[0].lx + geo[2].lx) / 2,
+           y: waterPivot * (geo[0].ly + geo[2].ly) / 2 };
+}
+
+// Move the pivot of every water already in the world, so the slider can be
+// judged by eye instead of taking effect at the next join. The atoms stay
+// exactly where they are on screen: the body's position absorbs the shift of
+// its own origin, rotated into world space.
+function rebuildWaterPivots() {
+  for (const b of world.bodies) {
+    const geo = moleculeGeometry(b.els);
+    const wp = waterPivotLocal(b.els, geo);
+    if (!wp) continue;
+    const ox = geo[0].lx - b.atoms[0].lx, oy = geo[0].ly - b.atoms[0].ly;
+    const dx = wp.x - ox, dy = wp.y - oy;
+    const c = Math.cos(b.angle), s = Math.sin(b.angle);
+    b.x += dx * c - dy * s;
+    b.y += dx * s + dy * c;
+    b.atoms.forEach((at, i) => { at.lx = geo[i].lx - wp.x; at.ly = geo[i].ly - wp.y; });
+    b.inertia = b.atoms.reduce((a, at) => a + at.m * (at.lx * at.lx + at.ly * at.ly), 0) || 1;
+    b.radius = Math.max(...b.atoms.map(at => Math.hypot(at.lx, at.ly) + at.r));
+  }
+}
+
 function makeBody(els, x, y, heading, speed, spin, nominal = speed) {
   // Taken out about the CENTRE OF MASS, not the midpoint of the row. For an H2
   // or an O2 they are the same point, so nothing that existed before this moves;
@@ -2401,6 +2445,9 @@ function makeBody(els, x, y, heading, speed, spin, nominal = speed) {
     mx += g.lx * m; my += g.ly * m; mt += m;
   }
   mx /= mt || 1; my /= mt || 1;
+
+  const wp = waterPivotLocal(els, geo);
+  if (wp) { mx = wp.x; my = wp.y; }
 
   const atoms = geo.map((g) => ({
     el: g.el,
@@ -2654,7 +2701,17 @@ function stepWorld(dt) {
     b.y += b.vy * dt;
     b.angle += b.spin * dt;
     collideWalls(b);
-    if (b.flare > 1e-4) b.flare *= Math.exp(-dt / FLARE_TAU); else b.flare = 0;
+    // Strong water's flash is a FLASH. An ordinary bond's flare fades
+    // exponentially, which is right when the colour is also reporting the
+    // energy the bond took in — the two tail off together. A strong water took
+    // nothing in, so its colour has nothing to report once the contact is over,
+    // and a slow exponential tail reads as a bond that is still holding
+    // something. It goes out linearly instead, inside a fixed window, so
+    // `strongFlareSec` is literally how long the pink can last.
+    if (strongWater && isWater(b)) {
+      b.flare = Math.max(0, b.flare - dt / Math.max(0.05, strongFlareSec));
+    } else if (b.flare > 1e-4) b.flare *= Math.exp(-dt / FLARE_TAU);
+    else b.flare = 0;
     // A bond that is left alone cools back down. Without this every molecule
     // breaks eventually, however cold the world is, and Low stops being safe.
     if (b.sag > 1e-4) b.sag *= Math.exp(-dt / SAG_TAU); else b.sag = 0;
@@ -3097,6 +3154,7 @@ function bondLevels(b) {
 // restitution stays at 1 and the energy never leaves the motion in the first
 // place. Nothing is deleted and the bar chart's total still holds.
 let strongWater = false;
+let strongFlareSec = 0.5;          // how long a strong water may stay pink
 function isWater(b) {
   if (b.els.length !== 3) return false;
   let h = 0, o = 0;
@@ -4408,6 +4466,8 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     '<div id="devRecombNote" style="opacity:0.45;font-size:10px;margin-left:21px;"></div>' +
     row('devRecombPull', 'Pull',  0, 2000, 20,  recombPull,  '#4dff9f') +
     row('devRecombRange','Reach', 1.2, 4, 0.1, recombRange, '#4dff9f') +
+    row('devWaterPivot', 'Water pivot', 0, 0.6, 0.01, waterPivot, '#4dff9f') +
+    row('devStrongFlare','Strong flash', 0.1, 2, 0.05, strongFlareSec, '#4dff9f') +
     '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
     '<div style="font-size:9px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.4;margin-top:8px;">' +
       'Energy in fields</div>' +
@@ -4499,6 +4559,12 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   bind('devFieldsZero', v => fieldsZeroKJ = v, false, v => Math.round(v) + ' kJ/mol');
   bind('devRecombPull', v => recombPull  = v, false, v => Math.round(v) + ' px/s²');
   bind('devRecombRange', v => recombRange = v, false, v => v.toFixed(1) + '× natural');
+  // The pivot only takes effect on waters built after it changes, so existing
+  // ones are rebuilt in place — otherwise the slider does nothing until the
+  // next join and it is impossible to judge by eye.
+  bind('devWaterPivot', v => { waterPivot = v; rebuildWaterPivots(); }, false,
+       v => v.toFixed(2) + (Math.abs(v - WATER_PIVOT_TRUE) < 0.005 ? ' (true)' : ' of O→HH'));
+  bind('devStrongFlare', v => strongFlareSec = v, false, v => v.toFixed(2) + ' s');
 
   // Recombination on/off, and whether it has opened yet
   const rec = panel.querySelector('#devRecomb');
