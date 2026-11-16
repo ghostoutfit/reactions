@@ -823,11 +823,6 @@
           </div>
           <span class="slider-icon"><img src="images/Rabbit.png" style="height:0.98em;vertical-align:middle;display:block;margin-top:-3px"></span>
         </div>
-        <div class="slider-group" id="zoomSliderRow">
-          <span class="slider-icon" style="visibility:hidden"><img src="images/Turtle.png" style="height:0.85em;vertical-align:middle;display:block"></span>
-          <input type="range" id="zoomSlider" min="-1" max="1" step="0.02" value="0">
-          <span class="slider-icon">🔍</span>
-        </div>
         <label class="toggle-label" id="showFieldsRow">
           <input type="checkbox" id="showFields" checked>
           <span class="field-label-electric">Show energy in fields</span>
@@ -836,7 +831,6 @@
       </div>
       <div style="display:flex;gap:10px;align-self:stretch;align-items:center">
         <div style="display:flex;flex-direction:column;gap:4px">
-          <button class="awheel-item" data-view="trails" style="display:flex;align-items:center;gap:5px"><canvas id="trailsModeIcon" width="22" height="18" style="display:block;flex-shrink:0;image-rendering:pixelated"></canvas>Trails</button>
           <button class="awheel-item active" data-view="shells" style="display:flex;align-items:center;gap:5px"><canvas id="shellsModeIcon" width="22" height="18" style="display:block;flex-shrink:0;image-rendering:pixelated"></canvas>Shells</button>
           <button class="awheel-item" data-view="space" style="display:flex;align-items:center;gap:5px"><canvas id="spaceModeIcon" width="22" height="18" style="display:block;flex-shrink:0;image-rendering:pixelated"></canvas>Space</button>
         </div>
@@ -1069,12 +1063,18 @@ function _applyQuality(level) {
   if (el) el.value = level;
 }
 
-// ── Renderer benchmark ────────────────────────────────────────────────────────
-// Prices what the sim actually draws — the valence-electron trails, which are
-// far and away the biggest cost now. One pass is the heaviest world the sliders
-// can make: 6 H2 + 6 O2, which is 6x2 + 6x12 = 84 electrons. Pricing it as
-// all-O2 would be 144 and would talk a capable machine down a tier for no
-// reason. getImageData() at the end forces a GPU sync so the timing is real.
+// ── Renderer benchmark ──────────────────────────────────────────────────────
+// Prices what the sim actually draws — the shells view: a band per occupied
+// shell, the inner electrons, the valence dots and a packed nucleus per atom.
+// One pass is the heaviest world the sliders can make: 6 H2 + 6 O2, which is
+// 6x2 + 6x12 = 84 valence electrons. Pricing it as all-O2 would be 144 and
+// would talk a capable machine down a tier for no reason. getImageData() at the
+// end forces a GPU sync so the timing is real.
+//
+// It used to price the trails view, which was then the dominant cost. Measured
+// on the same synthetic world on one machine, the shells stack costs 1.31x what
+// the trails pass did (1.70 ms against 1.30), and the thresholds below were
+// multiplied by that so the same machine lands in the same tier as before.
 const BENCH_WORLD = [['H', 'H'], ['O', 'O']];   // 6 of each, as the sliders cap it
 
 function _runPerfBenchmark() {
@@ -1084,20 +1084,21 @@ function _runPerfBenchmark() {
   const saved = _quality;
   _quality = 'hi-res';                 // always price the heaviest tier
 
-  // Synthetic bodies, filled trails, laid out across the offscreen canvas
+  // Synthetic bodies laid out across the offscreen canvas
   const bodies = Array.from({ length: 12 }, (_, i) => {
     const b = withElectrons(makeBody(BENCH_WORLD[i % 2], 0, 0, 0, 0, 0, 1));
     b.x = 60 + (i % 4) * 150; b.y = 70 + Math.floor(i / 4) * 130;
     b.angle = i * 0.7;
-    for (const e of b.electrons) {
-      for (let t = 0; t < TRAIL_MAX; t++) {
-        e.tx[t] = Math.cos(t * 0.3) * 40; e.ty[t] = Math.sin(t * 0.3) * 25;
-      }
-      e.n = TIER_TRAIL_LEN['hi-res']; e.head = 0;
-    }
     return b;
   });
-  const pass = () => bodies.forEach(b => drawElectrons(b, dc));
+  // The same order drawWorld uses, so the cost is the cost of a real frame.
+  const pass = () => {
+    for (const b of bodies) for (const p of bodyAtoms(b)) drawAtomShells(dc, p);
+    for (const b of bodies) for (const p of bodyAtoms(b)) drawInnerElectrons(dc, p);
+    for (const b of bodies) drawElectronsAsDots(b, dc);
+    for (const b of bodies) for (const p of bodyAtoms(b))
+      drawNucleons(dc, p.x, p.y, p.el, 0, WORLD_NUCLEON_R);
+  };
 
   pass();                              // warm-up: settle JIT, GPU init, glow cache
   dc.getImageData(0, 0, 1, 1);
@@ -1110,11 +1111,12 @@ function _runPerfBenchmark() {
   return ms;
 }
 
-// Calibrated against measured draw cost at a full 6+6 world on a 2024 laptop:
-// hi-res ~1.3 ms, detailed ~0.7 ms, simple ~0.45 ms per frame. The thresholds
-// sit well above those so an ordinary machine gets hi-res and only a genuinely
-// slow one steps down; drawing is not the only thing a 16.7 ms frame must do.
-const TIER_THRESHOLD_MS = { 'hi-res': 6.0, 'detailed': 14.0 };
+// Calibrated against measured draw cost at a full 6+6 world on a 2024 laptop,
+// then carried across from the trails benchmark by the 1.31x above: hi-res
+// ~1.7 ms. The thresholds sit well clear of that so an ordinary machine gets
+// hi-res and only a genuinely slow one steps down; drawing is not the only
+// thing a 16.7 ms frame must do.
+const TIER_THRESHOLD_MS = { 'hi-res': 7.9, 'detailed': 18.3 };
 
 function pickTier(ms) {
   if (ms < TIER_THRESHOLD_MS['hi-res'])   return 'hi-res';
@@ -1690,7 +1692,7 @@ function drawSpaceFilling() {
   }
   _sphereCtx.setTransform(1, 0, 0, 1, 0, 0);
   _sphereCtx.clearRect(0, 0, _sphereLayer.width, _sphereLayer.height);
-  _sphereCtx.setTransform(ctx.getTransform());     // match the world zoom/pan
+  _sphereCtx.setTransform(ctx.getTransform());     // match the world's transform
   const runsFor = [];
   for (const b of world.bodies) {
     const atoms = bodyAtoms(b);
@@ -1814,9 +1816,11 @@ function drawNucleus(dc, px, py, scale = 1, alpha = 1) {
 }
 
 // ─── Valence electrons ────────────────────────────────────────────────────────
-// Ported from the `bonds` repo's Trails view. Each valence electron is a moving
-// point that pays out a fading trail with an arrowhead at its head — the arrow
-// is the electron, and the trail is where it has just been.
+// Ported from the `bonds` repo's Trails view, which drew each valence electron
+// as a moving point paying out a fading trail. The trail is gone; the MOTION
+// is not. Every electron still walks its figure-8 or its ring every frame,
+// because where it is on that path is what the shells view seats it by and what
+// the One Bond tab animates.
 //
 // ONLY the valence shell is modelled. Inner shells are ignored entirely: they
 // take no part in bonding and would be a crowd of circles around every nucleus.
@@ -1830,7 +1834,7 @@ function drawNucleus(dc, px, py, scale = 1, alpha = 1) {
 //              Two helium atoms have nothing but these, and never bond.
 //
 // Everything is held in BODY-LOCAL coordinates and transformed at draw time, so
-// a molecule can translate and spin without smearing or rebuilding its trails.
+// a molecule can translate and spin without its electrons being recomputed.
 
 // Helium's shell is full, so it bonds with nothing: a He body has no bonds and
 // its two electrons stay lone. That is the non-bonding case the renderer has to
@@ -1841,12 +1845,6 @@ function bondOrder(elA, elB) {
   return BOND_ORDER[[elA, elB].sort().join('-')] || 1;
 }
 
-// Trail detail per tier. This is the whole cost of the view: one stroke per
-// bucket per electron, every frame.
-const TIER_BUCKETS   = { 'hi-res': 10, 'detailed': 6, 'simple': 3 };
-const TIER_TRAIL_LEN = { 'hi-res': 48, 'detailed': 32, 'simple': 18 };
-const TRAIL_MAX = 64;             // ring-buffer size; the largest tier length
-
 // Tuning, carried over from bonds and kept adjustable (dev sliders)
 let eSpeed      = 0.60;   // phase advance per frame at 60 fps
 // 1 = no lag at all: the electron sits on the ideal point every frame. The
@@ -1854,7 +1852,6 @@ let eSpeed      = 0.60;   // phase advance per frame at 60 fps
 // steering lag, which is why eWander carries so much of it.
 let eSteer      = 0.10;   // how hard the electron is pulled onto the ideal path
 let eCrossSlow  = 0.50;   // speed multiplier at the bond midpoint crossing
-let eTrailScale = 1.0;    // multiplies the tier's trail length
 let showLonePairs = true; // non-bonding valence electrons on/off
 let lonePairsOnBonded = true;   // false: a bonded atom draws only its bonding electrons
 
@@ -1931,9 +1928,9 @@ function makeElectron(kind, el) {
     // cAngle is kept apart from `phase` so switching the toggle either way never
     // feeds one path's angle into the other's.
     home: -1, cAngle: 0,
-    // ring-buffer trail, body-local
-    tx: new Float32Array(TRAIL_MAX), ty: new Float32Array(TRAIL_MAX),
-    n: 0, head: 0,
+    // false until this electron has been stepped once; the first step snaps to
+    // the ideal point instead of steering towards it.
+    started: false,
     // lone-electron state: just where it is on its circle
     angle: 0,
   };
@@ -2037,8 +2034,8 @@ function buildElectrons(b) {
       e.angle = free
         ? facing + q * Math.PI * 2 * GOLDEN
         : facing + (lone === 1 ? 0 : (q / (lone - 1) - 0.5) * arc);
-      // Where this electron sits on its ring, fixed. The trails view advances
-      // `angle`; the shells view wants a seat, not an orbit, so it draws from
+      // Where this electron sits on its ring, fixed. `angle` advances every
+      // frame; the shells view wants a seat, not an orbit, so it draws from
       // this instead and the electron stays where it was put.
       e.angle0 = e.angle;
       const r0 = valenceRadius(at.el) * loneRadius * (e.bonded ? loneRadiusBonded : 1);
@@ -2146,9 +2143,10 @@ function stepBondElectron(e, b, k) {
   const p1 = bondPath(e, b, nextPhase, nextVisit);
   e.phase = nextPhase; e.visit = nextVisit;
 
-  // Steer towards the ideal velocity rather than snapping to the ideal point —
-  // that slight lag is what keeps the trail from being a perfect repeated curve.
-  const sr = e.n === 0 ? 1 : eSteer;
+  // Steer towards the ideal velocity rather than snapping to the ideal point.
+  // The lag is what keeps the orbit from being a perfectly repeated curve; the
+  // first step has nothing to lag behind, so it lands on the point.
+  const sr = e.started ? eSteer : 1;
   e.vx += sr * ((p1.x - p0.x) - e.vx);
   e.vy += sr * ((p1.y - p0.y) - e.vy);
   e.x += e.vx + 0.06 * (p0.x - e.x);
@@ -2210,7 +2208,7 @@ function stepLoneElectron(e, b, k) {
   // a shared lobe, and the speed is the tell: a loose atom reads as unsettled
   // and looking for a partner, against the steady orbits of an intact molecule.
   // It is the one thing on screen that says "this came apart" from across the
-  // canvas, after the trails have faded and the halves have drifted away.
+  // canvas, long after the halves have drifted apart.
   e.angle += loneSpeed * k * (b.bonds.length === 0 ? loneSpeedFree : 1);
   e.x = at.lx + r * Math.cos(e.angle);
   e.y = at.ly + r * Math.sin(e.angle);
@@ -2220,7 +2218,6 @@ function stepLoneElectron(e, b, k) {
 // per-frame units and breaks up with a large or uneven step.
 function stepElectrons(frameDt) {
   const k = Math.min(2, frameDt * 60);        // 1.0 at 60 fps, clamped
-  const len = Math.round((TIER_TRAIL_LEN[_quality] || 32) * eTrailScale);
   for (const b of world.bodies) {
     if (!b.electrons) continue;
     for (const e of b.electrons) {
@@ -2230,78 +2227,9 @@ function stepElectrons(frameDt) {
       }
       else if (showLonePairs) stepLoneElectron(e, b, k);
       else continue;
-      e.tx[e.head] = e.x; e.ty[e.head] = e.y;
-      e.head = (e.head + 1) % TRAIL_MAX;
-      if (e.n < Math.min(len, TRAIL_MAX)) e.n++;
-      else if (e.n > len) e.n = len;
+      e.started = true;
     }
   }
-}
-
-// ─── Drawing the trails ───────────────────────────────────────────────────────
-// Bucketed alpha, as in bonds: the trail is split into BUCKETS runs and each is
-// stroked once at its own alpha, instead of one stroke per point. That is the
-// difference between ~10 strokes an electron and ~50.
-function drawElectrons(b, dc = ctx) {
-  if (!b.electrons) return;
-  const ca = Math.cos(b.angle), sa = Math.sin(b.angle);
-  const BUCKETS = TIER_BUCKETS[_quality] || 6;
-
-  dc.save();
-  dc.lineCap = 'round';
-  dc.lineJoin = 'round';
-
-  for (const e of b.electrons) {
-    if (e.kind === 'lone' && !showLonePairs) continue;
-    const n = e.n;
-    if (n < 2) continue;
-    const rgb = ELEMENTS[e.el].rgb;
-    // ring buffer -> world
-    const idx = (i) => (e.head - n + i + TRAIL_MAX * 2) % TRAIL_MAX;
-    const wx = (i) => { const j = idx(i); return b.x + e.tx[j] * ca - e.ty[j] * sa; };
-    const wy = (i) => { const j = idx(i); return b.y + e.tx[j] * sa + e.ty[j] * ca; };
-
-    dc.lineWidth = 1.8;
-    dc.strokeStyle = rgba(rgb, 1);
-    for (let q = 0; q < BUCKETS; q++) {
-      const i0 = Math.round(q / BUCKETS * (n - 1));
-      const i1 = Math.round((q + 1) / BUCKETS * (n - 1));
-      if (i1 <= i0) continue;
-      dc.globalAlpha = ((q + 1) / BUCKETS) ** 2 * 0.85;
-      dc.beginPath();
-      dc.moveTo(wx(i0), wy(i0));
-      // midpoint quadratics smooth the polyline without extra sample points
-      if (i1 > i0 + 1) {
-        dc.lineTo((wx(i0) + wx(i0 + 1)) / 2, (wy(i0) + wy(i0 + 1)) / 2);
-        for (let i = i0 + 1; i < i1; i++)
-          dc.quadraticCurveTo(wx(i), wy(i), (wx(i) + wx(i + 1)) / 2, (wy(i) + wy(i + 1)) / 2);
-      }
-      dc.lineTo(wx(i1), wy(i1));
-      dc.stroke();
-    }
-
-    // The arrowhead IS the electron. No dot — the arrow says which way it goes.
-    const hx = wx(n - 1), hy = wy(n - 1);
-    const dx = hx - wx(n - 2), dy = hy - wy(n - 2);
-    const dl = Math.hypot(dx, dy);
-    if (dl > 1e-4) {
-      const nx = dx / dl, ny = dy / dl;
-      const AL = 7, AW = 3.2;
-      dc.globalAlpha = 1;
-      if (_quality === 'hi-res') {
-        const sp = glowSprite(rgb, 9);
-        dc.drawImage(sp, hx - sp.width / 2, hy - sp.height / 2);
-      }
-      dc.fillStyle = rgba(rgb, 1);
-      dc.beginPath();
-      dc.moveTo(hx + nx * AL, hy + ny * AL);
-      dc.lineTo(hx - ny * AW, hy + nx * AW);
-      dc.lineTo(hx + ny * AW, hy - nx * AW);
-      dc.closePath();
-      dc.fill();
-    }
-  }
-  dc.restore();
 }
 
 // ─── Species ──────────────────────────────────────────────────────────────────
@@ -2323,12 +2251,6 @@ function logAction(msg) {
   if (actionLog.length > 25) actionLog.shift();
 }
 
-// Piecewise zoom mapping: slider -1..0..1, default at centre (v=0)
-// v=-1 → 0.83 (20% wider),  v=0 → 1.0,  v=1 → 2.0
-function zoomFromSlider(v) {
-  return v <= 0 ? 1.0 + v * 0.17 : 1.0 + v * 1.0;
-}
-
 // ─── World ────────────────────────────────────────────────────────────────────
 // A walled box filling the canvas between the toolbar and the energy bar.
 // Molecules are rigid bodies: they translate, spin, and bounce elastically off
@@ -2337,11 +2259,13 @@ function zoomFromSlider(v) {
 // (This was a wrap-around "asteroids" box until walls replaced it. The wrap
 // helpers it needed — wrapDelta for minimum-image collisions, wrapOffsets for
 // drawing a body on both sides of an edge — are gone; git has them.)
-let viewZoom = 1.0;
-// 'trails'  — the electron trails this sim has always drawn
-// 'shells'   — the bonds sim's shells picture: a band at each occupied shell
-//              radius, electrons as dots on it rather than as paths
-// 'space'    — space-filling
+// 'shells'  — a band at each occupied shell radius, the electrons as dots on it
+// 'space'   — space-filling
+//
+// (There was a third, 'trails', which drew each valence electron's recent path
+// as a fading streak. It was this sim's original picture and it is gone, along
+// with the per-electron ring buffers that fed it and the view zoom that framed
+// it; git has them.)
 let viewMode = 'shells';
 let running = false;
 
@@ -3711,11 +3635,10 @@ function drawMoleculeIcon(canvas, els, jitter = null, pad = 3) {
 // loop of its own at the full frame rate, for an icon 46 px across.)
 const ICON_CANVASES = [
   { id: 'newBtnMolecule',      pad: 4, wobble: 0.7, jitter: { x: 0, y: 0 } },   // respawn button
-  // All three view buttons carry the same icon. They are three pictures of the
-  // same thing, so the button should say which VIEW you get, not pretend the
+  // Both view buttons carry the same icon. They are two pictures of the same
+  // thing, so the button should say which VIEW you get, not pretend the
   // molecule differs between them. Each keeps its own jitter so they do not
   // wobble in lockstep.
-  { id: 'trailsModeIcon',      pad: 1, wobble: 0.4, jitter: { x: 0, y: 0 } },
   { id: 'shellsModeIcon',      pad: 1, wobble: 0.4, jitter: { x: 0, y: 0 } },
   { id: 'spaceModeIcon',       pad: 1, wobble: 0.4, jitter: { x: 0, y: 0 } },
 ];
@@ -3737,11 +3660,11 @@ toolbarIconLoop(0);
 // ─── Renderer ─────────────────────────────────────────────────────────────────
 // One body, one place. The wrap-around world drew up to four copies of anything
 // overhanging an edge; with walls a molecule can never straddle one.
-// The four walls. At zoom 1 the box lines up with the toolbar, the energy bar
-// and the screen edges, so this is barely visible and barely needed — but zoomed
-// out there is empty canvas beyond it, and without a line the molecules look
-// like they are bouncing off nothing. Kept faint on purpose; delete the call in
-// drawWorld if it reads as clutter.
+// The four walls. The box lines up with the toolbar, the energy bar, the bar
+// chart's panel and the screen edges, so the only line that really shows is the
+// one against the panel — which is the one worth having, since nothing beyond
+// it is part of the world. Kept faint on purpose; delete the call in drawWorld
+// if it reads as clutter.
 function drawWalls() {
   const LIGHT = document.body.classList.contains('screenshot-mode');
   ctx.save();
@@ -3756,29 +3679,21 @@ function drawWorld() {
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   ctx.save();
-  // World (0,0) sits at the top-left of the visible band; zoom is about its centre
+  // World (0,0) sits at the top-left of the visible band
   ctx.translate(0, world.top);
-  ctx.translate(world.w / 2, world.h / 2);
-  ctx.scale(viewZoom, viewZoom);
-  ctx.translate(-world.w / 2, -world.h / 2);
 
   drawWalls();
   if (document.getElementById('showFields').checked) drawFieldHeatmap(ctx);
 
   if (viewMode === 'space') {
     drawSpaceFilling();   // all bodies at once: the layer is shared
-  } else if (viewMode === 'shells') {
-    // Bands first, under everything, then the electrons as dots on them.
+  } else {
+    // Shells. Bands first, under everything, then the electrons as dots on them.
     for (const b of world.bodies) for (const p of bodyAtoms(b)) drawAtomShells(ctx, p);
     for (const b of world.bodies) for (const p of bodyAtoms(b)) drawInnerElectrons(ctx, p);
     for (const b of world.bodies) drawElectronsAsDots(b);
     for (const b of world.bodies) for (const p of bodyAtoms(b))
       drawNucleons(ctx, p.x, p.y, p.el, shellWobble, WORLD_NUCLEON_R);
-  } else {
-    for (const b of world.bodies) {
-      drawElectrons(b);
-      for (const p of bodyAtoms(b)) drawNucleus(ctx, p.x, p.y);
-    }
   }
 
   ctx.restore();
@@ -3787,8 +3702,8 @@ function drawWorld() {
 
 // ── Shells view, on the main tab ────────────────────────────────────────────
 // The same picture the One Bond tab draws, applied to every atom in the world:
-// a band at each occupied shell and the electrons as dots sitting on it rather
-// than as trails behind them.
+// a band at each occupied shell and the electrons as dots sitting on it. This
+// is the main tab's picture now; the trails it replaced are gone.
 //
 // Colour is by ELEMENT here, not by atom. The One Bond tab colours its two
 // atoms apart because the whole question there is whose electrons are whose;
@@ -3807,19 +3722,19 @@ const WORLD_NUCLEON_R = 3.2;
 function worldNucleusR(el) { return bondTabNucleusR(el, WORLD_NUCLEON_R); }
 
 // ── Shells-view tuning ──────────────────────────────────────────────────────
-// A shell is a place an electron lives, not a racetrack. The trails view wants
-// motion — a stationary electron leaves no trail — but in the shells view that
-// same motion read as the electrons whizzing round the ring, which says
-// something false about what a shell is. So the shells view draws from
-// `angle0`, the seat each electron was given, and does not turn it at all.
+// A shell is a place an electron lives, not a racetrack. The trails view needed
+// motion — a stationary electron left no trail — but drawn as dots that same
+// motion read as the electrons whizzing round the ring, which says something
+// false about what a shell is. So the shells view draws from `angle0`, the seat
+// each electron was given, and does not turn it at all.
 // The only thing that moves them is the molecule itself rotating, which is
 // right, and falls out of these being body-local coordinates.
 const shellSpin = 0;      // rad/s round the ring — none
 
 // ...but still alive. With the ring spin off and the bonding electrons seated,
 // the shells view had nothing moving in it at all: paused, it looked switched
-// off rather than held. This is the life that was lost when the default view
-// changed from trails to shells.
+// off rather than held. This is the life that was lost when the view changed
+// from trails to shells.
 //
 // It is a wobble about the seat, not a lap of the ring — each electron drifts a
 // little around where it lives. That is the distinction the spin got wrong: an
@@ -3883,8 +3798,8 @@ function drawElectronsAsDots(b, dc = ctx) {
     let lx, ly;
     if (e.kind === 'bond') {
       // Seated beside the midpoint of its own bond, perpendicular to the axis.
-      // NOT the figure-8 position: that is the trails view's business, and
-      // drawing it as a dot made the bonding electrons look like they were
+      // NOT the figure-8 position, which the electron still walks every frame:
+      // drawing THAT as a dot made the bonding electrons look like they were
       // perpetually swinging round the molecule — the "dance". A shared pair
       // sits in the gap.
       const ai = b.atoms[e.i], ak = b.atoms[e.k];
@@ -3903,9 +3818,9 @@ function drawElectronsAsDots(b, dc = ctx) {
       // draws the band and the same one the One Bond tab places its electrons
       // with, so the two views agree about where a shell is.
       //
-      // NOT `loneRadius * loneRadiusBonded`: those are trails-view tuning —
+      // NOT `loneRadius * loneRadiusBonded`: those size the figure-8 picture —
       // 0.6 exists so a lone-pair ring does not collide with the bonding lobes
-      // in that picture. There are no lobes here, and applying it anyway put
+      // in it. There are no lobes here, and applying it anyway put
       // the electron at 0.54 of its own band, 17.5 px adrift on an oxygen.
       const at = b.atoms[e.i];
       const outer = (ATOM_SHELLS[at.el] || [1]).length - 1;
@@ -3970,8 +3885,8 @@ function worldLoop(now) {
   }
   // Electrons run whether or not the sim does. Pause stops the molecules moving
   // and spinning; it does not stop an atom being an atom, and a frozen electron
-  // reads as a broken picture rather than a paused one. It also means the trails
-  // are already drawn on page load, before GO is ever pressed.
+  // reads as a broken picture rather than a paused one. It also means the
+  // molecules are alive on page load, before GO is ever pressed.
   // Once a frame, never per sub-step: the phase logic is tuned in per-frame units.
   stepElectrons(dt);
   shellPhase  += shellSpin * dt;
@@ -4351,10 +4266,6 @@ document.getElementById('newBtn').addEventListener('click', () => {
 });
 
 
-document.getElementById('zoomSlider').addEventListener('input', function () {
-  viewZoom = zoomFromSlider(parseFloat(this.value));
-});
-
 document.getElementById('showFields').addEventListener('change', function () {
   logAction('Energy in fields ' + (this.checked ? 'on' : 'off'));
 });
@@ -4470,7 +4381,6 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     '<div style="font-size:9px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.4;margin-top:8px;">' +
       'Valence electrons</div>' +
     row('devESpeed', 'Electron speed', 0.02, 0.6, 0.01, eSpeed,      '#ff3a8a') +
-    row('devETrail', 'Trail length',   0.2,  2,   0.05, eTrailScale, '#ff3a8a') +
     row('devESteer', 'Path steering',  0.02, 1,   0.02, eSteer,      '#ff3a8a') +
     row('devERound', 'Lobe roundness',   0,   1,   0.05, eRound,      '#ff3a8a') +
     '<div style="opacity:0.45;font-size:10px;margin-top:3px;">' +
@@ -4615,7 +4525,6 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   bind('devDrag', v => vibDrag = v, false, v => v === 0 ? 'off' : '-' +
        Math.round((1 - Math.sqrt(1 - v)) * 100) + '% at full');
   bind('devESpeed', v => eSpeed      = v, false, v => v.toFixed(2));
-  bind('devETrail', v => eTrailScale = v, false, v => v.toFixed(2));
   bind('devESteer', v => eSteer      = v, false, v => v.toFixed(2));
   bind('devERound', v => eRound      = v, false, v => v.toFixed(2));
   bind('devEWidth', v => eWidth      = v, false, v => v.toFixed(2));
@@ -4878,7 +4787,7 @@ window.runPerfTest = function (samples = 5) {
   const median = runs.slice().sort((a, b) => a - b)[Math.floor(samples / 2)];
   console.table([
     { metric: 'worst-case frame draw', value: +median.toFixed(2), unit: 'ms',
-      note: '6 H2 + 6 O2 = 84 electrons x ' + TIER_BUCKETS['hi-res'] + ' buckets' },
+      note: '6 H2 + 6 O2 = 84 valence electrons, shells view' },
     { metric: 'hi-res threshold',   value: TIER_THRESHOLD_MS['hi-res'],   unit: 'ms', note: 'below this -> hi-res' },
     { metric: 'detailed threshold', value: TIER_THRESHOLD_MS['detailed'], unit: 'ms', note: 'below this -> detailed' },
     { metric: 'frame budget @60fps', value: +(1000 / 60).toFixed(2), unit: 'ms', note: 'one whole frame' },

@@ -6,7 +6,7 @@ To run locally: `python3 -m http.server` in this directory, then open `localhost
 
 Forked from the `fission` repo and gutted: the nuclear physics, the scripted
 fission animation and its scrub/replay machinery are all gone. What was kept is
-the chrome — themes, quality selector, zoom, the toolbar, the energy bar.
+the chrome — themes, quality selector, the toolbar, the energy bar.
 
 The fission names are gone — nothing is called a nucleus, a neutron or a scrub
 bar any more. `index.html` opens with a map of its sections; read that first.
@@ -151,9 +151,11 @@ Opacity is a dev slider.
 ## Valence electrons
 
 Ported from the **`bonds` repo's Trails view** (`/Users/jkremer/Projects/bonds`,
-`_drawBondElecTrails` and `_stepMolBondElecOne`). Each valence electron is a
-moving point paying out a fading trail with an arrowhead at its head: **the
-arrow is the electron**, and the trail is where it has just been.
+`_drawBondElecTrails` and `_stepMolBondElecOne`), where each valence electron
+was a moving point paying out a fading trail with an arrowhead at its head. The
+trail is gone from this sim; **the motion is not.** Every electron still walks
+its figure-8 or its ring every frame, because where it is on that path is what
+the One Bond tab animates and what the shells view seats it by.
 
 **Only the valence shell is modelled.** Inner shells are ignored entirely — they
 take no part in bonding and would be a crowd of rings around every nucleus.
@@ -348,12 +350,9 @@ exactly.
 
 ### Cost
 
-This is the dominant draw cost, so it is bucketed like bonds does it: the trail
-is split into `TIER_BUCKETS` runs and **each is stroked once at its own alpha**,
-rather than one stroke per point. That is ~10 strokes an electron instead of 50.
-
-Measured at the heaviest the sliders allow — 6 H₂ + 6 O₂ + 6 He = **96
-electrons**, trails full at 48 points, hi-res:
+Drawing the trails used to be the dominant cost, and the numbers below are what
+it was when it was measured — 6 H₂ + 6 O₂ + 6 He = **96 electrons**, trails full
+at 48 points, hi-res, against a 16.7 ms budget:
 
 | | ms/frame |
 |---|---|
@@ -361,22 +360,23 @@ electrons**, trails full at 48 points, hi-res:
 | whole frame, field off | 0.40 |
 | whole frame, field on | 0.75 |
 
-against a 16.7 ms budget.
+The trails are gone and the shells stack draws instead. On one machine, same
+synthetic world, the stack costs **1.31×** what the trails pass did — 1.70 ms
+against 1.30 — so the renderer benchmark was re-pointed at the shells stack and
+`TIER_THRESHOLD_MS` was multiplied by that ratio (6.0 → 7.9, 14.0 → 18.3) to
+keep a given machine in the tier it was already getting.
 
-**Measure with the trails actually full.** A freshly respawned world reads
-~0.26 ms because every trail is empty, which is not a number worth having.
-
-Trails live in **body-local coordinates** and are transformed at draw time, so a
-molecule can translate and spin without smearing or rebuilding them. Each is a
-fixed `Float32Array` ring buffer, so nothing is allocated per frame.
+Electron positions live in **body-local coordinates** and are transformed at
+draw time, so a molecule can translate and spin without its electrons being
+recomputed.
 
 `stepElectrons` runs **once per frame, outside the physics sub-steps** — the
 phase logic is tuned in per-frame units and breaks up with large or uneven dt.
 
 It also runs **outside the `running` gate**. Pause stops the molecules moving
 and spinning; it does not stop an atom being an atom, and a frozen electron
-reads as a broken picture rather than a paused one. It also means the trails
-are already drawn on page load, before GO is ever pressed.
+reads as a broken picture rather than a paused one. It also means the molecules
+are alive on page load, before GO is ever pressed.
 
 ### Lone electrons
 
@@ -394,7 +394,7 @@ let loneSpeedFree = 6.0;  // x loneSpeed for an atom with no bonds at all
 **A free atom's electrons race.** Nothing is bonded and nothing is paired into a
 shared lobe, and the speed is the tell: 7.16 laps/s against a bonded atom's
 1.19. It is the one thing that says "this came apart" from across the canvas,
-after the trails have faded and the halves have drifted apart. Applies to
+long after the halves have drifted apart. Applies to
 anything with no bonds, so a He reads the same way.
 
 **Free atoms are spaced by the golden angle, not evenly.** An even ring of n
@@ -421,7 +421,7 @@ slider apart.
 They do pass through the bond region on the way round, which a real lone pair
 would not. The plain circle is the point, not the lobe geometry.
 
-Speed, trail length, steering, lone orbit radius and speed, and a lone-pairs
+Speed, steering, lone orbit radius and speed, and a lone-pairs
 on/off switch are all dev controls.
 
 ## What is in the world
@@ -502,7 +502,7 @@ const TIER_FPS      = { 'hi-res': 60, 'detailed': 60, 'simple': 30 };
 const TIER_SEGMENTS = { 'hi-res': 28, 'detailed': 16, 'simple':  8 };
 ```
 
-Each tier sets both trail detail and a frame cap; `worldLoop` holds to
+Each tier sets both drawing detail and a frame cap; `worldLoop` holds to
 `frameBudgetMs` and the skipped time still counts towards the next step's dt, so
 physics does not slow down with the frame rate.
 
@@ -606,10 +606,10 @@ body's own spin. Measured with the band on, 90 s at 6+6: speeds stayed strictly
 within 0.75–1.25 of nominal, **0 violations in 5400 samples**, 143 floor
 top-ups, energy plateauing at 148% of spawn.
 
-`drawWalls` strokes a faint rectangle at the boundary. At zoom 1 the box lines
-up with the toolbar, the energy bar and the screen edges so it is barely
-visible — but zoomed out there is canvas beyond it, and without the line the
-molecules look like they bounce off nothing.
+`drawWalls` strokes a faint rectangle at the boundary. The box lines up with the
+toolbar, the energy bar, the bar chart's panel and the screen edges, so the only
+line that really shows is the one against the panel — which is the one worth
+having, since nothing beyond it is part of the world.
 
 ### Bond breaking
 
@@ -671,20 +671,25 @@ dose per hit and ~3× as many hits: **~27× the pumping rate for 3× the speed**
 That is the entire separation between Low and High, and it is why no
 `tempLevel` test appears anywhere in the mechanism.
 
-#### Three view modes
+#### Two view modes
 
-`viewMode` is `'trails'`, `'shells'` or `'space'` — the old boolean `showAtoms`
-split in two, because "Atoms" was doing two jobs. **It opens on `'shells'`**:
-that is the picture that names the parts, and the trails are the one to switch
-to once you know what you are looking at.
+`viewMode` is `'shells'` or `'space'`, and **it opens on `'shells'`** — the
+picture that names the parts.
 
-All three buttons carry the **same** H₂ icon, animated by the shared
-`ICON_CANVASES` loop. They are three pictures of the same thing, so the button
+There was a third, **Trails**, which drew each valence electron's recent path as
+a fading streak with an arrowhead for the electron. It was this sim's original
+picture and it has been removed, along with the per-electron ring buffers that
+fed it, `drawElectrons`, `TIER_BUCKETS`, `TIER_TRAIL_LEN`, `TRAIL_MAX`, the
+`Trail length` dev slider and the view zoom that framed it. The electron
+*motion* stayed: every electron still walks its figure-8 or its ring each frame,
+because where it is on that path is what the One Bond tab animates and what the
+shells view seats it by. Git has the rest.
+
+Both buttons carry the **same** H₂ icon, animated by the shared
+`ICON_CANVASES` loop. They are two pictures of the same thing, so the button
 should say which *view* you get rather than imply the molecule differs between
-them. Each canvas keeps its own jitter so they do not wobble in lockstep. The
-bespoke `drawOutlineIcon` that used to sit on the third button is gone.
+them. Each canvas keeps its own jitter so they do not wobble in lockstep.
 
-- **Trails** — the electron trails this sim has always drawn.
 - **Shells** — the bonds sim's shells picture: a gradient band at each occupied
   shell radius, electrons as **dots sitting on it** rather than as paths behind
   them. Shares `drawShellBands`, `drawElectronDot`, `ATOM_SHELLS` and
@@ -696,8 +701,8 @@ electrons on it, in both tabs, so a shell is in the same place relative to its
 atom wherever you look. Reactions used to place its shells-view electrons at
 `loneRadius x loneRadiusBonded` instead — **0.54 of its own band, 17.5 px adrift
 on an oxygen**, the electron floating inside the ring it was drawn with. Those
-two constants are *trails-view* tuning: 0.6 exists so a lone-pair ring does not
-collide with the bonding lobes in that picture. There are no lobes in the shells
+two constants size the *figure-8* picture: 0.6 exists so a lone-pair ring does
+not collide with the bonding lobes in it. There are no lobes in the shells
 view, so applying it there only broke the agreement. Now both read 1.00.
 
 **Colour is by element in both tabs**, from `ELEMENTS` — H the pale grey, O the
@@ -746,14 +751,15 @@ const shellBondPull = 0.72;   // bonding electrons, towards the bond's middle
 let   loneArcFrac   = 0.45;   // share of the ring a bonded atom's lone pairs use
 ```
 
-**A shell is a place an electron lives, not a racetrack.** The trails view needs
-motion — a stationary electron leaves no trail — but in the shells view that
-same motion reads as electrons whizzing round the ring, which says something
-false about what a shell is.
+**A shell is a place an electron lives, not a racetrack.** The trails view needed
+motion — a stationary electron left no trail — but drawn as dots that same
+motion read as electrons whizzing round the ring, which says something false
+about what a shell is.
 
 So the shells view draws lone electrons from **`e.angle0`**, the seat each one
 was given at build time, turned only as fast as `shellSpin`. The simulation
-keeps running underneath for the trails view; shells just ignores it. Measured
+keeps running underneath — the One Bond tab animates it — and shells just
+ignores it. Measured
 over 10 s: the drawn electron moved **10.3 px** while the simulated orbit angle
 advanced **75 radians**, about twelve laps.
 
@@ -813,7 +819,8 @@ body's electrons when moved.
 
 **Bonding electrons are SEATED beside the bond's midpoint**, perpendicular to
 the axis, alternating sides and tiered outwards so a double bond's four do not
-stack. Not the figure-8 position: that is the trails view's business, and drawn
+stack. Not the figure-8 position, which the electron still walks every frame:
+drawn
 as a dot it made the bonding electrons look like they were perpetually swinging
 round the molecule. A shared pair sits in the gap.
 
@@ -830,9 +837,11 @@ agree about where a shared pair lives.
 view**. The latter is One Bond only now — the shells view seats its bonding
 electrons outright rather than pulling them anywhere.
 
-Shells is the **cheapest** of the three: 0.14 ms/frame against trails' 0.20 and
-outline's 0.16, since a dot is one gradient where a trail is a stack of stroked
-buckets. Verified across lone-pairs on and off, and after breaking leaves a
+Shells was the **cheapest** of the three when there were three: 0.14 ms/frame
+against trails' 0.20 and outline's 0.16, since a dot is one gradient where a
+trail was a stack of stroked buckets. (Per atom. The whole shells STACK — bands,
+inner electrons, dots and nucleons — costs more than the trails pass did; see
+the renderer benchmark.) Verified across lone-pairs on and off, and after breaking leaves a
 world of single-atom bodies.
 
 ## Energy in fields is its own bucket
@@ -1111,20 +1120,20 @@ scaling velocities applies it twice. An early version of this diagnostic did
 exactly that and reported vibration ~50× too high at High. Set the temperature
 first, then spawn.
 
-## Three view modes
+## Two view modes
 
-`viewMode` is `'trails'`, `'shells'` or `'space'` — the old boolean `showAtoms`
-split in two, because "Atoms" was doing two jobs. **It opens on `'shells'`**:
-that is the picture that names the parts, and the trails are the one to switch
-to once you know what you are looking at.
+(This section repeats the one above, from an earlier edit; both are kept in
+step until one of them is deleted.)
 
-All three buttons carry the **same** H₂ icon, animated by the shared
-`ICON_CANVASES` loop. They are three pictures of the same thing, so the button
+`viewMode` is `'shells'` or `'space'`, and **it opens on `'shells'`** — the
+picture that names the parts. The third, **Trails**, has been removed; the
+section above says what went with it.
+
+Both buttons carry the **same** H₂ icon, animated by the shared
+`ICON_CANVASES` loop. They are two pictures of the same thing, so the button
 should say which *view* you get rather than imply the molecule differs between
-them. Each canvas keeps its own jitter so they do not wobble in lockstep. The
-bespoke `drawOutlineIcon` that used to sit on the third button is gone.
+them. Each canvas keeps its own jitter so they do not wobble in lockstep.
 
-- **Trails** — the electron trails this sim has always drawn.
 - **Shells** — the bonds sim's shells picture: a gradient band at each occupied
   shell radius, electrons as **dots sitting on it** rather than as paths behind
   them. Shares `drawShellBands`, `drawElectronDot`, `ATOM_SHELLS` and
@@ -1136,8 +1145,8 @@ electrons on it, in both tabs, so a shell is in the same place relative to its
 atom wherever you look. Reactions used to place its shells-view electrons at
 `loneRadius x loneRadiusBonded` instead — **0.54 of its own band, 17.5 px adrift
 on an oxygen**, the electron floating inside the ring it was drawn with. Those
-two constants are *trails-view* tuning: 0.6 exists so a lone-pair ring does not
-collide with the bonding lobes in that picture. There are no lobes in the shells
+two constants size the *figure-8* picture: 0.6 exists so a lone-pair ring does
+not collide with the bonding lobes in it. There are no lobes in the shells
 view, so applying it there only broke the agreement. Now both read 1.00.
 
 **Colour is by element in both tabs**, from `ELEMENTS` — H the pale grey, O the
@@ -1186,14 +1195,15 @@ const shellBondPull = 0.72;   // bonding electrons, towards the bond's middle
 let   loneArcFrac   = 0.45;   // share of the ring a bonded atom's lone pairs use
 ```
 
-**A shell is a place an electron lives, not a racetrack.** The trails view needs
-motion — a stationary electron leaves no trail — but in the shells view that
-same motion reads as electrons whizzing round the ring, which says something
-false about what a shell is.
+**A shell is a place an electron lives, not a racetrack.** The trails view needed
+motion — a stationary electron left no trail — but drawn as dots that same
+motion read as electrons whizzing round the ring, which says something false
+about what a shell is.
 
 So the shells view draws lone electrons from **`e.angle0`**, the seat each one
 was given at build time, turned only as fast as `shellSpin`. The simulation
-keeps running underneath for the trails view; shells just ignores it. Measured
+keeps running underneath — the One Bond tab animates it — and shells just
+ignores it. Measured
 over 10 s: the drawn electron moved **10.3 px** while the simulated orbit angle
 advanced **75 radians**, about twelve laps.
 
@@ -1253,7 +1263,8 @@ body's electrons when moved.
 
 **Bonding electrons are SEATED beside the bond's midpoint**, perpendicular to
 the axis, alternating sides and tiered outwards so a double bond's four do not
-stack. Not the figure-8 position: that is the trails view's business, and drawn
+stack. Not the figure-8 position, which the electron still walks every frame:
+drawn
 as a dot it made the bonding electrons look like they were perpetually swinging
 round the molecule. A shared pair sits in the gap.
 
@@ -1270,9 +1281,11 @@ agree about where a shared pair lives.
 view**. The latter is One Bond only now — the shells view seats its bonding
 electrons outright rather than pulling them anywhere.
 
-Shells is the **cheapest** of the three: 0.14 ms/frame against trails' 0.20 and
-outline's 0.16, since a dot is one gradient where a trail is a stack of stroked
-buckets. Verified across lone-pairs on and off, and after breaking leaves a
+Shells was the **cheapest** of the three when there were three: 0.14 ms/frame
+against trails' 0.20 and outline's 0.16, since a dot is one gradient where a
+trail was a stack of stroked buckets. (Per atom. The whole shells STACK — bands,
+inner electrons, dots and nucleons — costs more than the trails pass did; see
+the renderer benchmark.) Verified across lone-pairs on and off, and after breaking leaves a
 world of single-atom bodies.
 
 ## Energy in fields
