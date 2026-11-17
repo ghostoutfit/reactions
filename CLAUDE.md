@@ -1417,9 +1417,49 @@ tab bar's band; the same offset on all three keeps the boxes at one height
 whichever tab you are on.
 
 One bond, big, with nothing else on screen. A dropdown picks **H–H, O–O or
-O–H**; drag either nucleus and **both** move, symmetrically about the centre, so
+O–H**; drag either atom and **both** move, symmetrically about the centre, so
 the bond stretches about its midpoint rather than one atom chasing the pointer.
-Separation is twice the pointer's distance from the centre.
+
+### Grabbing: the whole atom, and no snap
+
+**The handle is the atom, not the nucleus.** `bondGrabR(el, z)` is the drawn
+valence radius, floored at `BOND_GRAB_MIN` = 26 px so a small atom at a low zoom
+is still comfortably hittable. The faint ring each atom wears is drawn at that
+same radius, so the affordance is the truth: the ring is exactly the area that
+answers to a pointer. It was a fixed 40 px disc before, well inside atoms that
+draw 85 px across.
+
+**The drag works from an anchor, not from an absolute.** On pointerdown the grab
+records the pointer's distance from the centre (`grabD0`) and the separation at
+that instant (`grabSep`); every move then sets `sep = grabSep + 2·(d − grabD0)/z`.
+Setting `sep` to twice the raw distance instead — which is what it did — meant
+grabbing anywhere but the exact nucleus jumped the separation by twice the
+offset. **Grab the outer edge and the bond snapped open before you had moved at
+all.** Measured after the fix: pointerdown followed by a zero-travel move leaves
+the separation changed by exactly 0 px on all three pairs and both sides, and
+50 px of travel buys exactly `2·50/z` px of separation.
+
+**Both centres come from `bondCentre()`.** The layout and the drag computed the
+midpoint separately, and the drag's copy still said `canvas.width/2` after the
+bar panel took its slice off the right. On a 1146-wide canvas that put the two
+centres 160 px apart, so the first pointer-move snapped the separation to match
+the wrong centre — **the larger half of the atom-jumps-out-of-your-hand bug.**
+One function now, used by both.
+
+**At an end stop the drag re-anchors.** Without it, pulling 200 px past
+`BOND_MAX_MULT` banks 200 px of dead travel that has to be given back before the
+bond answers again. Re-anchoring each frame while clamped means reversing
+responds on the next pixel: measured, 4.80x pinned, then 10 px back reads 4.637x.
+
+**Where the two discs overlap, nobody owns the pointer.** Bonded atoms overlap —
+at the natural length the H–H lens is about 48 px wide — and in it there is no
+honest answer to which atom you meant. `bondTabHit` returns `'both'`, the grab is
+refused, the cursor goes to `help`, and a tooltip follows the pointer saying
+**"grab one atom or the other, drag to separate"**. Guessing a side there would
+have made the same gesture do two different things on either side of an
+invisible line. There is always room either side of the lens: squeezed to the
+0.6x floor, each atom still keeps ~74 px of exclusive grab; pulled past about
+2x, the lens is gone entirely.
 
 ### What the glow shows: energy STORED, not energy left
 

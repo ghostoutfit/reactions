@@ -5234,6 +5234,9 @@ const bondTab = {
   shellE: [],        // every other electron, sitting on its own atom's shell
   wobble: 0,         // drives the nucleons' small per-particle jitter
   spin: 0,           // the shells turn slowly
+  grabD0: 0,         // pointer distance from the centre when the grab landed
+  grabSep: 0,        // separation at that moment — the drag works from these two
+  hoverBoth: null,   // pointer position while it is inside BOTH atoms, else null
 };
 
 function bondTabEls() {
@@ -5296,10 +5299,20 @@ function bondTabReset() {
   initBondElectrons();
 }
 
+// The midpoint the pair is built around. One function, used by BOTH the layout
+// and the drag: they were computed separately once, and the drag's copy still
+// said canvas.width/2 after the bar panel took a slice off the right. The two
+// centres were half a panel apart, so the first pointer-move snapped the
+// separation to match the wrong centre — the bug that read as the atom jumping
+// out of your hand the moment you grabbed it.
+function bondCentre() {
+  return { x: sceneW() / 2, y: (world.top + canvas.height) / 2 };
+}
+
 // The two nuclei, in canvas coordinates, always symmetric about the centre.
 function bondTabAtoms() {
   const [ea, eb] = bondTabEls();
-  const cx = sceneW() / 2, cy = (world.top + canvas.height) / 2;
+  const { x: cx, y: cy } = bondCentre();
   const half = bondTab.sep * bondTabZoom() / 2;
   return [
     { x: cx - half, y: cy, el: ea },
@@ -5570,15 +5583,48 @@ function drawBondTab() {
     drawElectronDot(ctx, dot.x, dot.y, ELEMENTS[[A, B][dot.side].el].rgb, false);
   }
 
-  // A ring on each nucleus says "this is the handle".
+  // A ring on each atom says "this is the handle". It is drawn at the GRAB
+  // radius, not at a fixed 26 px, so the affordance is the truth: the ring is
+  // exactly the area that answers to a pointer.
   if (!bondTab.dragging) {
     ctx.strokeStyle = 'rgba(255,255,255,0.16)';
     ctx.lineWidth = 1.5;
     for (const at of [A, B]) {
-      ctx.beginPath(); ctx.arc(at.x, at.y, 26, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(at.x, at.y, bondGrabR(at.el, z), 0, Math.PI * 2);
+      ctx.stroke();
     }
   }
+
+  // Where the two handles overlap, neither atom owns the pointer, so say what to
+  // do instead of picking one arbitrarily.
+  if (bondTab.hoverBoth) drawBondTip(bondTab.hoverBoth);
+
   ctx.textAlign = 'left';
+}
+
+// A small label that follows the pointer, kept inside the scene so it never
+// slides under the bar panel or off the bottom.
+function drawBondTip(p) {
+  const text = 'grab one atom or the other, drag to separate';
+  ctx.font = '500 13px Inter, system-ui, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  const padX = 9, h = 24, w = ctx.measureText(text).width + padX * 2;
+  let x = p.x + 16, y = p.y - 22;
+  x = Math.min(x, sceneW() - w - 8);
+  x = Math.max(8, x);
+  y = Math.max(world.top + h / 2 + 4, Math.min(canvas.height - h / 2 - 4, y));
+  ctx.fillStyle = 'rgba(10,8,24,0.92)';
+  ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(x, y - h / 2, w, h, 6);
+  else ctx.rect(x, y - h / 2, w, h);
+  ctx.fill(); ctx.stroke();
+  ctx.fillStyle = 'rgba(255,255,255,0.88)';
+  ctx.fillText(text, x + padX, y + 0.5);
+  ctx.textBaseline = 'alphabetic';
 }
 
 function updateBondReadout() {
@@ -5604,12 +5650,40 @@ function bondTabPointer(ev) {
            y: (ev.clientY - r.top)  * (canvas.height / r.height) };
 }
 
+// The WHOLE atom is the handle, not a fixed 40 px disc around the nucleus: the
+// grab radius is the drawn valence radius, with a floor so a small atom at a low
+// zoom is still comfortably hittable.
+const BOND_GRAB_MIN = 26;
+function bondGrabR(el, z) { return Math.max(BOND_GRAB_MIN, valenceRadius(el) * z); }
+
+// Which atom the pointer is on: 0, 1, 'both', or null. Squeezed in close the two
+// discs overlap, and in the overlap there is no honest answer to "which one did
+// you mean" — so that case is reported, not guessed, and the hover says so.
+function bondTabHit(p) {
+  const atoms = bondTabAtoms(), z = bondTabZoom();
+  const inside = atoms.map(at =>
+    Math.hypot(p.x - at.x, p.y - at.y) <= bondGrabR(at.el, z));
+  if (inside[0] && inside[1]) return 'both';
+  if (inside[0]) return 0;
+  if (inside[1]) return 1;
+  return null;
+}
+
 function bondTabGrab(ev) {
   if (!bondTab.on) return;
   const p = bondTabPointer(ev);
-  const hit = bondTabAtoms().some(at => Math.hypot(p.x - at.x, p.y - at.y) < 40);
-  if (!hit) return;
+  const hit = bondTabHit(p);
+  if (hit === null || hit === 'both') return;
+  // Anchor the drag: remember the pointer's distance from the centre AND the
+  // separation at that instant, so what follows moves the bond BY the pointer's
+  // travel. Setting sep to twice the raw distance instead meant grabbing
+  // anywhere but the exact nucleus jumped the separation by twice the offset —
+  // grab the outer edge of an atom and the bond snapped open before you had
+  // moved at all.
   bondTab.dragging = true;
+  bondTab.grabD0 = Math.hypot(p.x - bondCentre().x, p.y - bondCentre().y);
+  bondTab.grabSep = bondTab.sep;
+  bondTab.hoverBoth = null;
   canvas.style.cursor = 'grabbing';
   ev.preventDefault();
 }
@@ -5618,19 +5692,25 @@ function bondTabMove(ev) {
   if (!bondTab.on) return;
   const p = bondTabPointer(ev);
   if (!bondTab.dragging) {
-    const over = bondTabAtoms().some(at => Math.hypot(p.x - at.x, p.y - at.y) < 40);
-    canvas.style.cursor = over ? 'grab' : '';
+    const hit = bondTabHit(p);
+    bondTab.hoverBoth = hit === 'both' ? p : null;
+    canvas.style.cursor = hit === null ? '' : hit === 'both' ? 'help' : 'grab';
     return;
   }
-  const cx = canvas.width / 2, cy = (world.top + canvas.height) / 2;
-  const z = bondTabZoom();
-  const sep = 2 * Math.hypot(p.x - cx, p.y - cy) / z;
+  const c = bondCentre(), z = bondTabZoom();
+  const d = Math.hypot(p.x - c.x, p.y - c.y);
+  const want = bondTab.grabSep + 2 * (d - bondTab.grabD0) / z;
   // The squeeze floor is 0.6 of the natural length, not 0.5: the Morse form
   // reaches zero stored energy at 0.538 on the compression side, so a 0.5 floor
   // put the bottom of the range inside a dead zone that read the same however
   // hard you pushed.
-  bondTab.sep = Math.min(bondTab.r0 * BOND_MAX_MULT,
-                Math.max(bondTab.r0 * BOND_MIN_MULT, sep));
+  const sep = Math.min(bondTab.r0 * BOND_MAX_MULT,
+              Math.max(bondTab.r0 * BOND_MIN_MULT, want));
+  // Re-anchor while pinned at an end stop. Without this, pulling 200 px past
+  // the limit banks 200 px of dead travel that has to be given back before the
+  // bond answers again.
+  if (sep !== want) { bondTab.grabSep = sep; bondTab.grabD0 = d; }
+  bondTab.sep = sep;
   updateBondReadout();
 }
 
