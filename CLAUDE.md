@@ -1311,6 +1311,11 @@ above H–H. **Break mode should read `BOND_ENERGY` too** — it is the number t
 decides what an impact is strong enough to pull apart, and having the glow and
 the threshold disagree would be worse than either being wrong.
 
+This table is keyed by a **sorted element pair**, which is why it cannot hold
+the carbon bonds: C–O and C=O collide on the key `'C-O'`. The One Bond tab
+reads `BOND_TYPES` instead; this one stays as it is and keeps serving Reactions
+and Sandbox, which have no carbon in them.
+
 Each body carries `bonds` as index pairs. Atoms are laid out in a row and each
 bonds to the previous one, so a diatomic is `[[0,1]]` and water would be
 `[[0,1],[1,2]]` — two lobes off the oxygen, no special casing.
@@ -1416,9 +1421,99 @@ their labels above their own top edge and without it the label rides up into the
 tab bar's band; the same offset on all three keeps the boxes at one height
 whichever tab you are on.
 
-One bond, big, with nothing else on screen. A dropdown picks **H–H, O–O or
-O–H**; drag either atom and **both** move, symmetrically about the centre, so
-the bond stretches about its midpoint rather than one atom chasing the pointer.
+One bond, big, with nothing else on screen. A dropdown picks the bond; drag
+either atom and **both** move, symmetrically about the centre, so the bond
+stretches about its midpoint rather than one atom chasing the pointer.
+
+### A bond TYPE, not an element pair
+
+Everything in the sim used to be keyed by a sorted element pair —
+`BOND_ENERGY`, `BOND_ORDER`, `bondLen` all take `[a,b].sort().join('-')`. One
+entry per pair, so a pair has one energy, one length and one order. That held
+while every pair in the sim had a single bond worth drawing, and **it stops
+holding the moment carbon arrives: C–O and C=O are the same two elements.**
+Nothing keyed by the sorted pair can tell them apart.
+
+So the One Bond tab selects from `BOND_TYPES`, where each row carries its own
+order, energy and length:
+
+```javascript
+const BOND_TYPES = {
+  'H-H': { els: ['H','H'], order: 1, D: 436, lenMult: 1    },
+  'O=O': { els: ['O','O'], order: 2, D: 498, lenMult: 1    },
+  'O-H': { els: ['O','H'], order: 1, D: 463, lenMult: 1    },
+  'C-O': { els: ['C','O'], order: 1, D: 358, lenMult: 1    },
+  'C=O': { els: ['C','O'], order: 2, D: 799, lenMult: 0.86 },
+};
+```
+
+`bondTab.type` is a key into this, where it used to be `bondTab.pair`. The tab
+reads `bondTabEls / bondTabOrder / bondTabD / bondTabR0 / bondTabSymbol` and
+never consults the element-pair tables, so the C=O gets **four** bonding
+electrons where the C–O gets two — measured, and that is the visible difference
+between the two entries besides the length.
+
+**The element-pair tables are deliberately untouched.** Reactions and Sandbox
+model molecules that form and break by collision, and putting carbon into that
+is a far bigger piece of work than adding a row here. Verified after the change:
+`BOND_ENERGY_MAX` 498, `kjPerSim` 0.0026, `bondEnergy(O,O)` 498, the Sandbox
+ADD buttons still H₂ and O₂ only.
+
+**`lenMult` is the length, relative to what the pair's `bondLen` gives.** The
+original three sit at 1 and are pixel-for-pixel what they were. A double bond is
+genuinely shorter than its single — C–O is 1.43 Å, C=O is 1.23 — and when both
+are in one list that ratio is the reading: 0.86, so 58.1 px against 50.0.
+
+The dropdown is **built from `BOND_TYPES` at startup**, not written out in the
+HTML. The list IS the table: a bond cannot be in the menu without an energy, or
+in the table without a way to pick it.
+
+### Carbon
+
+Added to all five element-keyed tables: `ELEMENTS` (`rScale` 1.42, from C's
+1.70 Å van der Waals against H's 1.20), `NUCLEONS` `[6,6]`, `ATOM_SHELLS`
+`[2,4]`, `SHELL_FRAC` `[0.18,1]`, `VALENCE` 4.
+
+**Its colour is a compromise.** CPK carbon is black, and these tabs draw light
+on black — a true graphite carbon loses its shell band and its electron dots
+against the background. `110,120,138` is dark enough to read as the dark one
+beside hydrogen's `185,192,205` and still carries a halo. Size does the rest:
+at 1.42 it is the biggest atom here, and the nucleus shows six protons against
+oxygen's eight.
+
+### The glow needed a wider ceiling, and then a compressed one
+
+Two measured problems arrived with the carbon bonds, both from the same cause:
+**the old list spanned 436–498 kJ/mol, a factor of 1.14, and the new one spans
+358–799, a factor of 2.23.**
+
+**`BOND_SHOWN_MAX`, not `BOND_ENERGY_MAX`.** One Bond's lobe is normalised
+against the deepest well *in the dropdown* (799), because on that tab
+brightness is the reading and a clipped core throws away the top of the range.
+It is NOT normalised against `BOND_ENERGY_MAX`: that constant is the Reactions
+currency — `kjPerSim()` is defined in terms of it and every main-tab field
+brightness is scaled by it — so moving it to 799 would silently re-denominate a
+tab nobody asked to change. The consequence is honest and worth knowing: **the
+three original bonds are dimmer than they were**, because they now share a
+scale with a bond 1.6× deeper than the old top.
+
+**`bondShownGamma` stops the weakest bond vanishing.** At strict proportionality
+a C–O at rest measured `rgb(33,30,40)` against a background of `rgb(5,4,15)` —
+all but invisible. Selecting a bond and seeing nothing is not a reading. The
+depth term is therefore `(D / BOND_SHOWN_MAX) ** bondShownGamma`, default 0.6,
+on the **Depth contrast** dev slider; 1 restores strict proportion.
+
+| bond | D | mag at γ=1 | mag at γ=0.6 | rest colour at γ=0.6 |
+|---|---|---|---|---|
+| C–O | 358 | 0.448 | 0.618 | rgb(59,56,68) |
+| H–H | 436 | 0.546 | 0.695 | rgb(75,76,88) |
+| O–H | 463 | 0.579 | 0.721 | rgb(81,82,94) |
+| O=O | 498 | 0.623 | 0.753 | rgb(93,85,97) |
+| C=O | 799 | 1.000 | 1.000 | rgb(166,169,180) |
+
+The ordering is untouched — a deeper well is always brighter — and the
+strongest bond still lands exactly at the top of the ramp, so nothing clips.
+What the gamma changes is only how far the bottom of the range falls.
 
 ### Grabbing: the whole atom, and no snap
 

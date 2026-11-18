@@ -844,12 +844,11 @@
     <div class="ctrl-box-pink" style="align-items:stretch;">
       <span class="ctrl-box-label ctrl-box-label-pink">BOND</span>
       <div style="display:flex;flex-direction:column;gap:5px;justify-content:center;padding:8px 0;">
-        <span style="font-size:9px;letter-spacing:0.07em;text-transform:uppercase;opacity:0.5;">Pair</span>
-        <select id="bondPick" style="font-size:13px;padding:3px 6px;">
-          <option value="H-H">H &ndash; H</option>
-          <option value="O-O">O &ndash; O</option>
-          <option value="H-O">O &ndash; H</option>
-        </select>
+        <span style="font-size:9px;letter-spacing:0.07em;text-transform:uppercase;opacity:0.5;">Bond</span>
+        <!-- Filled from BOND_TYPES at startup: the list IS the table, so a bond
+             cannot be in the dropdown without an energy or in the table without
+             a way to pick it. -->
+        <select id="bondPick" style="font-size:13px;padding:3px 6px;"></select>
       </div>
       <div style="display:flex;flex-direction:column;gap:5px;justify-content:center;padding:8px 0;min-width:150px;">
         <span style="font-size:9px;letter-spacing:0.07em;text-transform:uppercase;opacity:0.5;">Separation</span>
@@ -1002,6 +1001,13 @@ const ELEMENTS = {
   H:  { label: 'H',  rgb: '185,192,205', rScale: 1.00 },   // grey
   O:  { label: 'O',  rgb: '232,56,47',   rScale: 1.27 },   // red
   He: { label: 'He', rgb: '127,219,232', rScale: 1.17 },   // pale cyan — noble
+  // Carbon is CPK's dark grey, but not SO dark that it stops glowing: everything
+  // on these tabs is drawn as light on black, and a true graphite carbon loses
+  // its shell bands and its electron dots against the background. 110,120,138 is
+  // dark enough to read as "the dark one" beside hydrogen's 185,192,205 and
+  // still carries a visible halo. Size does the rest of the work — C is 1.42 to
+  // H's 1.00, the biggest atom here.
+  C:  { label: 'C',  rgb: '110,120,138', rScale: 1.42 },   // dark slate (C 1.70 Å)
 };
 const DEFAULT_ELEMENT = 'H';
 function elemOf(p) { return ELEMENTS[p.el] || ELEMENTS[DEFAULT_ELEMENT]; }
@@ -1424,6 +1430,58 @@ function bondEnergy(elA, elB) {
   return BOND_ENERGY[[elA, elB].sort().join('-')] || 400;
 }
 
+// ─── Bond types ───────────────────────────────────────────────────────────────
+// The tables above are keyed by an ELEMENT PAIR, sorted — one entry per pair,
+// so a pair has exactly one energy, one length and one order. That held while
+// every pair in the sim had only one bond worth drawing, and it stops holding
+// the moment carbon arrives: **C–O and C=O are the same two elements**. Nothing
+// keyed by `[a,b].sort()` can tell them apart.
+//
+// So the One Bond tab now picks a bond TYPE, not a pair. Each type carries its
+// own order, its own dissociation energy and its own length, and that is what
+// the tab reads. The element-pair tables are untouched and still serve the
+// Reactions and Sandbox tabs, which have no carbon in them: those tabs model
+// molecules that form and break by collision, and adding an element there is a
+// much bigger piece of work than adding a row here.
+//
+// `lenMult` multiplies the length `bondLen` gives for the pair. The three
+// original types sit at 1 so they are pixel-for-pixel what they were. A double
+// bond is genuinely shorter than its single — C–O is 1.43 Å and C=O is 1.23 —
+// and that ratio IS the reading when both are in the same list: 0.86.
+const BOND_TYPES = {
+  'H-H': { els: ['H', 'H'], order: 1, D: 436, lenMult: 1,    label: 'H – H' },
+  'O=O': { els: ['O', 'O'], order: 2, D: 498, lenMult: 1,    label: 'O = O' },
+  'O-H': { els: ['O', 'H'], order: 1, D: 463, lenMult: 1,    label: 'O – H' },
+  'C-O': { els: ['C', 'O'], order: 1, D: 358, lenMult: 1,    label: 'C – O' },
+  'C=O': { els: ['C', 'O'], order: 2, D: 799, lenMult: 0.86, label: 'C = O' },
+};
+const DEFAULT_BOND = 'H-H';
+function bondType(id) { return BOND_TYPES[id] || BOND_TYPES[DEFAULT_BOND]; }
+
+// The strongest bond ON OFFER in the One Bond list, which is what that tab's
+// glow is normalised against — deliberately NOT BOND_ENERGY_MAX. That constant
+// is the Reactions currency: `kjPerSim()` is defined in terms of it and every
+// field brightness on the main tab is scaled by it, so moving it to 799 would
+// silently re-denominate a tab nobody asked me to touch. One Bond must not clip
+// (there, brightness is the reading), so it gets its own ceiling.
+const BOND_SHOWN_MAX = Math.max(...Object.values(BOND_TYPES).map(t => t.D));
+
+// How hard a deep bond outshines a shallow one on the One Bond tab.
+//
+// The old list spanned 436 to 498 — a factor of 1.14, near enough uniform that
+// brightness could be strictly proportional to the well depth and every bond
+// still read. The carbon bonds span 358 to 799, a factor of 2.23, and at
+// gamma 1 that puts a C–O at rest at rgb(33,30,40) against a background of
+// rgb(5,4,15): measured, and all but invisible. Selecting a bond and seeing
+// nothing is not a reading, it is a blank screen.
+//
+// So the depth term is compressed. The ORDER is untouched — a deeper well is
+// always brighter — and the strongest bond in the list still lands exactly at
+// the top of the ramp, so nothing clips. What changes is how far the bottom of
+// the range falls. Dev slider `Depth contrast`; 1 restores strict proportion.
+let bondShownGamma = 0.6;
+function bondShownMag(D) { return Math.pow(D / BOND_SHOWN_MAX, bondShownGamma); }
+
 const FIELD_SCALE = { 'hi-res': 0.30, 'detailed': 0.20, 'simple': 0.12 };
 let FIELD_WIDTH = 0.30;     // lobe half-width as a fraction of the bond length
 // Lower is brighter: the accumulated value that maps to the top of the colormap.
@@ -1839,7 +1897,7 @@ function drawNucleus(dc, px, py, scale = 1, alpha = 1) {
 // Helium's shell is full, so it bonds with nothing: a He body has no bonds and
 // its two electrons stay lone. That is the non-bonding case the renderer has to
 // handle, and the reason He is here at all.
-const VALENCE   = { H: 1, O: 6, He: 2 };                // outer-shell electrons
+const VALENCE   = { H: 1, O: 6, He: 2, C: 4 };          // outer-shell electrons
 const BOND_ORDER = { 'H-H': 1, 'H-O': 1, 'O-O': 2 };    // 2 = double bond
 function bondOrder(elA, elB) {
   return BOND_ORDER[[elA, elB].sort().join('-')] || 1;
@@ -4025,14 +4083,13 @@ function barChartSpec() {
   const fieldsBar = v => ({ label: 'Energy in Fields', value: v,
                             color: FIELDS_COLOR, glow: FIELDS_GLOW, dashed: true });
   if (bondTab.on) {
-    const [a, b] = bondTabEls();
     const work = bondWorkFraction(bondTab.sep, bondTab.r0);
-    const D = bondEnergy(a, b);
+    const D = bondTabD();
     return {
-      bars: [fieldsBar(bondEnergyShown(a, b, work))],
+      bars: [fieldsBar(bondShownFor(D, work))],
       max: SEPARATED_TOTAL,
       title: 'Free atoms ' + fmtKJ(SEPARATED_TOTAL),
-      note: 'this ' + a + '–' + b + ' well is ' + D + ' deep',
+      note: 'this ' + bondTabSymbol() + ' well is ' + D + ' deep',
       noData: false,
     };
   }
@@ -4476,6 +4533,10 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
       'lobe\u2019s flat cut at each nucleus stops showing</div>' +
     row('devBFloor',  'Lobe at rest',    0,    1,   0.05, BOND_FIELD_FLOOR, '#7b6fff') +
     row('devBBoost',  'Stretch boost',   0.5,  3,   0.05, BOND_FIELD_BOOST, '#7b6fff') +
+    row('devBGamma',  'Depth contrast',  0.3,  1,   0.05, bondShownGamma,   '#7b6fff') +
+    '<div style="opacity:0.45;font-size:10px;">how hard a deep bond outshines a ' +
+      'shallow one. 1 = brightness strictly proportional to the well depth, ' +
+      'which buries C–O next to C=O; lower compresses the range</div>' +
     '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
     '<div style="font-size:9px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.4;margin-top:8px;">' +
       'Shells view</div>' +
@@ -4588,6 +4649,7 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
        false, v => v.toFixed(1));
   bind('devBFloor',   v => BOND_FIELD_FLOOR = v, false, v => v.toFixed(2));
   bind('devBBoost',   v => BOND_FIELD_BOOST = v, false, v => v.toFixed(2));
+  bind('devBGamma',   v => bondShownGamma = v, false, v => v.toFixed(2));
   bind('devLoneArc',  v => { loneArcFrac = v;
          for (const b of world.bodies) buildElectrons(b);
          if (bondTab.on) initBondElectrons(); },
@@ -5045,7 +5107,7 @@ const BOND_CONTACT_GONE = 4.07;  // x r0 — reads 100% here, and is gone
 // ~65 px valence shell, roughly 9x life, and you can count the particles.
 const NUC_PARTICLE_R = 10;    // bonds' PARTICLE_RADIUS, the packing's own unit
 const NUC_NUCLEON_R  = 6;     // drawn radius in canvas px — the legibility knob
-const NUCLEONS = { H: [1, 0], O: [8, 8], He: [2, 2] };   // [protons, neutrons]
+const NUCLEONS = { H: [1, 0], O: [8, 8], He: [2, 2], C: [6, 6] };   // [protons, neutrons]
 
 const _nucCache = new Map();
 function nucleusFor(el) {
@@ -5157,10 +5219,10 @@ function drawNucleons(c, cx, cy, el, wobble, nucleonR) {
 // gradient band at each occupied shell radius and a glowing dot per electron.
 // Reactions has never needed inner shells — the main tab is all valence — so
 // the configurations live here.
-const ATOM_SHELLS = { H: [1], He: [2], O: [2, 6] };   // electrons per shell
+const ATOM_SHELLS = { H: [1], He: [2], O: [2, 6], C: [2, 4] };   // electrons per shell
 // Shell radii as a fraction of the atom's valence radius. The inner figure is
 // bonds' own ratio for oxygen: shell 0 at 7 pm against shell 1 at 47.
-const SHELL_FRAC  = { H: [1], He: [1], O: [0.149, 1] };
+const SHELL_FRAC  = { H: [1], He: [1], O: [0.149, 1], C: [0.18, 1] };
 
 // Radius of shell `sh` on `el`, in canvas px. The lifelike inner fraction is
 // not enough on its own: this tab draws nuclei about 9x life so the nucleons
@@ -5226,7 +5288,7 @@ function bondShare(r, r0) {
 
 const bondTab = {
   on: false,
-  pair: 'H-H',
+  type: DEFAULT_BOND,   // a key into BOND_TYPES, NOT an element pair: see there
   sep: 0,            // px between the nuclei, measured, not nominal
   r0: 0,             // natural length for this pair
   dragging: false,
@@ -5239,9 +5301,21 @@ const bondTab = {
   hoverBoth: null,   // pointer position while it is inside BOTH atoms, else null
 };
 
-function bondTabEls() {
-  const [a, b] = bondTab.pair.split('-');
-  return [a, b];
+function bondTabEls()   { return bondType(bondTab.type).els; }
+function bondTabOrder() { return bondType(bondTab.type).order; }
+function bondTabD()     { return bondType(bondTab.type).D; }
+
+// The natural length for the SELECTED type, not for its element pair: the
+// double is drawn shorter than the single it sits next to in the list.
+function bondTabR0() {
+  const t = bondType(bondTab.type);
+  return bondLen(t.els[0], t.els[1]) * t.lenMult;
+}
+
+// How this bond is written: an en dash for a single, an equals for a double.
+function bondTabSymbol() {
+  const t = bondType(bondTab.type);
+  return t.els[0] + (t.order === 2 ? '=' : '–') + t.els[1];
 }
 
 // The raw Morse form only APPROACHES 1 — it is still at 99.3% even at the end
@@ -5271,8 +5345,7 @@ const WORK_FULL_AT = 0.98;
 // which is the same quantity wherever the zero sits. Only the number moves.
 const SEPARATED_TOTAL = 1000;   // kJ/mol, the common height of free atoms
 
-function bondEnergyShown(a, b, work) {
-  const D = bondEnergy(a, b);
+function bondShownFor(D, work) {
   return (SEPARATED_TOTAL - D) + D * work;
 }
 
@@ -5292,8 +5365,7 @@ function bondContact(r, r0) {
 }
 
 function bondTabReset() {
-  const [a, b] = bondTabEls();
-  bondTab.r0  = bondLen(a, b);
+  bondTab.r0  = bondTabR0();
   bondTab.sep = bondTab.r0 * BOND_START_MULT;
   bondTab.spin = 0;
   initBondElectrons();
@@ -5344,7 +5416,9 @@ function bondTabZoom() {
 // it keeps that atom's colour wherever it ends up.
 function initBondElectrons() {
   const [ea, eb] = bondTabEls();
-  const order = bondOrder(ea, eb);
+  // The TYPE's order, not the element pair's: that is the whole difference
+  // between the C–O and the C=O in the list — two shared electrons or four.
+  const order = bondTabOrder();
   bondTab.shellE = [];
   bondTab.dots = [];
 
@@ -5532,7 +5606,9 @@ function drawBondTab() {
     // feature — it is what makes a collision flare read as a white core
     // spreading — but here the brightness is the reading, and a clipped core
     // throws away the top of the range just where the bond is most interesting.
-    mag: bondEnergy(A.el, B.el) / BOND_ENERGY_MAX
+    // Against BOND_SHOWN_MAX, the deepest well in the dropdown, so the top of
+    // the ramp is the strongest bond ON THIS TAB and nothing clips.
+    mag: bondShownMag(bondTabD())
          * (BOND_FIELD_FLOOR + (1 - BOND_FIELD_FLOOR) * work)
          * contact * BOND_FIELD_GAIN * BOND_FIELD_BOOST,
     // Narrower than the main tab's lobe. FIELD_WIDTH is a fraction of the bond
@@ -5628,16 +5704,15 @@ function drawBondTip(p) {
 }
 
 function updateBondReadout() {
-  const [a, b] = bondTabEls();
   const work = bondWorkFraction(bondTab.sep, bondTab.r0);
-  const full = bondEnergy(a, b);
+  const full = bondTabD();
   const sepEl = document.getElementById('bondSep');
   const valEl = document.getElementById('bondEnergyVal');
   const pctEl = document.getElementById('bondEnergyPct');
   if (sepEl) sepEl.textContent = (bondTab.sep / bondTab.r0).toFixed(2) + '\u00d7 natural';
-  if (valEl) valEl.textContent = Math.round(bondEnergyShown(a, b, work)) + ' kJ/mol';
+  if (valEl) valEl.textContent = Math.round(bondShownFor(full, work)) + ' kJ/mol';
   if (pctEl) pctEl.textContent = 'free atoms sit at ' + SEPARATED_TOTAL +
-    '; this ' + a + '\u2013' + b + ' well is ' + full + ' deep';
+    '; this ' + bondTabSymbol() + ' well is ' + full + ' deep';
 }
 
 // ── Dragging ──────────────────────────────────────────────────────────────────
@@ -5755,8 +5830,20 @@ function applyTab(tab) {
 document.querySelectorAll('.tab-btn[data-tab]').forEach(btn => {
   btn.addEventListener('click', () => applyTab(btn.dataset.tab));
 });
+// One flat list, in the order BOND_TYPES declares them.
+(function fillBondPick() {
+  const sel = document.getElementById('bondPick');
+  if (!sel) return;
+  for (const [id, t] of Object.entries(BOND_TYPES)) {
+    const o = document.createElement('option');
+    o.value = id;
+    o.textContent = t.label;
+    sel.appendChild(o);
+  }
+  sel.value = bondTab.type;
+})();
 document.getElementById('bondPick').addEventListener('change', function () {
-  bondTab.pair = this.value;
+  bondTab.type = this.value;
   bondTabReset();
   updateBondReadout();
   logAction('One Bond: ' + this.value);
@@ -5776,7 +5863,6 @@ const SNAP_ASPECT = 2.6;     // crop width over height
 function takeBondSnapshot() {
   const list = document.getElementById('bondSnapsList');
   if (!list) return;
-  const [a, b] = bondTabEls();
   const work = bondWorkFraction(bondTab.sep, bondTab.r0);
 
   const cw = Math.round(sceneW() * SNAP_CROP_W);
@@ -5798,17 +5884,18 @@ function takeBondSnapshot() {
   info.className = 'snap-row';
   const e = document.createElement('span');
   e.className = 'snap-e';
-  e.textContent = Math.round(bondEnergyShown(a, b, work)) + ' kJ/mol';
+  e.textContent = Math.round(bondShownFor(bondTabD(), work)) + ' kJ/mol';
   const sep = document.createElement('span');
   sep.className = 'snap-sep';
-  sep.textContent = a + '\u2013' + b + '  ' + (bondTab.sep / bondTab.r0).toFixed(2) + '\u00d7';
+  // The symbol, so a C\u2013O snapshot and a C=O one are told apart in the column.
+  sep.textContent = bondTabSymbol() + '  ' + (bondTab.sep / bondTab.r0).toFixed(2) + '\u00d7';
   info.appendChild(e); info.appendChild(sep);
 
   row.appendChild(thumb); row.appendChild(info);
   list.appendChild(row);
   const panel = document.getElementById('bondSnaps');
   panel.scrollTop = panel.scrollHeight;
-  logAction('Snapshot: ' + a + '-' + b + ' at ' + (bondTab.sep / bondTab.r0).toFixed(2) + 'x');
+  logAction('Snapshot: ' + bondTabSymbol() + ' at ' + (bondTab.sep / bondTab.r0).toFixed(2) + 'x');
 }
 
 // The panel is sized and shown here rather than in CSS because its height
