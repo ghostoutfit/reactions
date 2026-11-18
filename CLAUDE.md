@@ -505,6 +505,81 @@ const MOLECULE_SHAPES = {
   a carbonic acid in the scene: the carbon disc reads luminance 14–19 all the way
   round against a background of 21 — black, the same as in the Sandbox.
 
+### The speed the data means, and the speed you see
+
+**This is the first piece of a deliberate split between the two.** Equipartition
+says `v` goes as `1/sqrt(m)`, and that is true and it tells the wrong story. A
+water is 18 to an H₂'s 2, so a finished water crosses the screen at **a third**
+of the speed the hydrogen it was made from did — and it arrives there carrying
+*more* energy, because forming the bond released some. The bars say the motion
+went up, the screen says everything slowed down, and a student believes the
+screen.
+
+So the mass dependence is split. `massVisual` is the exponent the **drawing**
+uses; the accounting keeps the true 1/2 whatever the drawing does.
+
+```
+drawn speed = base × (H2_MASS / m) ^ massVisual
+true  speed = base × (H2_MASS / m) ^ 0.5
+```
+
+At 0.5 the two are the same. At 0 every species is drawn at the same speed, so
+the only thing left that can make the screen faster or slower is the
+temperature. Between them the mass spread is compressed rather than removed.
+Dev slider, *Show of that*, under the equipartition toggle.
+
+**0.25 is measured.** Mean body speed on screen two seconds in, against the same
+once the reaction has finished — four runs each at High:
+
+| `massVisual` | start | end | end/start |
+|---|---|---|---|
+| 0.5 (true) | 389 | 302 | **0.77** — the complaint: it slows down |
+| 0.35 | 368 | 427 | 1.16 |
+| **0.25** | 306 | 500 | **1.63** |
+| 0.15 | 405 | 620 | 1.53 |
+| 0 | 390 | 848 | 2.17 |
+
+The crossover is just under 0.35. At 0.25 the world plainly ends faster than it
+started, and a real mass difference survives on screen: a water at 0.58 of an H₂
+rather than 0.33, an O₂ at half rather than a quarter.
+
+#### What keeps it honest
+
+A distortion of the same kind as water's exaggerated pivot and the bar chart's
+raised zero — the number is wrong and the behaviour it shows is right. What
+makes it safe is that **it is confined to the drawing**, and there were exactly
+three places where the data was reading drawn velocities. All three now read
+`trueMotionEnergy()` or undo the boost:
+
+- **The anchor.** `anchorEnergyTotal` sets the run's constant total. Measured
+  across four spawns each: mean `totalKJ` 5,239 / 5,244 / 5,210 at `massVisual`
+  0.5 / 0.25 / 0 — the same number, within the spawn spread's own ±5%.
+- **The thermostat.** `stepTemperature` moves `totalKJ` by what it put in, and
+  must put in the same amount whatever the drawing is doing.
+- **The collision dose.** This one bit hardest. The dose goes as the square of
+  the closing speed, so drawing the heavy molecules faster made every hit they
+  were in land harder: at `massVisual` 0 the world broke **4.3× as many bonds**
+  in 90 s as it did at 0.5 (means 51.6 against 12.0). A slider that rewrites the
+  reaction's dynamics is not a visual slider. Dividing the deposited energy by
+  `displayBoost(A) × displayBoost(B)` takes it back out — exact when the pair
+  are boosted alike, the geometric mean in between. After: means **11.5 / 11.2 /
+  14.7** across the same three settings, and four waters in every run.
+
+`trueMotionEnergy()` corrects **translation only**. Spin is not set from
+`speciesSpeed` and carries no display boost, so correcting it would be inventing
+a distortion to undo — the first version divided the rotational term too and
+moved the anchored total by a third across the slider's range.
+
+#### What this lever cannot do
+
+It makes the world *end* faster than it started, but only because the heavy,
+slow O₂ is gone by then. It cannot make the released bond energy itself visible,
+because the speed band pins every body to `vTarget`, which is a function of
+temperature and mass and **not** of how much energy the world actually holds —
+surplus goes to spin and, past `MAX_SPIN`, out. Making an exothermic reaction
+*look* exothermic needs the band's target to follow the energy, which is a
+separate change.
+
 ### Spawn speed spread
 
 Speeds come from a standard normal **truncated to ±1σ** (`spreadSpeed`), so the

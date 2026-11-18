@@ -2765,11 +2765,89 @@ function launchSpeed() {
 let equipartition = true;
 const H2_MASS = 2 * ATOMIC_MASS.H;
 
+// ─── THE SPEED THE DATA MEANS, AND THE SPEED YOU SEE ─────────────────────────
+//
+// Equipartition says v goes as 1/sqrt(m), and that is true and it tells the
+// wrong story. A water is 18 to an H2's 2, so a finished water crosses the
+// screen at a THIRD of the speed the hydrogen it was made from did — and it
+// arrives there carrying MORE energy, because forming the bond released some.
+// The bars say the motion went up and the screen says everything slowed down,
+// and a student believes the screen.
+//
+// So the mass dependence is split in two. `massVisual` is the exponent the
+// DRAWING uses; the accounting keeps the true 1/2 whatever the drawing does.
+//
+//     drawn speed = base x (H2_MASS / m) ^ massVisual
+//     true  speed = base x (H2_MASS / m) ^ 0.5
+//
+// At 0.5 the two are the same and nothing has changed. At 0 every species is
+// drawn at the same speed, so the only thing left that can make the screen
+// faster or slower is the temperature — which is the reading we want. Between
+// them the mass spread is compressed rather than removed.
+//
+// It is a deliberate distortion of the same kind as water's exaggerated pivot
+// and the bar chart's raised zero: the number is wrong and the behaviour it
+// shows is right. What keeps it honest is that it is confined to the drawing —
+// see `trueMotionEnergy`, which is what the bars' total is anchored from.
+// 0.25 is measured, not guessed. Mean body speed on screen two seconds in,
+// against the same once the reaction has finished — four runs each at High:
+//
+//     massVisual   start   end    end/start
+//     0.5 (true)    389    302      0.77   <- the complaint: it slows down
+//     0.35          368    427      1.16
+//     0.25          306    500      1.63   <- this
+//     0.15          405    620      1.53
+//     0             390    848      2.17
+//
+// The crossover is just under 0.35. At 0.25 the world plainly ends faster than
+// it started, which is the reading the reaction deserves, and a real mass
+// difference survives on screen: a water at 0.58 of an H2 rather than 0.33, an
+// O2 at half rather than a quarter. At 0 the mass spread is gone altogether.
+const MASS_EXP_TRUE = 0.5;
+let massVisual = 0.25;       // dev slider; 0.5 = draw the truth
+
+function massRatio(els) {
+  const m = els.reduce((a, el) => a + (ATOMIC_MASS[el] || 1), 0);
+  return H2_MASS / Math.max(1e-9, m);
+}
+
 function speciesSpeed(els) {
   const base = launchSpeed() * tempCurrent;
   if (!equipartition) return base;
-  const m = els.reduce((a, el) => a + (ATOMIC_MASS[el] || 1), 0);
-  return base * Math.sqrt(H2_MASS / m);
+  return base * Math.pow(massRatio(els), massVisual);
+}
+
+// The same thing with the mass dependence the data means, which is what the
+// energy total is anchored from and what the temperature step moves.
+function speciesSpeedTrue(els) {
+  const base = launchSpeed() * tempCurrent;
+  if (!equipartition) return base;
+  return base * Math.pow(massRatio(els), MASS_EXP_TRUE);
+}
+
+// How much faster than the truth a body is DRAWN. 1 when the two exponents
+// agree, and 1 for an H2 at any setting, since the ratio is its own yardstick.
+function displayBoost(b) {
+  if (!equipartition || massVisual === MASS_EXP_TRUE) return 1;
+  return Math.pow(massRatio(b.els), massVisual - MASS_EXP_TRUE);
+}
+
+// THE MOTION ENERGY THE DATA MEANS. Measured energy with the drawing's
+// distortion taken back out of it: a body drawn s times too fast is carrying
+// s^2 times too much, so dividing by s^2 recovers what equipartition would have
+// given it. This is the one function that lets the bars stay true while the
+// screen is tuned, and it is the reason `massVisual` can be moved at all.
+//
+// TRANSLATION ONLY. Spin is not set from `speciesSpeed` and carries no display
+// boost, so correcting it would be inventing a distortion to undo. Dividing the
+// rotational term as well moved the anchored total by a third across the
+// slider's range, which is the whole thing this function exists to prevent.
+function trueMotionEnergy() {
+  return world.bodies.reduce((a, b) => {
+    const s = displayBoost(b);
+    return a + 0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy) / (s * s)
+             + 0.5 * b.inertia * b.spin * b.spin;
+  }, 0);
 }
 
 // ─── Temperature ──────────────────────────────────────────────────────────────
@@ -2809,9 +2887,12 @@ function stepTemperature(rawDt) {
   // Turning the temperature up puts energy into the world from outside the
   // physics, so the bar chart's total has to follow it. This is the only thing
   // that moves that total between spawns.
-  const before = energyOfMotion();
+  // Read in TRUE energy, not drawn energy: the thermostat must put the same
+  // amount into the books whatever the drawing is doing, or moving the visual
+  // slider would quietly change how much a temperature button is worth.
+  const before = trueMotionEnergy();
   for (const b of world.bodies) { b.vx *= k; b.vy *= k; b.spin *= k; b.vTarget *= k; }
-  totalKJ += kjPerSim() * (energyOfMotion() - before);
+  totalKJ += kjPerSim() * (trueMotionEnergy() - before);
   tempCurrent = next;
 }
 
@@ -3246,7 +3327,17 @@ function collidePair(A, B) {
       // contact's effective mass, rotation included, so a glancing hit that
       // mostly spins the pair deposits correspondingly less.
       if (storers) {
-        const taken = conv * 0.5 * (1 / invMassSum) * vn * vn;
+        // What the hit was worth is read in TRUE speeds, not drawn ones. The
+        // dose a collision deposits goes as the square of the closing speed, so
+        // drawing the heavy molecules faster makes every hit they are in land
+        // harder — measured, at `massVisual` 0 the world broke 4.3 times as
+        // many bonds in 90 s as it did at 0.5. A slider that rewrites the
+        // reaction's dynamics is not a visual slider, so the boost comes back
+        // out here. Exact when the pair are boosted alike, since then the
+        // closing speed is boosted by exactly that much; the geometric mean in
+        // between, which is the right shape and the honest approximation.
+        const taken = conv * 0.5 * (1 / invMassSum) * vn * vn
+                    / (displayBoost(A) * displayBoost(B));
         queueIfBroken(A, taken / storers);
         queueIfBroken(B, taken / storers);
       }
@@ -4363,7 +4454,9 @@ function fieldsKJ() {
 // energy accounting, and the bars are the accounting. Measured motion also
 // carries the speed band's floor top-ups, which are energy from nowhere.
 let totalKJ = 0;
-function anchorEnergyTotal() { totalKJ = fieldsKJ() + kjPerSim() * energyOfMotion(); }
+// Anchored from the TRUE motion, so the run's total is the same number whatever
+// `massVisual` is set to — the slider moves the picture and never the books.
+function anchorEnergyTotal() { totalKJ = fieldsKJ() + kjPerSim() * trueMotionEnergy(); }
 function motionKJ() { return Math.max(0, totalKJ - fieldsKJ()); }
 
 // ─── Where the bars count from ────────────────────────────────────────────────
@@ -5686,6 +5779,8 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
       '<span>Heavy molecules start slower</span>' +
     '</label>' +
     '<div id="devEquiNote" style="opacity:0.45;font-size:10px;margin-left:21px;"></div>' +
+    row('devMassVis', 'Show of that', 0, 0.5, 0.05, massVisual, '#7fdbe8') +
+    '<div id="devMassVisNote" style="opacity:0.45;font-size:10px;"></div>' +
     '<label style="display:flex;align-items:center;gap:7px;margin:9px 0 2px;cursor:pointer;">' +
       '<input type="checkbox" id="devBand" checked style="margin:0">' +
       '<span>Hold speeds in the band</span>' +
@@ -5816,6 +5911,21 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     spawnWorld();
     logAction('Equipartition ' + (equipartition ? 'on' : 'off'));
   });
+
+  // How much of that mass difference is actually DRAWN. The energy total is
+  // anchored from the true exponent either way, so this moves the picture only.
+  const mvNote = panel.querySelector('#devMassVisNote');
+  const syncMassVisNote = () => {
+    const w = Math.pow(H2_MASS / 18, massVisual) / Math.pow(H2_MASS / 18, MASS_EXP_TRUE);
+    mvNote.textContent = massVisual >= MASS_EXP_TRUE - 1e-9
+      ? 'The truth: a water crosses at ⅓ of an H₂'
+      : massVisual <= 1e-9
+        ? 'Mass ignored — every species drawn at the same speed, so only heat moves it'
+        : 'A water drawn ' + w.toFixed(1) + '× faster than the truth';
+  };
+  syncMassVisNote();
+  bind('devMassVis', v => { massVisual = v; syncMassVisNote(); }, false,
+       v => v >= MASS_EXP_TRUE - 1e-9 ? 'all of it' : v <= 1e-9 ? 'none' : v.toFixed(2));
 
   // Lone pairs on/off — H2 has none, so this only shows on O2 and water
   const lone = panel.querySelector('#devLone');
