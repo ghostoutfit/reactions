@@ -776,8 +776,15 @@
     <!-- Pink box: respawn button + launch speed + what is in the world -->
     <div class="ctrl-box-pink">
       <span class="ctrl-box-label ctrl-box-label-pink">MOLECULES</span>
-      <div class="respawn-wrap" id="respawnGroup">
-        <button id="newBtn" class="btn" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;align-self:stretch;padding:6px 12px;">
+      <!-- Which reaction. The picker sets the whole composition at once and the
+           button below shows what it will spawn, so the two read as one control:
+           choose the reaction, press NEW. Both stretch to the button's own
+           width, which the molecule canvas fixes, so changing the selection
+           cannot resize this group or shift the temperature buttons beside it. -->
+      <div class="respawn-wrap" id="respawnGroup" style="gap:4px;">
+        <span style="font-size:9px;letter-spacing:0.07em;text-transform:uppercase;opacity:0.5;text-align:center;">Reaction</span>
+        <select id="reactionPick" style="font-size:11px;padding:2px 4px;width:100%;min-width:0;box-sizing:border-box;"></select>
+        <button id="newBtn" class="btn" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;align-self:stretch;flex:1;padding:6px 12px;">
           <canvas id="newBtnMolecule" width="96" height="42" style="display:block;flex-shrink:0;image-rendering:pixelated"></canvas>
           <span id="newBtnLabel" style="font-size:11px;text-transform:none;letter-spacing:normal;">H&#8322;</span>
         </button>
@@ -1664,10 +1671,11 @@ function bondSegments() {
     // coloured between hits.
     const load = Math.min(1, Math.max(b.flare, vibLoad(b)));
     const at = bodyAtoms(b);
-    for (const [i, k] of b.bonds) {
+    for (const bd of b.bonds) {
+      const [i, k] = bd;
       segs.push({
         x1: at[i].x, y1: at[i].y, x2: at[k].x, y2: at[k].y,
-        mag: bondEnergy(at[i].el, at[k].el) / BOND_ENERGY_MAX * bright,
+        mag: bondEnergyOf(b, bd) / BOND_ENERGY_MAX * bright,
         squeeze, load,
       });
     }
@@ -2136,8 +2144,9 @@ function buildElectrons(b) {
   const anyBond = b.atoms.map(() => false);
   for (const [i, k] of b.bonds) { anyBond[i] = true; anyBond[k] = true; }
 
-  for (const [i, k] of b.bonds) {
-    const order = bondOrder(b.atoms[i].el, b.atoms[k].el);
+  for (const bd of b.bonds) {
+    const [i, k] = bd;
+    const order = bondOrderOf(b, bd);
     spent[i] += order; spent[k] += order;
     const count = order * 2;              // a bond is pairs: 2 electrons per order
     for (let q = 0; q < count; q++) {
@@ -2426,15 +2435,45 @@ function stepElectrons(frameDt) {
 
 // ─── Species ──────────────────────────────────────────────────────────────────
 // What the world can be populated with. `composition` says how many of each to
-// spawn — both dials live in the dev panel.
+// spawn — every dial lives in the dev panel, and the REACTION picker in the red
+// box sets them all at once.
 const SPECIES = {
-  H2: { els: ['H', 'H'] },
-  O2: { els: ['O', 'O'] },
-  He: { els: ['He'] },        // monatomic: no bond, two lone electrons
+  H2:    { els: ['H', 'H'] },
+  O2:    { els: ['O', 'O'] },
+  He:    { els: ['He'] },        // monatomic: no bond, two lone electrons
+  H2CO3: { els: ['C', 'O', 'O', 'H', 'O', 'H'] },   // shape in MOLECULE_SHAPES
 };
-const COMPOSITION_DEFAULT = { H2: 4, O2: 2, He: 0 };   // 2:1 — the ratio for water
+const COMPOSITION_DEFAULT = { H2: 4, O2: 2, He: 0, H2CO3: 0 };  // 2:1 — water's ratio
 const COMPOSITION_MAX = 6;
 const composition = { ...COMPOSITION_DEFAULT };
+
+// ─── Reactions ────────────────────────────────────────────────────────────────
+// WHAT IS IN THE WORLD, AS ONE CHOICE. The dev panel has a dial per species,
+// which is the right tool for tuning and the wrong one for teaching: a reaction
+// is a set of molecules that belong together, and picking one should not mean
+// setting three numbers in the right order. The picker in the red box sets the
+// whole composition, and the NEW button shows what it will spawn.
+//
+// `recombine` is part of the reaction, not a global. Water's two halves —
+// breaking, then coming back together — are both the point there. Carbonic acid
+// is the breaking half only, for now: its atoms go free and stay free, which is
+// what was asked for, and it is also the honest state of the model, since
+// nothing here knows how to put a C back into anything.
+const REACTIONS = {
+  water: {
+    label: 'H₂ + O₂  →  H₂O',
+    composition: { H2: 4, O2: 2, He: 0, H2CO3: 0 },
+    icon: 'H2', recombine: true,
+  },
+  carbonic: {
+    label: 'H₂CO₃  →  atoms',
+    composition: { H2: 0, O2: 0, He: 0, H2CO3: 2 },
+    icon: 'H2CO3', recombine: false,
+  },
+};
+const DEFAULT_REACTION = 'water';
+let reaction = DEFAULT_REACTION;
+function currentReaction() { return REACTIONS[reaction] || REACTIONS[DEFAULT_REACTION]; }
 
 // ── Action log (for bug reports) ─────────────────────────────────────────────
 const actionLog = [];
@@ -2464,7 +2503,7 @@ let running = false;
 // Atomic masses, in units where H = 1. Used for collision impulses and for the
 // kinetic-energy readout, so a bounce off an O2 behaves like a bounce off
 // something 16× heavier per atom.
-const ATOMIC_MASS = { H: 1, O: 16, He: 4 };
+const ATOMIC_MASS = { H: 1, O: 16, He: 4, C: 12 };
 
 const world = {
   w: 0, h: 0,          // wrap dimensions
@@ -2500,7 +2539,52 @@ let nextBodyId = 0;
 // mass is taken out. A chain in a row, except for a BENT TRIATOMIC — water, the
 // one the sandbox builds and recombination makes here — whose two outer atoms
 // open to the real angle about the middle one instead of lying in a line.
+// MOLECULES THAT ARE NOT A ROW, AND BONDS THAT ARE NOT A CHAIN.
+//
+// Two assumptions held while every species here had at most two atoms with one
+// bond between them: atoms lie in a line, and atom k is bonded to atom k-1.
+// Carbonic acid breaks both. It is a tree, not a chain — three oxygens on one
+// carbon, two of them carrying a hydrogen — and it holds a C–O and a C=O at
+// once, which no table keyed by the element pair can tell apart (see BOND_TYPES).
+//
+// So a species may bring its own geometry and its own bond list, and a bond may
+// carry its ORDER as a third entry. Everything that reads a bond goes through
+// `bondOrderOf` / `bondEnergyOf`, which fall back to the element-pair tables
+// when no order is given — so H2, O2 and water are pixel-for-pixel unchanged.
+//
+// The geometry is `sbCarbonicAcid`, the same function the Sandbox builds its
+// molecule from: one Lewis structure, two tabs reading it.
+const MOLECULE_SHAPES = {
+  COOHOH: {
+    geometry: () => sbCarbonicAcid(),
+    //  0 C, 1 O (the double, straight up), 2 O + 3 H, 4 O + 5 H
+    bonds: [[0, 1, 2], [0, 2, 1], [2, 3, 1], [0, 4, 1], [4, 5, 1]],
+  },
+};
+function moleculeShape(els) { return MOLECULE_SHAPES[els.join('')] || null; }
+
+// Which atoms are bonded to which, as index pairs, with an optional order.
+// Atoms with no shape of their own are laid out in a row and each one bonds to
+// the previous: a diatomic is [[0,1]], water [[0,1],[1,2]].
+function moleculeBonds(els) {
+  const shape = moleculeShape(els);
+  if (shape) return shape.bonds.map(bd => bd.slice());
+  return els.slice(1).map((_, k) => [k, k + 1]);
+}
+
+// A bond's order and its dissociation energy, from the bond itself when it says
+// so and from the element pair when it does not.
+function bondOrderOf(b, bd) {
+  return bd[2] || bondOrder(b.atoms[bd[0]].el, b.atoms[bd[1]].el);
+}
+function bondEnergyOf(b, bd) {
+  const elA = b.atoms[bd[0]].el, elB = b.atoms[bd[1]].el;
+  return bd[2] ? bondDFor(elA, elB, bd[2]) : bondEnergy(elA, elB);
+}
+
 function moleculeGeometry(els) {
+  const shape = moleculeShape(els);
+  if (shape) return shape.geometry();
   if (els.length === 3) {
     const h = H2O_ANGLE / 2;
     const r1 = bondLen(els[0], els[1]), r2 = bondLen(els[1], els[2]);
@@ -2559,18 +2643,29 @@ function rebuildWaterPivots() {
   }
 }
 
-function makeBody(els, x, y, heading, speed, spin, nominal = speed) {
-  // Taken out about the CENTRE OF MASS, not the midpoint of the row. For an H2
-  // or an O2 they are the same point, so nothing that existed before this moves;
-  // for an OH or a water they are not, and the recombination energy below is
-  // split between drift and spin about exactly this point.
-  const geo = moleculeGeometry(els);
+// Centre of mass of a list of {el, lx, ly}, in the coordinates it is given in.
+function comOf(geo) {
   let mx = 0, my = 0, mt = 0;
   for (const g of geo) {
     const m = ATOMIC_MASS[g.el] || 1;
     mx += g.lx * m; my += g.ly * m; mt += m;
   }
-  mx /= mt || 1; my /= mt || 1;
+  return { x: mx / (mt || 1), y: my / (mt || 1) };
+}
+
+// Build a body from an explicit geometry and bond list. `makeBody` below is the
+// species path into this — geometry and bonds from the tables — and a FRAGMENT
+// is the other: a molecule that has just lost an atom keeps the coordinates its
+// remaining atoms already had, rather than being rebuilt from any table. There
+// is no table that could rebuild it: an HCO3 is not a species, it is whatever is
+// left, and its atoms have not moved.
+function assembleBody(geo, bonds, x, y, heading, speed, spin, nominal = speed) {
+  const els = geo.map(g => g.el);
+  // Taken out about the CENTRE OF MASS, not the midpoint of the row. For an H2
+  // or an O2 they are the same point, so nothing that existed before this moves;
+  // for an OH or a water they are not, and the recombination energy below is
+  // split between drift and spin about exactly this point.
+  let { x: mx, y: my } = comOf(geo);
 
   const wp = waterPivotLocal(els, geo);
   if (wp) { mx = wp.x; my = wp.y; }
@@ -2590,10 +2685,10 @@ function makeBody(els, x, y, heading, speed, spin, nominal = speed) {
   return {
     id: nextBodyId++,
     els, atoms, mass, inertia,
-    // Which atoms are bonded to which, as index pairs. Atoms are laid out in a
-    // row, so each one bonds to the previous: a diatomic has the single bond
-    // [[0,1]]. Water would be [[0,1],[1,2]] — two lobes off the oxygen.
-    bonds: els.slice(1).map((_, k) => [k, k + 1]),
+    // Which atoms are bonded to which, as [i, k] or [i, k, order] — see
+    // moleculeBonds. The centre-of-mass shift above does not touch the indices,
+    // so the list arrives as given.
+    bonds,
     flare: 0,                // collision brightness, decays towards 0
     vib: 0,                  // energy held in the bond; past breakThreshold it lets go
     vibN: 0,                 // collisions' worth currently stacked, up to bondLevels
@@ -2607,6 +2702,12 @@ function makeBody(els, x, y, heading, speed, spin, nominal = speed) {
     radius: Math.max(...atoms.map(at => Math.hypot(at.lx, at.ly) + at.r)),
     electrons: null,        // filled by buildElectrons just below
   };
+}
+
+// A body of a known SPECIES: geometry and bonds both come from the tables.
+function makeBody(els, x, y, heading, speed, spin, nominal = speed) {
+  return assembleBody(moleculeGeometry(els), moleculeBonds(els),
+                      x, y, heading, speed, spin, nominal);
 }
 
 // World positions of a body's atoms, optionally offset (used to draw wrapped copies)
@@ -3191,13 +3292,45 @@ function doseUnit() {
   return 0.5 * H2_MASS * v * v;
 }
 
+// How many bonds each atom is in. A molecule here is a TREE, so an atom with
+// exactly one is a leaf: the bond holding it is the one that can take a single
+// atom off the end.
+function bondDegrees(b) {
+  const deg = b.atoms.map(() => 0);
+  for (const [i, k] of b.bonds) { deg[i]++; deg[k]++; }
+  return deg;
+}
+
+// THE BOND THAT WOULD ACTUALLY LET GO: the weakest bond with a free end.
+//
+// With two atoms there was only ever one candidate and this question did not
+// exist. With six there are five bonds, and the weakest of them is not
+// necessarily one that breaking would take an atom off — carbonic acid's
+// weakest is a C–O at 358, but that oxygen is carrying a hydrogen, so pulling
+// that bond would throw off an OH, not an atom. The weakest bond with a LEAF on
+// one end is the O–H at 463, and that is the one that goes.
+//
+// Every number the break uses comes from this one bond: the threshold it has to
+// clear, how many hits it can stack, and what the dissociation costs. A tree
+// with any bonds at all has a leaf, so this is never null for a molecule.
+function breakableBond(b) {
+  let best = null, bestD = Infinity;
+  if (!b.bonds.length) return null;
+  const deg = bondDegrees(b);
+  for (const bd of b.bonds) {
+    if (deg[bd[0]] !== 1 && deg[bd[1]] !== 1) continue;
+    const D = bondEnergyOf(b, bd);
+    if (D < bestD) { bestD = D; best = bd; }
+  }
+  return best;
+}
+
 // What the bond is worth, in those same units, scaled by its real dissociation
 // energy — so an O=O holds 498/436 as much as an H-H before it goes.
 function bondEnergyFactor(b) {
   if (b.els.length < 2) return 0;
-  const weakest = Math.min(...b.bonds.map(([i, k]) =>
-    bondEnergy(b.atoms[i].el, b.atoms[k].el)));
-  return weakest / BOND_ENERGY_MAX;
+  const bd = breakableBond(b);
+  return bd ? bondEnergyOf(b, bd) / BOND_ENERGY_MAX : 0;
 }
 
 function breakThreshold(b) {
@@ -3249,9 +3382,14 @@ function returnFieldEnergy(b, amount) {
 // This is the thing that makes a double bond feel like a double bond. Without
 // it an O=O was simply a stronger single bond — harder to break and otherwise
 // identical. With it, it has somewhere to put a second knock.
+//
+// It is the BREAKING bond's order, not the molecule's biggest. Carbonic acid
+// holds a C=O, but the bond under load is the O–H that is going to go, and a
+// single bond has one level wherever it sits. Taking the maximum would hand the
+// O–H the C=O's second level, which belongs to a bond that is not breaking.
 function bondLevels(b) {
-  return b.bonds.length ? Math.max(...b.bonds.map(([i, k]) =>
-    bondOrder(b.atoms[i].el, b.atoms[k].el))) : 1;
+  const bd = breakableBond(b);
+  return bd ? bondOrderOf(b, bd) : 1;
 }
 
 // A bond holds at most `bondLevels(b)` collisions' worth of energy.
@@ -3394,21 +3532,110 @@ function payExactBreakCost(b, made) {
   }
 }
 
+// SHATTER OR PEEL, and the dividing line is how many bonds the molecule has.
+//
+// A molecule with one or two bonds SHATTERS: every atom goes free at once. That
+// is what breaking has always done here, it is exactly right for a diatomic —
+// there is nothing else one bond could do — and water depends on it, because the
+// recombination gate waits for every body in the world to be a single atom
+// before it opens. Peel a water into H + OH and that gate never opens again.
+//
+// A molecule with three or more PEELS: one bond lets go, one atom leaves, and
+// what is left is still a molecule. Six atoms vaporising on one knock says the
+// wrong thing — a collision does not undo a molecule, it takes a piece off it —
+// and the piece coming off one at a time is the thing worth watching. Carbonic
+// acid goes H, then O, then H, then the last three together, which is still
+// every atom free in the end.
+const PEEL_MIN_BONDS = 3;
+
+// Peel: the leaf atom on the breakable bond leaves, and the rest stays whole.
+//
+// The residue is NOT rebuilt from any table — there is no table it could come
+// from. It is assembled from the coordinates its atoms already had, so nothing
+// on screen moves at the instant the bond goes except the atom that left.
+//
+// The kick is momentum-neutral here, unlike the shatter's: with two pieces there
+// is a right answer, and it is the light one that visibly flies off while the
+// heavy residue barely recoils.
+//
+// THE SLOWDOWN GOES ON THE ATOM THAT LEAVES, NOT ON WHAT IS LEFT, and that is
+// the one place this departs from the shatter. `breakSlow` cuts a fragment to a
+// quarter of its speed — a sixteenth of its energy — and the speed band then
+// holds it there for good, since `vTarget` goes down with it. One break, one
+// cooling: fine for a diatomic, which has nothing left to break. Carbonic acid
+// needs four, and measured with the residue slowed too the second never came:
+// both residues sat at 54 px/s with a threshold of 1.08 dose units, a hit
+// between them deposited 0.7 into each, and in 117 s of High nothing else broke.
+// A molecule that can only ever lose its first atom is not a molecule coming
+// apart.
+//
+// So the dissociation's cost is paid by the piece you watch fly off, and the
+// molecule left behind carries on at the speed it was going. The world still
+// cools as it dissociates — every freed atom is slow, and in the end that is
+// all there is — but it cools as the atoms leave rather than all at once.
+function peelPieces(b, slow) {
+  const bd = breakableBond(b);
+  const deg = bondDegrees(b);
+  const leaf = deg[bd[0]] === 1 ? bd[0] : bd[1];
+  const ca = Math.cos(b.angle), sa = Math.sin(b.angle);
+
+  const at = b.atoms[leaf];
+  const rx = at.lx * ca - at.ly * sa, ry = at.lx * sa + at.ly * ca;
+
+  // The atoms that stay, in the body-local coordinates they are already in, and
+  // the bonds between them with their indices renumbered.
+  const keep = b.atoms.map((_, i) => i).filter(i => i !== leaf);
+  const geo  = keep.map(i => ({ el: b.atoms[i].el, lx: b.atoms[i].lx, ly: b.atoms[i].ly }));
+  const remap = new Map(keep.map((i, k) => [i, k]));
+  const bonds = b.bonds.filter(x => x !== bd).map(x =>
+    x[2] ? [remap.get(x[0]), remap.get(x[1]), x[2]] : [remap.get(x[0]), remap.get(x[1])]);
+
+  // Where the residue's centre of mass sits, in the world and in the parent's
+  // own frame — the second is what its inherited velocity is read at.
+  const com = comOf(geo);
+  const crx = com.x * ca - com.y * sa, cry = com.x * sa + com.y * ca;
+  const cx = b.x + crx, cy = b.y + cry;
+
+  // Separation axis: residue centre of mass out to the atom leaving.
+  let ux = (b.x + rx) - cx, uy = (b.y + ry) - cy;
+  const ul = Math.hypot(ux, uy) || 1;
+  ux /= ul; uy /= ul;
+
+  const freeNom = speciesSpeed([at.el]) * slow;
+  const [fvx, fvy] = pointVel(b, rx, ry);
+  const free = withElectrons(makeBody([at.el], b.x + rx, b.y + ry, 0, 0, 0, freeNom));
+  const kick = breakKick * freeNom;
+  free.vx = fvx * slow + kick * ux;
+  free.vy = fvy * slow + kick * uy;
+  free.spin  = 0;                 // a lone atom has nothing to spin about
+  free.flare = b.flare;
+  free.fromBreak = true;
+
+  const resEls = geo.map(g => g.el);
+  const [rvx, rvy] = pointVel(b, crx, cry);
+  const res = withElectrons(assembleBody(geo, bonds, cx, cy, 0, 0,
+                                         exactBreakCost ? 0 : b.spin,
+                                         speciesSpeed(resEls)));
+  // Its atoms are where they were, so its heading is what the parent's was.
+  res.angle = b.angle;
+  const back = kick * free.mass / res.mass;
+  res.vx = rvx - back * ux;
+  res.vy = rvy - back * uy;
+  res.flare = b.flare;
+  res.fromBreak = true;
+
+  return [free, res];
+}
+
 // Replace one body with one free atom per atom it had. Each fragment keeps the
 // velocity that its own atom actually had at that instant — the body's velocity
 // plus the spin's contribution at that offset — so a molecule that was spinning
 // fast throws its halves apart harder, without any of it being invented.
-function breakBody(b) {
-  const idx = world.bodies.indexOf(b);
-  if (idx < 0) return [];
+function shatterPieces(b, slow) {
   const ca = Math.cos(b.angle), sa = Math.sin(b.angle);
-  // With exactBreakCost on, the fragments are not slowed by a tuned factor;
-  // they are slowed by exactly what the bond cost, below.
-  const slow = exactBreakCost ? 1 : breakSlow;
-
   // Outward unit vector per atom, from the molecule's centre: the direction the
   // bond was holding it in against.
-  const made = b.atoms.map((at, k) => {
+  return b.atoms.map((at, k) => {
     const rx = at.lx * ca - at.ly * sa, ry = at.lx * sa + at.ly * ca;
     const [vx, vy] = pointVel(b, rx, ry);
     const len = Math.hypot(rx, ry) || 1;
@@ -3427,6 +3654,17 @@ function breakBody(b) {
     f.fromBreak = true;
     return f;
   });
+}
+
+function breakBody(b) {
+  const idx = world.bodies.indexOf(b);
+  if (idx < 0) return [];
+  // With exactBreakCost on, the fragments are not slowed by a tuned factor;
+  // they are slowed by exactly what the bond cost, below.
+  const slow = exactBreakCost ? 1 : breakSlow;
+  const made = b.bonds.length >= PEEL_MIN_BONDS
+    ? peelPieces(b, slow)
+    : shatterPieces(b, slow);
 
   if (exactBreakCost) {
     payExactBreakCost(b, made);
@@ -3442,7 +3680,10 @@ function breakBody(b) {
   // band's invention and the vibration leak are.
   const keBefore = 0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy)
                  + 0.5 * b.inertia * b.spin * b.spin;
-  const keAfter = made.reduce((a, f) => a + 0.5 * f.mass * (f.vx * f.vx + f.vy * f.vy), 0);
+  // A peeled residue is still a molecule and can still be spinning, so the
+  // rotation counts on both sides of this subtraction.
+  const keAfter = made.reduce((a, f) => a + 0.5 * f.mass * (f.vx * f.vx + f.vy * f.vy)
+                                          + 0.5 * f.inertia * f.spin * f.spin, 0);
   breakCostPaid += Math.max(0, keBefore - keAfter) + b.vib * doseUnit();
 
   world.bodies.splice(idx, 1, ...made);
@@ -3551,7 +3792,11 @@ let joinCount = 0;            // diagnostics: molecules put back together
 let recombLatched = false;    // every original molecule has come apart
 
 function stepRecombination(dt) {
-  if (!recombineOn) return;
+  // Both have to say yes: the dev toggle, and the reaction itself. Carbonic acid
+  // runs the breaking half only, so its atoms go free and stay free — without
+  // this gate the stray H's and O's left over from it would start making water,
+  // which is a reaction nobody asked that world for.
+  if (!recombineOn || !currentReaction().recombine) return;
   if (!recombLatched) {
     if (!world.bodies.length || !world.bodies.every(b => b.els.length === 1)) return;
     recombLatched = true;
@@ -3668,7 +3913,7 @@ function fieldsKJ() {
   let e = 0, stored = 0;
   for (const b of world.bodies) {
     e += b.els.length * SB_FREE_ATOM;
-    for (const [i, k] of b.bonds) e -= bondEnergy(b.atoms[i].el, b.atoms[k].el);
+    for (const bd of b.bonds) e -= bondEnergyOf(b, bd);
     stored += b.vib;
   }
   return e + stored * doseUnit() * kjPerSim();
@@ -3790,26 +4035,34 @@ function drawAtomIcon(c, px, py, el, R) {
   const r = R * e.rScale;
   // A plain ring with a faint wash — the scene's travelling arrow is unreadable
   // at icon size, so the icons just carry the element's colour and relative size.
-  c.fillStyle = rgba(e.rgb, 0.10);
+  // An element with a body is opaque — that is the whole of what makes carbon
+  // read as black — so the wash is solid for it and a tenth for everyone else.
+  c.fillStyle = rgba(e.rgb, e.body ? 1 : 0.10);
   c.beginPath(); c.arc(px, py, r, 0, Math.PI * 2); c.fill();
-  c.strokeStyle = rgba(e.rgb, 0.95);
+  // The ring is drawn in the element's INK, which for carbon is not its colour:
+  // a black ring on a black disc is not a ring.
+  c.strokeStyle = rgba(elemInk(el), 0.95);
   c.lineWidth   = Math.max(1, r * 0.14);
   c.beginPath(); c.arc(px, py, r * 0.95, 0, Math.PI * 2); c.stroke();
 }
 
-// Atom offsets along the molecule axis in units of one H radius, re-centred,
-// plus the half-extents needed to fit it to a canvas.
+// Atom offsets in units of one H radius, re-centred, plus the half-extents
+// needed to fit the molecule to a canvas.
+//
+// Read from `moleculeGeometry`, the same layout the world is built from, so a
+// molecule that is not a row draws as the shape it actually is. Dividing by
+// ATOM_RADIUS is what puts it in H-radius units; for a diatomic that comes back
+// to the same two numbers this used to compute from the bond length directly.
 function moleculeIconLayout(els) {
-  const offs = [0];
-  for (let k = 1; k < els.length; k++) {
-    offs.push(offs[k - 1] + (ELEMENTS[els[k - 1]].rScale + ELEMENTS[els[k]].rScale) * BOND_OVERLAP);
-  }
-  const mid = (offs[0] + offs[offs.length - 1]) / 2;
-  const rel = offs.map(o => o - mid);
+  const geo = moleculeGeometry(els);
+  const xs = geo.map(g => g.lx / ATOM_RADIUS), ys = geo.map(g => g.ly / ATOM_RADIUS);
+  const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+  const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+  const rel = geo.map((g, k) => ({ x: xs[k] - cx, y: ys[k] - cy }));
   return {
     rel,
-    halfW: Math.max(...els.map((e, k) => Math.abs(rel[k]) + ELEMENTS[e].rScale)),
-    halfH: Math.max(...els.map(e => ELEMENTS[e].rScale)),
+    halfW: Math.max(...els.map((e, k) => Math.abs(rel[k].x) + ELEMENTS[e].rScale)),
+    halfH: Math.max(...els.map((e, k) => Math.abs(rel[k].y) + ELEMENTS[e].rScale)),
   };
 }
 
@@ -3824,8 +4077,10 @@ function drawMoleculeIcon(canvas, els, jitter = null, pad = 3) {
   const R  = Math.min((w / 2 - pad) / halfW, (h / 2 - pad) / halfH);
   const cx = w / 2 + (jitter ? jitter.x : 0);
   const cy = h / 2 + (jitter ? jitter.y : 0);
-  // Back-to-front is irrelevant for a flat row, but draw left-to-right for stable overlap
-  els.forEach((el, k) => drawAtomIcon(c, cx + rel[k] * R, cy, el, R));
+  // Layer order here too, so carbon lands on top of the oxygens around it
+  // rather than under them — the same reason the scene sorts.
+  byLayer(els.map((el, k) => ({ el, k })))
+    .forEach(p => drawAtomIcon(c, cx + rel[p.k].x * R, cy + rel[p.k].y * R, p.el, R));
 }
 
 
@@ -3849,7 +4104,12 @@ function toolbarIconLoop(now) {
     for (const ic of ICON_CANVASES) {
       ic.jitter.x = (ic.jitter.x + (Math.random() - 0.5) * ic.wobble) * 0.78;
       ic.jitter.y = (ic.jitter.y + (Math.random() - 0.5) * ic.wobble) * 0.78;
-      drawMoleculeIcon(document.getElementById(ic.id), SPECIES.H2.els, ic.jitter, ic.pad);
+      // The NEW button shows what the picker will spawn; the view buttons are
+      // about the view, not the species, so they keep the H2 they always had.
+      const els = ic.id === 'newBtnMolecule'
+        ? SPECIES[currentReaction().icon].els
+        : SPECIES.H2.els;
+      drawMoleculeIcon(document.getElementById(ic.id), els, ic.jitter, ic.pad);
     }
   }
   requestAnimationFrame(toolbarIconLoop);
@@ -3888,11 +4148,20 @@ function drawWorld() {
     drawSpaceFilling();   // all bodies at once: the layer is shared
   } else {
     // Shells. Bands first, under everything, then the electrons as dots on them.
-    for (const b of world.bodies) for (const p of bodyAtoms(b)) drawAtomShells(ctx, p);
-    for (const b of world.bodies) for (const p of bodyAtoms(b)) drawInnerElectrons(ctx, p);
+    //
+    // Every atom in the world in ONE layer-sorted list, not per body: carbon has
+    // to come out above the oxygens it is surrounded by, and in a world of six
+    // molecules those oxygens can belong to a different body than the carbon
+    // does. `byLayer` is stable, so every atom that is not carbon stays in the
+    // order it was already drawn in.
+    const P = byLayer(world.bodies.flatMap(b => bodyAtoms(b)));
+    for (const p of P) {
+      drawAtomBody(ctx, p.x, p.y, p.el, valenceRadius(p.el));
+      drawAtomShells(ctx, p);
+    }
+    for (const p of P) drawInnerElectrons(ctx, p);
     for (const b of world.bodies) drawElectronsAsDots(b);
-    for (const b of world.bodies) for (const p of bodyAtoms(b))
-      drawNucleons(ctx, p.x, p.y, p.el, shellWobble, WORLD_NUCLEON_R);
+    for (const p of P) drawNucleons(ctx, p.x, p.y, p.el, shellWobble, WORLD_NUCLEON_R);
   }
 
   ctx.restore();
@@ -4463,6 +4732,54 @@ document.getElementById('newBtn').addEventListener('click', () => {
   logAction('Respawned molecules');
 });
 
+// ── The reaction picker ──────────────────────────────────────────────────────
+// Choosing a reaction writes its whole composition and respawns, so the world
+// on screen always matches what the picker says. The dev panel's per-species
+// dials are then put back in step with it, since they are a view of the same
+// numbers and a stale slider is a lie about what the next NEW will spawn.
+function fillReactionPick() {
+  const sel = document.getElementById('reactionPick');
+  if (!sel) return;
+  sel.innerHTML = '';
+  for (const [id, r] of Object.entries(REACTIONS)) {
+    const o = document.createElement('option');
+    o.value = id; o.textContent = r.label;
+    sel.appendChild(o);
+  }
+  sel.value = reaction;
+}
+
+// The dev panel's composition dials, put back in step with `composition`. The
+// panel builds itself in an IIFE and may not exist at all, so this reaches for
+// the elements by id and does nothing if they are not there.
+function syncCompositionSliders() {
+  for (const key of Object.keys(composition)) {
+    const sl  = document.getElementById('dev' + key);
+    const val = document.getElementById('dev' + key + 'Val');
+    if (sl)  sl.value = composition[key];
+    if (val) val.textContent = String(composition[key]);
+  }
+}
+
+function setReaction(id, respawn = true) {
+  if (!REACTIONS[id]) return;
+  reaction = id;
+  Object.assign(composition, REACTIONS[id].composition);
+  const sel = document.getElementById('reactionPick');
+  if (sel) sel.value = id;
+  const lbl = document.getElementById('newBtnLabel');
+  if (lbl) lbl.textContent = formulaOf(SPECIES[REACTIONS[id].icon].els);
+  syncCompositionSliders();
+  if (respawn) spawnWorld();
+  logAction('Reaction: ' + id);
+}
+
+fillReactionPick();
+setReaction(reaction, false);     // label and dials in step with the default
+document.getElementById('reactionPick').addEventListener('change', function () {
+  setReaction(this.value);
+});
+
 
 document.getElementById('showFields').addEventListener('change', function () {
   logAction('Energy in fields ' + (this.checked ? 'on' : 'off'));
@@ -4572,6 +4889,8 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     row('devH2', 'H\u2082 molecules', 0, COMPOSITION_MAX, 1, COMPOSITION_DEFAULT.H2, '#b9c0cd') +
     row('devO2', 'O\u2082 molecules', 0, COMPOSITION_MAX, 1, COMPOSITION_DEFAULT.O2, '#e8382f') +
     row('devHe', 'He atoms',       0, COMPOSITION_MAX, 1, COMPOSITION_DEFAULT.He, '#7fdbe8') +
+    row('devH2CO3', 'H₂CO₃ molecules', 0, COMPOSITION_MAX, 1,
+        COMPOSITION_DEFAULT.H2CO3, '#c9cedb') +
     row('devConv', 'Collision \u2192 bond', 0, 0.9, 0.05, fieldConvert, '#c46cff') +
     '<div id="devConvNote" style="opacity:0.45;font-size:10px;"></div>' +
     row('devDrag', 'Loaded bond slows it', 0, 0.9, 0.05, vibDrag, '#c46cff') +
@@ -4728,6 +5047,7 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   bind('devH2',    v => composition.H2 = v, true);
   bind('devO2',    v => composition.O2 = v, true);
   bind('devHe',    v => composition.He = v, true);
+  bind('devH2CO3', v => composition.H2CO3 = v, true);
   bind('devConv', v => {
     fieldConvert = v;
     const n = panel.querySelector('#devConvNote');

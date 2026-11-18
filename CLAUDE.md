@@ -427,14 +427,83 @@ on/off switch are all dev controls.
 ## What is in the world
 
 ```javascript
-const SPECIES = { H2: { els: ['H','H'] }, O2: { els: ['O','O'] }, He: { els: ['He'] } };
-const composition = { H2: 4, O2: 2, He: 0 };    // 0–6 of each, dev sliders
-const ATOMIC_MASS = { H: 1, O: 16, He: 4 };
+const SPECIES = { H2: { els: ['H','H'] }, O2: { els: ['O','O'] }, He: { els: ['He'] },
+                  H2CO3: { els: ['C','O','O','H','O','H'] } };
+const composition = { H2: 4, O2: 2, He: 0, H2CO3: 0 };   // 0–6 of each, dev sliders
+const ATOMIC_MASS = { H: 1, O: 16, He: 4, C: 12 };
 ```
 
 `spawnWorld()` builds a queue from `composition`, shuffles it so a crowded world
 does not cram one species into the gaps the other left, then places each at a
 random position, heading and spin — retrying up to 400 times for a clear spot.
+
+### The reaction picker
+
+The composition is a set of dev sliders, which is the right tool for tuning and
+the wrong one for teaching: a reaction is a set of molecules that belong
+together, and choosing one should not mean setting three numbers in the right
+order. `REACTIONS` is that choice, and the **picker in the red MOLECULES box**
+is where it is made.
+
+```javascript
+const REACTIONS = {
+  water:    { composition: { H2: 4, O2: 2, He: 0, H2CO3: 0 }, icon: 'H2',    recombine: true  },
+  carbonic: { composition: { H2: 0, O2: 0, He: 0, H2CO3: 2 }, icon: 'H2CO3', recombine: false },
+};
+```
+
+`setReaction` writes the whole composition, respawns, and puts the dev sliders
+back in step (`syncCompositionSliders`) — a stale slider is a lie about what the
+next NEW will spawn. The NEW button under the picker draws the reaction's own
+molecule and carries its formula, so the two read as one control: choose the
+reaction, press NEW. Both stretch to the button's width, which the 96 px
+molecule canvas fixes, so changing the selection cannot resize the group or
+shift the temperature buttons beside it. Measured: the pink box is 352×138 and
+`tempGroup` starts at x=319 on **both** reactions.
+
+**`recombine` is part of the reaction, not a global.** Water's two halves —
+breaking, then coming back together — are both the point there. Carbonic acid is
+the breaking half only: its atoms go free and stay free. Without that flag the
+stray H's and O's it leaves behind would start making water, a reaction nobody
+asked that world for. `stepRecombination` needs both the dev toggle and the
+reaction's own flag. Verified: 150 s of carbonic acid at High ends with
+`joins=0`, `recombLatched=false` and twelve free atoms — 2 C, 4 H, 6 O.
+
+### Carbonic acid in the Reactions tab
+
+Two assumptions held while every species here had at most two atoms: **atoms lie
+in a row**, and **atom k is bonded to atom k-1**. Carbonic acid breaks both. It
+is a tree, not a chain, and it holds a C–O and a C=O at once, which no table
+keyed by the element pair can tell apart (see "A bond TYPE, not an element
+pair"). So:
+
+```javascript
+const MOLECULE_SHAPES = {
+  COOHOH: { geometry: () => sbCarbonicAcid(),
+            bonds: [[0,1,2],[0,2,1],[2,3,1],[0,4,1],[4,5,1]] },
+};
+```
+
+- A species may bring **its own geometry**. The geometry is `sbCarbonicAcid`,
+  the same function the Sandbox builds its molecule from: one Lewis structure,
+  two tabs reading it. Measured in the world: C=O 50.0, C–O 58.1/58.1, O–H
+  49.0/49.0; O=C–O 125.5 twice, (HO)–C–(OH) 109.0, H–O–C 106.8 twice.
+- A bond may carry **its own order** as a third entry. Everything that reads a
+  bond goes through `bondOrderOf` / `bondEnergyOf`, which fall back to the
+  element-pair tables when no order is given, so H₂, O₂ and water are
+  pixel-for-pixel what they were. Electrons measured: C=O four, every single
+  two; lone electrons C 0, each O 4, each H 0. Fields reads **559 kJ/mol per
+  molecule**, the same figure the Sandbox gives.
+- `moleculeIconLayout` now reads `moleculeGeometry` instead of computing a row
+  of bond lengths, so the NEW button draws the shape the molecule actually is.
+  For a diatomic it comes back to the same two numbers it always produced.
+- `drawWorld` draws every atom in the world in **one layer-sorted list**, not
+  per body, and gives each one `drawAtomBody` first. Carbon has to come out
+  above the oxygens around it, and in a six-molecule world those oxygens can
+  belong to a different body than the carbon does. `byLayer` is stable, so every
+  atom that is not carbon stays in the order it was drawn in before. Measured on
+  a carbonic acid in the scene: the carbon disc reads luminance 14–19 all the way
+  round against a background of 21 — black, the same as in the Sandbox.
 
 ### Spawn speed spread
 
@@ -687,6 +756,107 @@ way the old measure worked. Energy goes as speed squared, so High is ~9× the
 dose per hit and ~3× as many hits: **~27× the pumping rate for 3× the speed**.
 That is the entire separation between Low and High, and it is why no
 `tempLevel` test appears anywhere in the mechanism.
+
+#### The bond that would actually let go
+
+With two atoms there was one candidate and this question did not exist. With six
+there are five bonds, and the weakest is **not necessarily one that breaking
+would take an atom off**: carbonic acid's weakest is a C–O at 358, but that
+oxygen is carrying a hydrogen, so pulling it would throw off an OH, not an atom.
+
+`breakableBond(b)` is the weakest bond with a **leaf** on one end — an atom in
+exactly one bond. For carbonic acid that is an O–H at 463. Every number the
+break uses comes from that one bond: `bondEnergyFactor` (and so the threshold),
+`bondLevels`, and what the dissociation costs. A molecule here is a tree, and a
+tree with any bonds at all has a leaf, so it is never null.
+
+`bondLevels` taking the breaking bond's order rather than the molecule's biggest
+matters for the same reason: carbonic acid holds a C=O, but the bond under load
+is the O–H that is going to go, and a single bond has one level wherever it sits.
+Measured on a fresh H₂CO₃: breakable bond `[2,3]`, threshold 1.395
+(= 1.5 × 463/498), one level.
+
+#### Shatter or peel
+
+| bonds | what happens |
+|---|---|
+| 1–2 | **shatter** — every atom goes free at once |
+| 3+ | **peel** — one bond lets go, one atom leaves, the rest stays whole |
+
+The shatter is what breaking has always done. It is exactly right for a
+diatomic, which has nothing else one bond could do, and **water depends on it**:
+the recombination gate waits for every body in the world to be a single atom
+before it opens, so peeling a water into H + OH would shut that gate forever.
+That is why the line is drawn at the bond count rather than at the reaction —
+nothing in the water world has three bonds, so nothing there peels.
+
+Six atoms vaporising on one knock says the wrong thing. A collision does not
+undo a molecule, it takes a piece off it, and the piece coming off one at a time
+is the thing worth watching. Measured, carbonic acid goes:
+
+```
+H₂CO₃ → H + CHO₃ → O + CHO₂ → H + CO₂ → C + O + O
+```
+
+— the O–H at 463 first, then the C–O at 358 once that oxygen is a leaf, then the
+other O–H, and the last three together when only two bonds are left. Still every
+atom free in the end.
+
+The residue is **not rebuilt from any table**; there is no table it could come
+from. `assembleBody` takes an explicit geometry and bond list, and the residue
+is assembled from the coordinates its atoms already had, with the surviving
+bonds renumbered and their orders carried over. Measured at every one of eight
+breaks: **zero atoms move** at the instant the bond goes, except the one that
+left.
+
+#### The slowdown goes on the atom that leaves
+
+This is the one place the peel departs from the shatter, and it was forced by
+measurement. `breakSlow` cuts a fragment to a quarter of its speed — a
+sixteenth of its energy — and the speed band then holds it there for good, since
+`vTarget` goes down with it. One break, one cooling: fine for a diatomic, which
+has nothing left to break.
+
+Carbonic acid needs four. With the residue slowed too, the second break **never
+came**: both residues sat at 54 px/s with a threshold of 1.08 dose units, a hit
+between them deposited 0.7 into each, and in 117 s of High nothing else broke.
+A molecule that can only ever lose its first atom is not a molecule coming apart.
+
+So the dissociation's cost is paid by the piece you watch fly off, and the
+molecule left behind carries on at the speed it was going. The world still cools
+as it dissociates — every freed atom is slow, and in the end that is all there is
+— but it cools as the atoms leave rather than all at once. The kick is
+momentum-neutral here, unlike the shatter's: with two pieces there is a right
+answer, and it is the light one that visibly flies off while the heavy residue
+barely recoils.
+
+With that, the journey measured over three runs, from the Low default:
+
+| | run 0 | run 1 | run 2 |
+|---|---|---|---|
+| 20 s at **Low** | 0 breaks | 0 breaks | 0 breaks |
+| first atom off at **High** | 2.9 s | 10.5 s | 1.9 s |
+| all 12 atoms free | 12.5 s | 24.4 s | 9.8 s |
+
+Low holds for 180 s with nothing breaking at all.
+
+#### What the bars cannot pay for
+
+A carbonic acid world is the first one where **full dissociation costs more than
+the world was anchored with**, and it is worth knowing before the bar chart is
+read in anger. Twelve free atoms are 6,000 kJ/mol of fields; two H₂CO₃ start at
+1,118, so pulling them apart costs 4,882. At High the world spawns with about
+5,203 kJ/mol of motion — a margin of only 22%, because equipartition gives a
+six-atom molecule the same kinetic energy as an H₂ while it has five bonds to
+pay for. The spawn bell can push a particular world under that line.
+
+The total itself stays exact — measured drift **0** across a full breakup — but
+`motionKJ` is `max(0, total − fields)`, so a world that runs out reads zero
+motion while its atoms are still visibly moving. Measured: at High it happened
+in 1 run of 3, and only in the last moment of the run; at Med the breakup stalls
+part-way (4–6 of 8 breaks in 120 s), which is arguably the right answer — a gas
+that cold should not come apart — and motion can bottom out there too. Fixing it
+properly means a reverse reaction, not a bigger number.
 
 #### Two view modes
 
