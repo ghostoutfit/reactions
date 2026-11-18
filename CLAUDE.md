@@ -478,12 +478,29 @@ from how hot it is. `launchSpeed()` returns the constant `LAUNCH_SPEED` = 360,
 what the dial shipped at. The buttons sit where the dial was, three of equal
 width so switching never resizes the group or shifts the counters beneath it.
 
-**The sim opens at High.** At Low nothing breaks at all — that is the measured,
-deliberate design of the threshold, not a shortfall — so a world that opened at
-Low opened on the one setting where the main event never happens. Verified on a
-cold load: `tempCurrent` 3, only the HIGH button active, H₂ spawning at 1126
-against Low's ~375. Switching down and back up still ramps (836 → 209 → climbing
-again), since `tempCurrent` chases `tempTarget` rather than jumping.
+**The sim opens at Low, with strong water on.** At Low nothing breaks at all —
+that is the measured, deliberate design of the threshold, not a shortfall — so
+the world opens **calm**, and the first thing to do is turn the heat up and watch
+bonds start to go. The breaking is something the student *causes* rather than
+arrives into.
+
+That reverses an earlier default. The sim used to open at High, on the argument
+that Low is the one setting where the main event never happens, so opening cold
+opened on nothing. The opposite argument won: opening mid-event means the
+student never sees the before. Low is the before, and HIGH is the move. Keep
+both halves together — Low alone, with water still breakable, is a world where
+nothing at all happens; **strong water on** is what makes the heat-up end in a
+product that stays, so the run reads one way: cold → hot → water.
+
+Verified on a cold load: `tempLevel` `'low'`, `tempTarget` and `tempCurrent` 1,
+only the LOW button active, `strongWater` true with the STRONG WATER button
+carrying `active`, H₂ spawning at 90–435. Ramping to High from that default
+reaches `tempCurrent` exactly 3.000 with every speed scaled 3.000×, since
+`tempCurrent` chases `tempTarget` rather than jumping. The defaults live in
+three places that must agree — the `tempLevel`/`tempTarget`/`tempCurrent`
+declarations, `let strongWater`, and the `active` class on the LOW and STRONG
+WATER buttons in the markup, since neither control reads its state back out of
+the DOM on load.
 
 A Low/High toggle on the toolbar. High runs at `TEMP_HIGH` = 3x the speed, which
 is **9x the kinetic energy** — the energy readout says so, and the graph rescales
@@ -2556,7 +2573,8 @@ past 20 s.
 
 ### Strong water
 
-A toggle in the Reactions tab's pink box. With it on, a water molecule is the
+A toggle in the Reactions tab's pink box, **on by default** (see Temperature for
+why it ships on alongside Low). With it on, a water molecule is the
 end of the line: **it cannot break, and it cannot take energy into its fields
 either**, so a hit on one is perfectly elastic and bounces away with everything
 it arrived with. Same button shell as the temp buttons, so nothing in that box

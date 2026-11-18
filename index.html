@@ -789,16 +789,16 @@
         <div id="tempGroup" style="display:flex;flex-direction:column;gap:4px;align-items:stretch;">
           <span style="font-size:9px;letter-spacing:0.07em;text-transform:uppercase;opacity:0.5;text-align:center;">Temp</span>
           <div style="display:flex;gap:4px;">
-            <button class="awheel-item temp-btn" data-temp="low" style="flex:1 1 0;min-width:0;">LOW</button>
+            <button class="awheel-item temp-btn active" data-temp="low" style="flex:1 1 0;min-width:0;">LOW</button>
             <button class="awheel-item temp-btn" data-temp="med" style="flex:1 1 0;min-width:0;">MED</button>
-            <button class="awheel-item temp-btn active" data-temp="high" style="flex:1 1 0;min-width:0;">HIGH</button>
+            <button class="awheel-item temp-btn" data-temp="high" style="flex:1 1 0;min-width:0;">HIGH</button>
           </div>
         </div>
         <!-- Strong water: once a water has formed it is inert. It cannot break
              and it cannot take energy into its fields, so every hit on it is
              perfectly elastic. One button, same shell as the temp buttons, so
              nothing in this box shifts when it turns on. -->
-        <button id="strongWaterBtn" class="awheel-item" style="align-self:stretch;">STRONG WATER</button>
+        <button id="strongWaterBtn" class="awheel-item active" style="align-self:stretch;">STRONG WATER</button>
         <div id="speciesCounters" style="display:flex;gap:5px;justify-content:center;">
           <div style="flex:1;background:rgba(255,255,255,0.05);border-radius:6px;padding:3px 5px;text-align:center;font-size:11px;color:var(--text-dim);line-height:1.5;white-space:nowrap;">
             <span id="sp1Count" style="font-size:9px;letter-spacing:0.05em;opacity:0.6;">&times;2&nbsp;</span><span id="sp1Formula" style="color:var(--accent1);font-weight:700">H&#8322;</span>
@@ -2665,13 +2665,14 @@ const TEMP_MED  = 2;        // Medium between them. Energy goes as speed squared
                             // so Low/Med/High is 1x / 4x / 9x the kinetic energy.
 const TEMP_LEVELS = { low: 1, med: TEMP_MED, high: TEMP_HIGH };
 const TEMP_TAU  = 0.26;     // seconds — exponential approach, quick then settling
-// Starts HIGH. The sim's subject is what collisions do to bonds, and at Low
-// nothing breaks at all — that is the measured, deliberate design of the
-// threshold, not a shortfall — so a world that opens at Low opens on the one
-// setting where the main event never happens.
-let tempLevel   = 'high';
-let tempTarget  = TEMP_HIGH;
-let tempCurrent = TEMP_HIGH;
+// Starts LOW, with strong water on. At Low nothing breaks — that is the
+// measured, deliberate design of the threshold, not a shortfall — so the world
+// opens calm, and the first thing you do is turn the heat up and watch bonds
+// start to go. The old default was HIGH, which opened mid-event; opening cold
+// means the breaking is something the student causes rather than arrives into.
+let tempLevel   = 'low';
+let tempTarget  = TEMP_LEVELS.low;
+let tempCurrent = TEMP_LEVELS.low;
 
 function setTemperature(level) {
   tempLevel  = level;
@@ -3279,7 +3280,9 @@ function bondLevels(b) {
 // in exactly the way a free atom already is: nobody there to take it, so the
 // restitution stays at 1 and the energy never leaves the motion in the first
 // place. Nothing is deleted and the bar chart's total still holds.
-let strongWater = false;
+// On by default: a water that has formed stays formed, which is the reading the
+// Reactions tab wants — the reaction runs one way and the product accumulates.
+let strongWater = true;
 let strongFlareSec = 0.5;          // how long a strong water may stay pink
 function isWater(b) {
   if (b.els.length !== 3) return false;
