@@ -2638,6 +2638,13 @@ function rebuildWaterPivots() {
     b.x += dx * c - dy * s;
     b.y += dx * s + dy * c;
     b.atoms.forEach((at, i) => { at.lx = geo[i].lx - wp.x; at.ly = geo[i].ly - wp.y; });
+    // A water caught mid-slide keeps sliding, towards the shape the new pivot
+    // gives it — otherwise moving the slider would freeze its atoms wherever
+    // the rebuild happened to put them.
+    if (b.form > 0) {
+      b.atoms.forEach(at => { at.ilx = at.lx; at.ily = at.ly; });
+      applyForm(b);
+    }
     b.inertia = b.atoms.reduce((a, at) => a + at.m * (at.lx * at.lx + at.ly * at.ly), 0) || 1;
     b.radius = Math.max(...b.atoms.map(at => Math.hypot(at.lx, at.ly) + at.r));
   }
@@ -2871,6 +2878,7 @@ function spawnWorld() {
   spinCapHits = 0; floorTopUps = 0; energyCreated = 0; fieldsReturned = 0;
   breakCount = 0; vibPeak = 0; breakCostPaid = 0;
   joinCount = 0; recombLatched = false;
+  pullEnter.clear();            // no pair from the old world is still in range
   resetEnergyTrace();
   updateSpeciesCounters();
 }
@@ -2922,12 +2930,29 @@ function bandTarget(b) {
     : b.vTarget;
 }
 
+// Rotate towards an absolute angle by at most `max` radians, the short way round.
+function turnToward(b, target, max) {
+  let d = target - b.angle;
+  d = Math.atan2(Math.sin(d), Math.cos(d));
+  b.angle += Math.abs(d) <= max ? d : Math.sign(d) * max;
+}
+
 function stepWorld(dt) {
   // Move, spin, wrap
   for (const b of world.bodies) {
     b.x += b.vx * dt;
     b.y += b.vy * dt;
-    b.angle += b.spin * dt;
+    // While the recombination pull is drawing a molecule towards a partner, its
+    // drawn rotation is spent turning its open slot to face it instead of
+    // tumbling. `spin` is left exactly as it was, so this neither adds nor
+    // removes energy and a pair that drifts apart picks its tumble back up.
+    if (b.alignTo != null) turnToward(b, b.alignTo, recombAlign * dt);
+    else b.angle += b.spin * dt;
+    // Atoms closing the last of the way into a bond that has just formed.
+    if (b.form > 0) {
+      b.form = Math.max(0, b.form - dt / Math.max(0.01, b.formSec));
+      applyForm(b);
+    }
     collideWalls(b);
     // Strong water's flash is a FLASH. An ordinary bond's flare fades
     // exponentially, which is right when the colour is also reporting the
@@ -3718,6 +3743,43 @@ let recombRange   = 1.6;      // x contact width: where the pull starts
 let recombPull    = 420;      // force, px/s^2 x mass=1; an H feels it 16x an O
 const RECOMB_SNAP = 1.03;     // x contact width: close enough to stick
 
+// HOW THE JOIN LOOKS, which is a separate question from when it happens.
+//
+// Capture is on contact and the bond is shorter than contact — an O and an H
+// touch at 68 px and bond at 49 — so the atoms have ~19 px to travel at the
+// instant they stick. Teleporting them there is the jump. `joinFormSec` is how
+// long they take to slide in instead.
+//
+// `recombAlign` turns a molecule that already has a bond so its open slot faces
+// whatever is coming: the little rotation that makes the collision land where
+// the geometry wants it. It is KINEMATIC — the body's `spin` is untouched and
+// only its drawn rotation is redirected while the pull is acting, so a pair that
+// drifts apart again resumes the tumble it had and nothing has leaked. Treat it
+// the same way as the water pivot: the mechanics are nudged so the picture reads.
+//
+// `joinVibCap` is how much of the released bond energy may be parked in the new
+// bond as vibration, as a fraction of what would break it. Under 1 by a margin:
+// a freshly made OH that is holding its whole bond energy is one ordinary
+// collision from coming apart again, and the reaction would never reach water.
+let joinFormSec = 0.18;       // seconds for the atoms to slide into the shape
+// 32 rad/s is measured, not guessed. The angle between an OH's open slot and
+// the hydrogen arriving at it, over ten 90 s runs — 40 water joins — each:
+//     off   35.4 deg mean, 80.7 worst (6 runs)
+//     14     8.4 / 38.2 (6 runs)       20   5.6 / 44.7
+//     32     3.7 /  9.2  <- this       40   5.7 / 72.7
+//     60     3.3 /  7.2
+// The mean is flat for anything past about 20 and the worst case is noise: it
+// is the occasional hydrogen that enters the range already touching, which has
+// no time to be turned towards whatever the rate. So the rate is chosen on how
+// it LOOKS instead — at 32 a full 104 degree turn takes 57 ms, three and a half
+// frames, which reads as a molecule turning. At 60 it is under two frames and
+// the turn is no more visible than the jump it replaced.
+//
+// Every one of those 46 runs still ended with four waters, so none of this
+// costs the reaction anything.
+let recombAlign = 32;         // rad/s a molecule may turn to present its slot
+let joinVibCap  = 0.4;        // x break threshold: the glow a new bond may hold
+
 // Which atom of a body is the one that would do the bonding: the oxygen if it
 // has one (it has a slot free, being in an OH), otherwise its only atom.
 function recombSite(b) {
@@ -3741,6 +3803,173 @@ function siteWorldPos(b, i) {
 function bodyKE(b) {
   return 0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy)
        + 0.5 * b.inertia * b.spin * b.spin;
+}
+
+// Where a body's free bonding slot should point, in its OWN frame: the direction
+// the incoming atom has to arrive from for the product's shape to fit without
+// anything else having to move. An OH's oxygen already holds one hydrogen, so
+// the slot is water's bond angle round from it — either way round, and the
+// caller takes whichever is the shorter turn.
+//
+// A lone atom gets nothing: an H + O makes a straight molecule, so every
+// orientation fits it equally and there is nothing to turn.
+function slotLocalDirs(b) {
+  if (b.atoms.length < 2) return null;
+  const s = recombSite(b);
+  let ax = 0, ay = 0;
+  for (const [i, k] of b.bonds) {
+    const other = i === s ? k : k === s ? i : -1;
+    if (other < 0) continue;
+    ax += b.atoms[other].lx - b.atoms[s].lx;
+    ay += b.atoms[other].ly - b.atoms[s].ly;
+  }
+  if (!ax && !ay) return null;
+  const base = Math.atan2(ay, ax);
+  return [base + H2O_ANGLE, base - H2O_ANGLE];
+}
+
+// The body angle that would have that slot facing `worldDir`, picking the one of
+// the two that is the shorter turn from where the body is now.
+function alignTarget(b, worldDir) {
+  const dirs = slotLocalDirs(b);
+  if (!dirs) return null;
+  let best = null, bestD = Infinity;
+  for (const ld of dirs) {
+    const th = worldDir - ld;
+    const d = Math.abs(Math.atan2(Math.sin(th - b.angle), Math.cos(th - b.angle)));
+    if (d < bestD) { bestD = d; best = th; }
+  }
+  return best;
+}
+
+// WHERE THE NEW MOLECULE GOES: the placement that moves the atoms least.
+//
+// The angle used to come from the line between the two bonding sites, which is
+// right for nothing. For an H + O the product's local O->H runs along +x, so
+// whenever the H happened to come first in `world.bodies` the molecule was built
+// with its hydrogen on the FAR side of the oxygen — a 180 degree flip, decided
+// by array order. For a water it cannot be right at all: the bisector is +x and
+// both hydrogens sit H2O_ANGLE/2 off it, so pointing the bisector at the
+// incoming H threw that H 52 degrees from where it was and swung the OH's
+// existing one 104 degrees across the molecule. That is the rotation that made
+// no sense — it was not a rotation of anything, just a new heading.
+//
+// Solve for it instead. Given the product's local atom coordinates p, the world
+// positions q those atoms are actually at, and weights w, the rotation and
+// offset that minimise the weighted sum of squared movement are exact and
+// closed form — the 2D case of Kabsch, two sums and an atan2:
+//
+//     theta = atan2( SUM w (px*qy - py*qx), SUM w (px*qx + py*qy) )
+//
+// once both sets are centred on their weighted means, and the offset is then
+// the difference between the two centres. Weighting by MASS is what keeps the
+// oxygen still and moves the hydrogens: it is sixteen times harder to shift.
+function fitPlacement(pts) {
+  let W = 0, pcx = 0, pcy = 0, qcx = 0, qcy = 0;
+  for (const t of pts) {
+    W += t.w;
+    pcx += t.w * t.px; pcy += t.w * t.py;
+    qcx += t.w * t.qx; qcy += t.w * t.qy;
+  }
+  W = W || 1;
+  pcx /= W; pcy /= W; qcx /= W; qcy /= W;
+  let sin = 0, cos = 0;
+  for (const t of pts) {
+    const px = t.px - pcx, py = t.py - pcy;
+    const qx = t.qx - qcx, qy = t.qy - qcy;
+    sin += t.w * (px * qy - py * qx);
+    cos += t.w * (px * qx + py * qy);
+  }
+  const angle = (sin === 0 && cos === 0) ? 0 : Math.atan2(sin, cos);
+  const c = Math.cos(angle), s = Math.sin(angle);
+  return { angle, x: qcx - (pcx * c - pcy * s), y: qcy - (pcx * s + pcy * c) };
+}
+
+// Every way of matching the product's atoms to the ones actually there. For
+// H + O there is one; for OH + H there are two, because either hydrogen could
+// take either of water's two slots and those are genuinely different placements
+// — the molecule is bent. Both get fitted and the closer one wins, which is what
+// leaves the OH's own hydrogen about where it already was.
+function joinAssignments(els, src) {
+  const out = [];
+  const used = src.map(() => false);
+  const pick = [];
+  (function walk(i) {
+    if (out.length >= 8) return;          // nothing here needs more than two
+    if (i === els.length) { out.push(pick.slice()); return; }
+    for (let k = 0; k < src.length; k++) {
+      if (used[k] || src[k].el !== els[i]) continue;
+      used[k] = true; pick.push(src[k]);
+      walk(i + 1);
+      pick.pop(); used[k] = false;
+    }
+  })(0);
+  return out;
+}
+
+function bestPlacement(nb, src) {
+  let best = null;
+  for (const asg of joinAssignments(nb.els, src)) {
+    const pts = nb.atoms.map((at, i) => ({
+      w: at.m, px: at.lx, py: at.ly, qx: asg[i].x, qy: asg[i].y,
+    }));
+    const p = fitPlacement(pts);
+    const c = Math.cos(p.angle), s = Math.sin(p.angle);
+    let res = 0;
+    for (const t of pts) {
+      const dx = p.x + t.px * c - t.py * s - t.qx;
+      const dy = p.y + t.px * s + t.py * c - t.qy;
+      res += t.w * (dx * dx + dy * dy);
+    }
+    if (!best || res < best.res) best = { res, p, q: pts.map(t => ({ x: t.qx, y: t.qy })) };
+  }
+  return best;
+}
+
+// THE SLIDE IN. Best fit or not, the atoms still have to close from contact to
+// bond length, and that distance is the jump. So the body is born holding each
+// atom's leftover gap as an offset in its own frame, and the offsets decay to
+// zero over `joinFormSec`.
+//
+// They are applied by MUTATING the atoms' local coordinates, which is the whole
+// trick: the bond segments, the valence shells, the collision radius and the
+// drawing all read those coordinates, so every one of them follows the closing
+// bond without knowing anything about it. Smoothstep rather than linear, so the
+// atoms arrive with no velocity rather than stopping dead.
+//
+// `inertia` is left at the finished molecule's value for the ~0.2 s this lasts.
+// It is wrong by about a third at the first frame and exactly right by the last,
+// and correcting it would make the spin the join just handed over wrong instead.
+function applyForm(b) {
+  const t = b.form, e = t * t * (3 - 2 * t);
+  for (const at of b.atoms) {
+    at.lx = at.ilx + e * at.fx;
+    at.ly = at.ily + e * at.fy;
+  }
+  b.radius = Math.max(...b.atoms.map(at => Math.hypot(at.lx, at.ly) + at.r));
+}
+
+function startForm(b, q) {
+  const c = Math.cos(b.angle), s = Math.sin(b.angle);
+  let gap = 0;
+  b.atoms.forEach((at, i) => {
+    at.ilx = at.lx; at.ily = at.ly;
+    const dx = q[i].x - (b.x + at.lx * c - at.ly * s);
+    const dy = q[i].y - (b.y + at.lx * s + at.ly * c);
+    at.fx =  dx * c + dy * s;             // the gap, rotated into the body frame
+    at.fy = -dx * s + dy * c;
+    gap = Math.max(gap, Math.hypot(dx, dy));
+  });
+  // Already in place, or the animation is switched off: no need to carry any of
+  // this, and `form` undefined is how every other body says it is not forming.
+  if (gap < 0.5 || !(joinFormSec > 0)) {
+    for (const at of b.atoms) { at.fx = 0; at.fy = 0; }
+    b.form = 0;
+    return;
+  }
+  b.form = 1;
+  b.formSec = joinFormSec;
+  applyForm(b);
 }
 
 // THE PULL IS HANDED OVER AS SPIN.
@@ -3768,18 +3997,85 @@ function joinBodies(a, b, els) {
 
   const nb = withElectrons(makeBody(els, cx, cy, 0, 0, 0, speciesSpeed(els)));
   nb.vx = cvx; nb.vy = cvy;
-  // Lie the molecule along the line the two came together on, so it appears
-  // where they are rather than snapping to some arbitrary heading.
-  const [ax, ay] = siteWorldPos(a, recombSite(a));
-  const [bx, by] = siteWorldPos(b, recombSite(b));
-  nb.angle = Math.atan2(by - ay, bx - ax);
+
+  // Put it where its atoms already are, and let the rest of the way be animated.
+  const src = [];
+  for (const s of [a, b]) {
+    const sc = Math.cos(s.angle), ss = Math.sin(s.angle);
+    for (const at of s.atoms) {
+      src.push({ el: at.el,
+                 x: s.x + at.lx * sc - at.ly * ss,
+                 y: s.y + at.lx * ss + at.ly * sc });
+    }
+  }
+  const fit = bestPlacement(nb, src);
+  if (fit) {
+    nb.angle = fit.p.angle;
+    nb.x = fit.p.x;
+    nb.y = fit.p.y;
+    startForm(nb, fit.q);
+  }
 
   const released = bondEnergy(a.atoms[recombSite(a)].el, b.atoms[recombSite(b)].el)
                  / kjPerSim();
   const keCom = 0.5 * M * (cvx * cvx + cvy * cvy);
-  const spinE = Math.max(0, bodyKE(a) + bodyKE(b) + released - keCom
+  // A bond that is already there keeps what it was holding. Nothing used to put
+  // vibration into an OH, so dropping it here cost nothing and nobody noticed;
+  // now that a join hands some over, the OH arrives at the water step with about
+  // 185 kJ/mol of its own and that was going out of the world every time.
+  const inherited = (a.vib + b.vib) * doseUnit();
+  const spinE = Math.max(0, bodyKE(a) + bodyKE(b) + released + inherited - keCom
                             - (a.pullWork || 0) - (b.pullWork || 0));
-  nb.spin = (a.spin + b.spin >= 0 ? 1 : -1) * Math.sqrt(2 * spinE / nb.inertia);
+
+  // THE TUMBLE IS THE ONE THE APPROACH ACTUALLY HAD.
+  //
+  // The direction used to come from `a.spin + b.spin >= 0`, which for two free
+  // atoms is zero and so decided nothing: a water could be built turning the
+  // opposite way from the pair that made it, and at a rate — all of `spinE`,
+  // bond energy included — well past MAX_SPIN, which the comment on that
+  // constant calls a blur rather than a spin. Both are the jumpiness.
+  //
+  // So take the rate and the sign from the angular momentum the two bodies have
+  // about their common centre of mass, which is the quantity a join cannot
+  // change, and clamp it where every other spin in the sim is clamped.
+  let L = 0;
+  for (const s of [a, b]) {
+    L += s.inertia * s.spin
+       + s.mass * ((s.x - cx) * (s.vy - cvy) - (s.y - cy) * (s.vx - cvx));
+  }
+  let w = L / nb.inertia;
+  if (Math.abs(w) > MAX_SPIN) w = Math.sign(w) * MAX_SPIN;
+  let rotE = 0.5 * nb.inertia * w * w;
+  // Angular momentum cannot ask for more energy than the pair brought.
+  if (rotE > spinE) { rotE = spinE; w = Math.sign(w || 1) * Math.sqrt(2 * rotE / nb.inertia); }
+  nb.spin = w;
+
+  // Everything the tumble did not take goes into the bond as vibration, up to
+  // `joinVibCap` of what would break it: a molecule that has just formed is hot
+  // and glows, and VIB_TAU hands it back to motion over the next couple of
+  // seconds through the path that already exists for it. Past that cap it goes
+  // straight back as speed, so nothing is created and nothing is lost either
+  // way — fieldsKJ counts `vib`, so the bars balance whichever of the two it is.
+  let left = spinE - rotE;
+  const room = joinVibCap * breakThreshold(nb) * doseUnit();
+  if (left > 0 && room > 0) {
+    const take = Math.min(left, room);
+    nb.vib = take / doseUnit();
+    left -= take;
+  }
+  // The last of it as speed. Scaled, not added, so the direction the pair was
+  // already drifting survives; `energyOfMotion` counts it here exactly as it
+  // counted it when the whole lot went to spin, so the audit needs no new term.
+  if (left > 1e-9) {
+    const ke = 0.5 * nb.mass * (nb.vx * nb.vx + nb.vy * nb.vy);
+    if (ke > 1e-9) {
+      const k = Math.sqrt((ke + left) / ke);
+      nb.vx *= k; nb.vy *= k;
+    } else {
+      nb.spin = Math.sign(nb.spin || 1) * Math.sqrt(nb.spin * nb.spin + 2 * left / nb.inertia);
+    }
+  }
+
   nb.flare = Math.max(a.flare, b.flare, 1);     // it lights up as it forms
 
   world.bodies.splice(Math.max(ia, ib), 1);
@@ -3790,6 +4086,10 @@ function joinBodies(a, b, els) {
 
 let joinCount = 0;            // diagnostics: molecules put back together
 let recombLatched = false;    // every original molecule has come apart
+// How far apart each pair was when it came into range, so the pull's work can
+// be read off as a potential difference. Keyed by the two body ids; an entry
+// lives exactly as long as the pair is in range.
+const pullEnter = new Map();
 
 function stepRecombination(dt) {
   // Both have to say yes: the dev toggle, and the reaction itself. Carbonic acid
@@ -3804,8 +4104,9 @@ function stepRecombination(dt) {
   }
 
   const B = world.bodies;
-  for (const b of B) b.pullNear = false;
+  for (const b of B) { b.pullNear = false; b.pullWork = 0; }
   const joins = [];
+  const seen = new Set();
 
   for (let i = 0; i < B.length; i++) {
     for (let k = i + 1; k < B.length; k++) {
@@ -3819,6 +4120,33 @@ function stepRecombination(dt) {
       const d = Math.hypot(dx, dy) || 1e-6;
       if (d > recombRange * touch) continue;
       const ux = dx / d, uy = dy / d;
+
+      // WHAT THE PULL HAS PUT IN, as a potential difference rather than a path
+      // integral. A constant inward force is conservative, so its work depends
+      // only on how much closer the pair is than when it entered the range —
+      // which is what the tally is for, and what the comment above has always
+      // said it was. It used to be accumulated as F x (distance closed) every
+      // frame the pair was approaching, and never given back: a pair that came
+      // in, drifted out a little, came in again and finally stuck was charged
+      // for the same ground twice. The surplus then ran `spinE` down to its
+      // `max(0, ...)` floor and the difference left the world. Harmless while
+      // pairs flew straight through; not harmless now that `recombAlign` keeps
+      // them in range long enough to wander.
+      //
+      // What is left after this is the pull's own energy, which the sim grants
+      // the molecules no more than the bars do — that is the point of the tally
+      // and it is intended. Measured over three 90 s runs, the anchored total
+      // and the measured one now disagree by 4,900-6,500 kJ/mol over a whole
+      // run where the old tally put that at 6,900-10,200.
+      const key = B[i].id < B[k].id ? B[i].id + ':' + B[k].id
+                                    : B[k].id + ':' + B[i].id;
+      let enter = pullEnter.get(key);
+      if (enter == null) { enter = d; pullEnter.set(key, d); }
+      seen.add(key);
+      const pw = recombPull * Math.max(0, enter - d);
+      B[i].pullWork += pw / 2;
+      B[k].pullWork += pw / 2;
+      B[i].pullNear = B[k].pullNear = true;
 
       if (d <= RECOMB_SNAP * touch) {
         // Capture only if the bond could actually hold them. Two atoms crashing
@@ -3837,24 +4165,23 @@ function stepRecombination(dt) {
       const F = recombPull;
       B[i].vx += ux * F / B[i].mass * dt;  B[i].vy += uy * F / B[i].mass * dt;
       B[k].vx -= ux * F / B[k].mass * dt;  B[k].vy -= uy * F / B[k].mass * dt;
-      const w = F * Math.max(0, -( (rvDot(B[i], B[k], ux, uy)) )) * dt;
-      B[i].pullWork = (B[i].pullWork || 0) + w / 2;
-      B[k].pullWork = (B[k].pullWork || 0) + w / 2;
-      B[i].pullNear = B[k].pullNear = true;
+      // And the little rotation: each body turns its open slot towards the other
+      // while the pull closes the gap, so by the time they touch the geometry
+      // almost already fits and the snap has next to nothing left to move.
+      B[i].alignTo = alignTarget(B[i], Math.atan2(uy, ux));
+      B[k].alignTo = alignTarget(B[k], Math.atan2(-uy, -ux));
     }
   }
 
   // A pair that drifted apart again owes nothing: the force took its own work
-  // back on the way out, so the tally goes with it.
-  for (const b of B) if (!b.pullNear) b.pullWork = 0;
+  // back on the way out, so the entry distance goes with it and the next
+  // approach starts from scratch. The tumble comes back at the same moment,
+  // from the `spin` the alignment never touched.
+  for (const b of B) if (!b.pullNear) b.alignTo = null;
+  for (const key of pullEnter.keys()) if (!seen.has(key)) pullEnter.delete(key);
 
   for (const [a, b, els] of joins) joinBodies(a, b, els);
   if (joins.length) updateSpeciesCounters();
-}
-
-// Closing speed along the line between two bodies, negative when approaching.
-function rvDot(a, b, ux, uy) {
-  return (b.vx - a.vx) * ux + (b.vy - a.vy) * uy;
 }
 
 function stepDissociation() {
@@ -4966,6 +5293,9 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     '<div id="devRecombNote" style="opacity:0.45;font-size:10px;margin-left:21px;"></div>' +
     row('devRecombPull', 'Pull',  0, 2000, 20,  recombPull,  '#4dff9f') +
     row('devRecombRange','Reach', 1.2, 4, 0.1, recombRange, '#4dff9f') +
+    row('devJoinForm',  'Snap glides in', 0, 0.6, 0.01, joinFormSec, '#4dff9f') +
+    row('devRecombAlign','Turns to fit',  0, 60,  1,    recombAlign, '#4dff9f') +
+    row('devJoinVib',   'New bond keeps', 0, 0.9, 0.05, joinVibCap,  '#4dff9f') +
     row('devWaterPivot', 'Water pivot', 0, 0.6, 0.01, waterPivot, '#4dff9f') +
     row('devStrongFlare','Strong flash', 0.1, 2, 0.05, strongFlareSec, '#4dff9f') +
     '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
@@ -5074,6 +5404,12 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   bind('devFieldsZero', v => fieldsZeroKJ = v, false, v => Math.round(v) + ' kJ/mol');
   bind('devRecombPull', v => recombPull  = v, false, v => Math.round(v) + ' px/s²');
   bind('devRecombRange', v => recombRange = v, false, v => v.toFixed(1) + '× natural');
+  bind('devJoinForm', v => joinFormSec = v, false,
+       v => v > 0 ? v.toFixed(2) + ' s' : 'instantly');
+  bind('devRecombAlign', v => recombAlign = v, false,
+       v => v > 0 ? v.toFixed(1) + ' rad/s' : 'off');
+  bind('devJoinVib', v => joinVibCap = v, false,
+       v => Math.round(v * 100) + '% of break');
   // The pivot only takes effect on waters built after it changes, so existing
   // ones are rebuilt in place — otherwise the slider does nothing until the
   // next join and it is impossible to judge by eye.

@@ -2682,20 +2682,31 @@ than that do not stick in the real world either — they have nowhere to put the
 excess. Measured on a live scene, a typical approach was 53,000 against an O–H
 bond's 181,000, so ordinary encounters capture and only the hardest bounce off.
 
-### The pull comes out as spin
+### The pull comes out as spin, a glow, and speed
 
 ```javascript
-spinE = KE(a) + KE(b) + released - KE(drift) - pullWork
+spinE = KE(a) + KE(b) + released + inherited - KE(drift) - pullWork
 ```
 
-Momentum fixes the drift, so the drift's share is not ours to give; everything
-else goes into the new molecule's **rotation** — which is where the approach was
-always heading, since two atoms falling together about a common centre ARE a
-rotation once something holds them at a fixed distance. The speed band then
-sells that spin for linear speed at the next collision, which is the existing
-machinery doing exactly what is wanted, so no new path out had to be invented.
-Sampled a few seconds after forming, the molecules' spins are already back at 0
-and the energy is in their translation.
+Momentum fixes the drift, so the drift's share is not ours to give. `inherited`
+is whatever vibration the two were already holding — see *Nothing is dropped on
+the way in* below. What is left is split three ways, in this order:
+
+1. **The tumble**, at the rate the pair's own angular momentum about their common
+   centre of mass asks for, capped at `MAX_SPIN` like every other spin in the sim.
+2. **The bond's glow** — `joinVibCap` (0.4) of what would break that bond, parked
+   in `vib`, so a molecule that has just formed is visibly hot and `VIB_TAU`
+   hands it back to motion over the next couple of seconds through the path that
+   already exists for it. `fieldsKJ` counts `vib`, so the bars balance either way.
+3. **Speed**, for anything past that cap: the velocity is scaled, not added to,
+   so the direction the pair was already drifting survives.
+
+It all used to go to the tumble alone, with its direction taken from
+`a.spin + b.spin >= 0` — which for two free atoms is zero and so decided nothing,
+and at a rate well past the `MAX_SPIN` its own comment calls *a blur, not a
+spin*. A water could come out turning the opposite way from the pair that made
+it. Measured join spins: **9.6–16.3 rad/s** before, **0.06–9.2** now, never over
+the cap.
 
 `makeBody` grew a **bent triatomic** for this: a three-atom chain opens to
 `H2O_ANGLE` about its middle atom instead of lying in a row, and the body-local
@@ -2740,6 +2751,142 @@ Note the straggler problem: `breakSlow` cools the world as it breaks, so the las
 intact molecule can take a very long time to go, and until it does the gate stays
 shut. Sometimes all six break in 5 s, sometimes five break and the last holds out
 past 20 s.
+
+### Where the molecule goes: the placement that moves the atoms least
+
+The new molecule's angle used to be set from the line between the two bonding
+sites, which is right for nothing:
+
+* For an **H + O**, the product `['O','H']` has its local O→H along +x, so
+  whenever the H happened to come first in `world.bodies` the molecule was built
+  with its hydrogen on the **far side** of the oxygen. A 180° flip, decided by
+  array order.
+* For a **water** it cannot be right at all. The bisector is +x and both
+  hydrogens sit `H2O_ANGLE/2` off it, so pointing the bisector at the incoming H
+  threw that H 52° from where it was and swung the OH's existing one 104° across
+  the molecule.
+
+It is solved for instead. Given the product's local atom coordinates **p**, the
+world positions **q** those atoms are actually at, and weights **w**, the
+rotation and offset that minimise the weighted sum of squared movement are exact
+and closed form — the 2D case of Kabsch, two sums and an `atan2`:
+
+```javascript
+theta = atan2( SUM w (px*qy - py*qx), SUM w (px*qx + py*qy) )
+```
+
+once both sets are centred on their weighted means. Weighting by **mass** is
+what keeps the oxygen still and moves the hydrogens: it is sixteen times harder
+to shift. `joinAssignments` enumerates the ways of matching product atoms to
+real ones — one for H + O, two for OH + H since either hydrogen could take
+either of water's slots — and the closer fit wins.
+
+Measured, head-on H + O at twelve angles in both array orders: the oxygen moves
+**1.1 px**, the hydrogen **17.9 px**, the final bond is **49.0 px** and the
+final direction is within **0.0°** of the direction the H arrived from, in every
+case. Ideal-angle OH + H: existing hydrogen **0.9 px**, new one **17.9**,
+oxygen **1.1**, bond angle 104.5°.
+
+### The slide in
+
+Best fit or not, the atoms still have to close from contact to bond length — an
+O and an H touch at 68 px and bond at 49 — and **that distance is the jump**. So
+the body is born holding each atom's leftover gap as an offset in its own frame,
+and the offsets decay to zero over `joinFormSec` (0.18 s, 11 frames).
+
+They are applied by **mutating the atoms' local coordinates**, which is the whole
+trick: the bond segments, the valence shells, the collision radius and the
+drawing all read those coordinates, so every one of them follows the closing bond
+without knowing anything about it. Smoothstep rather than linear, so the atoms
+arrive with no velocity rather than stopping dead — frame by frame the arriving
+bond runs 68.0, 67.5, 66.3, 64.4, 62.1, 59.6, 56.9, 54.4, 52.2, 50.4, 49.3,
+49.0, while the existing O–H sits at exactly 49.0 throughout.
+
+`inertia` is left at the finished molecule's value for the ~0.2 s this lasts. It
+is wrong by about a third on the first frame and exactly right on the last, and
+correcting it would make the spin the join just handed over wrong instead.
+Checked for the obvious symptom — over two 90 s runs, **not one** of the 1,638
+frames in which some body exceeded `MAX_SPIN` belonged to a forming molecule;
+they were all spawn-time H₂ and band-capped waters, which the baseline does too.
+
+**Measured jump at the moment of joining: 1.3e-13 px**, i.e. floating-point
+zero, over 46 runs. Before: 0, 17.9, 19.0, 19.6, 55.5, 56.9, 57.7, 59.7 and
+**109.5 px** (that last one the 180° flip).
+
+### The little rotation, so the collision fits
+
+While the pull is drawing a pair together, a molecule that already has a bond
+turns its open slot to face what is coming. `slotLocalDirs` gives the two
+directions an incoming atom would have to arrive from for the product's shape to
+fit — water's bond angle either way round from the bond already there — and
+`alignTarget` picks whichever is the shorter turn. A lone atom gets nothing: H +
+O makes a straight molecule, so every orientation fits it equally.
+
+It is **kinematic**. The body's `spin` is untouched and only its drawn rotation
+is redirected, so a pair that drifts apart again resumes exactly the tumble it
+had and nothing has leaked. Treat it like the water pivot: the mechanics are
+nudged so the picture reads.
+
+`recombAlign` is measured, not guessed — the angle between an OH's open slot and
+the hydrogen arriving at it, over ten 90 s runs (40 water joins) each:
+
+| rad/s | mean | worst |
+|---|---|---|
+| off | 35.4° | 80.7° |
+| 14 | 8.4° | 38.2° |
+| 20 | 5.6° | 44.7° |
+| **32** | **3.7°** | **9.2°** |
+| 40 | 5.7° | 72.7° |
+| 60 | 3.3° | 7.2° |
+
+The mean is flat past about 20 and the worst case is noise: it is the occasional
+hydrogen that enters the range already touching, which has no time to be turned
+whatever the rate. So the rate is chosen on how it **looks** — at 32 a full 104°
+turn takes 57 ms, three and a half frames, which reads as a molecule turning. At
+60 it is under two frames and the turn is no more visible than the jump it
+replaced. Every one of those 46 runs still ended with four waters.
+
+### Nothing is dropped on the way in
+
+Two accounting holes surfaced once the join started handing energy over. Both
+predate this work; both were invisible until it did.
+
+**The pull's work was a path integral that never gave anything back.**
+`pullWork` was accumulated as `F × (distance closed)` every frame a pair was
+approaching, and only cleared when the pair left the range entirely — so a pair
+that came in, drifted out a little, came in again and finally stuck was charged
+for the same ground twice. The surplus ran `spinE` down to its `max(0, ...)`
+floor and the difference left the world. Harmless while pairs flew straight
+through; not harmless once `recombAlign` keeps them in range long enough to
+wander. A constant inward force is conservative, so its work is now read off as
+a **potential difference** — `F × (entry separation − separation now)`, kept per
+pair in `pullEnter` — which is what the tally was always described as being.
+
+**The molecules' own `vib` was thrown away.** Nothing used to put vibration into
+an OH, so dropping it at the water step cost nothing and nobody noticed. Now
+that a join hands some over, the OH arrives holding about **185 kJ/mol** of its
+own, and that was going out of the world every time.
+
+With both fixed, a join's books close exactly. Measured over three 90 s runs,
+the energy a join does not grant is **the pull's own work and nothing else** —
+`join loss + pullWork = 0` to the round, every run, where it had been −1,113 to
+−1,247 kJ/mol a run unexplained. Across a whole run the anchored total and the
+measured one now disagree by 4,900–6,500 kJ/mol where the old tally put that at
+6,900–10,200.
+
+### What the sliders are
+
+All three are in the dev panel under Recombination:
+
+| slider | variable | default |
+|---|---|---|
+| Snap glides in | `joinFormSec` | 0.18 s |
+| Turns to fit | `recombAlign` | 32 rad/s |
+| New bond keeps | `joinVibCap` | 40% of break |
+
+`joinVibCap` is well under 1 on purpose: a freshly made OH holding its whole
+bond energy would be one ordinary collision from coming apart again, and the
+reaction would never reach water.
 
 ### Strong water
 
