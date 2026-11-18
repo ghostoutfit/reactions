@@ -885,6 +885,9 @@
         <button id="sbAddO2" class="btn sb-add" title="Add an O2">
           <canvas class="sb-thumb"></canvas><span>O&#8322;</span>
         </button>
+        <button id="sbAddH2CO3" class="btn sb-add" title="Add an H2CO3">
+          <canvas class="sb-thumb"></canvas><span>H&#8322;CO&#8323;</span>
+        </button>
       </div>
       <div style="display:flex;flex-direction:column;gap:5px;justify-content:center;padding:8px 0;min-width:120px;">
         <span style="font-size:9px;letter-spacing:0.07em;text-transform:uppercase;opacity:0.5;">In the scene</span>
@@ -1414,7 +1417,10 @@ setFieldRamp(fieldRamp);
 // Bond dissociation energies, kJ/mol. Brightness is scaled by these, so O=O sits
 // slightly above H–H. Break mode will want exactly this table to decide what an
 // impact is strong enough to pull apart.
-const BOND_ENERGY = { 'H-H': 436, 'H-O': 463, 'O-O': 498 };
+// 'C-O' is the SINGLE here. The double lives in BOND_TYPES, which is the only
+// table that can hold both — see there. BOND_ENERGY_MAX stays 498: it is the
+// Reactions currency, and the 799 C=O must not move it.
+const BOND_ENERGY = { 'H-H': 436, 'H-O': 463, 'O-O': 498, 'C-O': 358 };
 const BOND_ENERGY_MAX = 498;
 
 // What a free atom carries on its own, kJ/mol, so that a pair fully apart reads
@@ -1426,6 +1432,18 @@ const SB_FREE_ATOM = 500;
 // Water's bend, as water actually is. Both the sandbox's snap and makeBody's
 // bent triatomic use it, so there is one angle, not two.
 const H2O_ANGLE = 104.5 * Math.PI / 180;
+
+// Carbonic acid, from the Lewis structure and VSEPR. The carbon is sp2 with no
+// lone pair of its own, so its three oxygens are trigonal planar — but NOT at a
+// flat 120 each: the double bond takes more room than the two singles, which
+// opens both O=C–O angles to 125.5 and closes the (HO)–C–(OH) between them to
+// 109. Those three are the whole circle (125.5 + 125.5 + 109 = 360), which is
+// the check that they belong together. Each hydroxyl's H then hangs off its
+// oxygen at 106.8, near enough water's own bend, and turned away from the rest
+// of the molecule so the two do not fold inward at each other.
+const H2CO3_OCO   = 125.5 * Math.PI / 180;   // O=C–O, both of them
+const H2CO3_HOCOH = 109.0 * Math.PI / 180;   // (HO)–C–(OH), what is left
+const H2CO3_HOC   = 106.8 * Math.PI / 180;   // H–O–C at each hydroxyl
 function bondEnergy(elA, elB) {
   return BOND_ENERGY[[elA, elB].sort().join('-')] || 400;
 }
@@ -1457,6 +1475,34 @@ const BOND_TYPES = {
 };
 const DEFAULT_BOND = 'H-H';
 function bondType(id) { return BOND_TYPES[id] || BOND_TYPES[DEFAULT_BOND]; }
+
+// The rows for a pair of elements, in either order.
+function bondTypesFor(elA, elB) {
+  const want = [elA, elB].slice().sort().join('');
+  return Object.values(BOND_TYPES).filter(t => t.els.slice().sort().join('') === want);
+}
+// The row for a pair AT A GIVEN ORDER, which is the lookup the element-pair
+// tables cannot do. Used by the Sandbox so a C=O is 799 kJ/mol and short while
+// the C–O beside it in the same molecule is 358 and long.
+function bondRowFor(elA, elB, order) {
+  return bondTypesFor(elA, elB).find(t => t.order === order) || null;
+}
+function bondDFor(elA, elB, order) {
+  const t = bondRowFor(elA, elB, order);
+  return t ? t.D : bondEnergy(elA, elB);
+}
+function bondLenFor(elA, elB, order) {
+  const t = bondRowFor(elA, elB, order);
+  return bondLen(elA, elB) * (t ? t.lenMult : 1);
+}
+// A pair is promotable when the table holds BOTH a single and a double for it —
+// i.e. when the order is a real choice rather than a property of the pair. Only
+// C–O is, today. O=O has no single in the table and so is never promoted: it is
+// made a double up front by BOND_ORDER, exactly as it was.
+function bondPromotable(elA, elB) {
+  const rows = bondTypesFor(elA, elB);
+  return rows.some(t => t.order === 1) && rows.some(t => t.order === 2);
+}
 
 // The strongest bond ON OFFER in the One Bond list, which is what that tab's
 // glow is normalised against — deliberately NOT BOND_ENERGY_MAX. That constant
@@ -3600,6 +3646,10 @@ function formulaOf(els) {
   // The hydroxyl radical is written OH by everyone, though strict Hill ordering
   // would make it HO. Water stays H2O, which Hill gets right.
   if (els.length === 2 && count.H === 1 && count.O === 1) return 'OH';
+  // Hill ordering would make carbonic acid CH2O3, which is correct and which
+  // nobody writes. It is H2CO3 everywhere it is taught, so it is H2CO3 here.
+  if (count.C === 1 && count.H === 2 && count.O === 3 && els.length === 6)
+    return 'H' + sub(2) + 'CO' + sub(3);
   const rank = (e) => e === 'C' ? 0 : e === 'H' ? 1 : 2;
   return Object.keys(count)
     .sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))
@@ -5975,7 +6025,7 @@ function sbPinned() {
 // bonds: H takes one, O two — so an O already holding two H ignores a third,
 // and an O=O, being a double bond, uses up both of each oxygen's slots the way
 // it really does. The sandbox only ever makes real species.
-function sbValence(el) { return el === 'H' ? 1 : el === 'O' ? 2 : 0; }
+function sbValence(el) { return el === 'H' ? 1 : el === 'O' ? 2 : el === 'C' ? 4 : 0; }
 
 // Which pairs are actually bonded. Nearest first, each taken only while both
 // atoms have a slot free, so a crowd resolves into real molecules rather than
@@ -6011,6 +6061,39 @@ function sbRebuildBonds() {
     used[c.i] += c.order; used[c.k] += c.order;
     sandbox.bonds.push({ i: c.i, k: c.k, r0: c.r0, D: c.D, order: c.order,
       work: c.work, contact: sbContact(c.r, c.r0) });
+  }
+  sbPromoteBonds(used);
+}
+
+// PROMOTION. The skeleton above is built from element pairs, which cannot say
+// whether a given C–O is the single or the double — and carbonic acid needs one
+// of each kind on the same carbon. So the order is not read off a table; it
+// FALLS OUT of what the atoms have left over.
+//
+// Once the singles are placed, any promotable bond whose two atoms both still
+// have a free slot becomes a double. On an H2CO3 that is exactly one bond:
+// carbon has used 3 of 4, the two hydroxyl oxygens are full (carbon and a
+// hydrogen each), and only the bare oxygen still has a slot — so the C=O lands
+// on it and nowhere else, and every atom ends up with a full shell. That is the
+// Lewis structure, arrived at rather than hard-coded, which also means it
+// survives having an H pulled off: the remains re-bond under the same rule.
+//
+// Nothing else in the sim is promotable (see bondPromotable), so H2, O2 and
+// water come out of this pass untouched.
+function sbPromoteBonds(used) {
+  const A = sandbox.atoms;
+  for (const b of sandbox.bonds) {
+    if (b.order !== 1) continue;
+    const ei = A[b.i].el, ek = A[b.k].el;
+    if (!bondPromotable(ei, ek)) continue;
+    if (used[b.i] + 1 > sbValence(ei) || used[b.k] + 1 > sbValence(ek)) continue;
+    used[b.i]++; used[b.k]++;
+    b.order = 2;
+    b.D  = bondDFor(ei, ek, 2);
+    b.r0 = bondLenFor(ei, ek, 2);
+    const r = Math.hypot(A[b.k].x - A[b.i].x, A[b.k].y - A[b.i].y);
+    b.work = sbWork(r, b.r0);
+    b.contact = sbContact(r, b.r0);
   }
 }
 
@@ -6050,6 +6133,16 @@ function sbFormula(mol) {
 // them open to water's 104.5 degrees rather than lying in a line. The whole
 // arrangement is rotated to sit closest to where you dragged it, so snapping
 // moves the atoms as little as it can.
+function sbBondOrderMap() {
+  const m = new Map();
+  for (const b of sandbox.bonds) {
+    m.set(b.i + ',' + b.k, b.order || 1);
+    m.set(b.k + ',' + b.i, b.order || 1);
+  }
+  return m;
+}
+const wrapAngle = a => Math.atan2(Math.sin(a), Math.cos(a));
+
 function sbSnapMolecule(mol) {
   const A = sandbox.atoms, idx = mol.idx;
   if (idx.length < 2) return;
@@ -6057,27 +6150,72 @@ function sbSnapMolecule(mol) {
   for (const i of idx) if (mol.adj[i].length > mol.adj[c].length) c = i;
   const nb = mol.adj[c];
   if (!nb.length) return;
+  const ord = sbBondOrderMap();
+  const angOf = i => Math.atan2(A[i].y - A[c].y, A[i].x - A[c].x);
 
   // Mean direction of the neighbours now, so the snap keeps the orientation.
   let ax = 0, ay = 0;
   for (const i of nb) { ax += A[i].x - A[c].x; ay += A[i].y - A[c].y; }
-  const base = (ax || ay) ? Math.atan2(ay, ax) : 0;
-  const spread = nb.length === 2 ? H2O_ANGLE : 0;
+  let base = (ax || ay) ? Math.atan2(ay, ax) : 0;
 
   // Keep each neighbour on the side it is already on, so they do not swap.
-  const order = nb.slice().sort((p, q) => {
-    const ap = Math.atan2(A[p].y - A[c].y, A[p].x - A[c].x) - base;
-    const aq = Math.atan2(A[q].y - A[c].y, A[q].x - A[c].x) - base;
-    return Math.atan2(Math.sin(ap), Math.cos(ap)) - Math.atan2(Math.sin(aq), Math.cos(aq));
-  });
-  order.forEach((i, k) => {
-    const ang = base + (order.length === 1 ? 0 : (k / (order.length - 1) - 0.5) * spread);
-    const r = bondLen(A[c].el, A[i].el);
+  const order = nb.slice().sort((p, q) =>
+    wrapAngle(angOf(p) - base) - wrapAngle(angOf(q) - base));
+
+  // Where each neighbour belongs, as an offset from `base`.
+  let offs;
+  const di = order.find(i => (ord.get(c + ',' + i) || 1) === 2);
+  if (order.length === 3 && di !== undefined) {
+    // A trigonal centre with one double bond — carbonic acid's carbon. The
+    // double takes the reference direction and keeps pointing where it already
+    // points, so a snap never spins the molecule; the two singles open
+    // H2CO3_OCO either side of it, which leaves them H2CO3_HOCOH apart.
+    base = angOf(di);
+    const rest = order.filter(i => i !== di)
+                      .sort((p, q) => wrapAngle(angOf(p) - base) - wrapAngle(angOf(q) - base));
+    offs = new Map([[di, 0], [rest[0], -H2CO3_OCO], [rest[1], H2CO3_OCO]]);
+  } else {
+    // Two neighbours open to water's bend; one sits on the axis. Three or more
+    // without a double share the circle evenly.
+    const spread = order.length === 2 ? H2O_ANGLE
+                 : order.length > 2   ? Math.PI * 2 * (order.length - 1) / order.length
+                 : 0;
+    offs = new Map(order.map((i, k) =>
+      [i, order.length === 1 ? 0 : (k / (order.length - 1) - 0.5) * spread]));
+  }
+
+  for (const i of order) {
+    const ang = base + offs.get(i);
+    const r = bondLenFor(A[c].el, A[i].el, ord.get(c + ',' + i) || 1);
     A[i].x = A[c].x + Math.cos(ang) * r;
     A[i].y = A[c].y + Math.sin(ang) * r;
-  });
-  // Anything further out (none of the species here, but the graph allows it)
-  // is left where it is rather than guessed at.
+  }
+
+  // THE SECOND SHELL. Carbonic acid is the first molecule here that is more
+  // than a centre and its neighbours: each hydroxyl oxygen carries a hydrogen
+  // of its own, one bond further out. This used to be left where it lay, which
+  // on a six-atom molecule means the hydrogens never find their angle at all.
+  //
+  // Each is placed off its oxygen's O→C direction and turned to the OUTSIDE —
+  // the side that oxygen already sits on — so the two hydroxyls open away from
+  // one another instead of folding their hydrogens into the middle of the
+  // molecule, which is what a bend toward the centre would do.
+  for (const i of order) {
+    const sub = mol.adj[i].filter(j => j !== c);
+    if (!sub.length) continue;
+    const toC = Math.atan2(A[c].y - A[i].y, A[c].x - A[i].x);
+    const rel = wrapAngle(angOf(i) - base);
+    const s = rel < 0 ? -1 : 1;
+    sub.forEach((j, k) => {
+      const bend = (A[i].el === 'O' && A[j].el === 'H') ? H2CO3_HOC : H2O_ANGLE;
+      const fan = sub.length > 1 ? (k - (sub.length - 1) / 2) * 0.6 : 0;
+      const r = bondLenFor(A[i].el, A[j].el, ord.get(i + ',' + j) || 1);
+      A[j].x = A[i].x + Math.cos(toC + s * bend + fan) * r;
+      A[j].y = A[i].y + Math.sin(toC + s * bend + fan) * r;
+    });
+  }
+  // Anything further out still than that is left where it is rather than
+  // guessed at: nothing in this sim reaches a third shell.
 }
 
 function sbSnapAll() {
@@ -6104,6 +6242,14 @@ function sbRelax() {
   const A = sandbox.atoms;
   if (A.length < 2) return false;
   const pinned = sbPinned();
+  // A BONDED pair's floor is that bond's own natural length, not the one the
+  // element pair gives. A C=O is genuinely shorter than a C–O — 50.0 px against
+  // 58.1 — and judging it by the pair would read the double as "too close" and
+  // push it back out to single length on every sweep, every frame. Unbonded
+  // pairs keep the element-pair distance: that is the hard-sphere floor, and it
+  // has nothing to do with what either atom happens to be bonded to.
+  const bonded = new Map();
+  for (const b of sandbox.bonds) bonded.set(Math.min(b.i, b.k) + ',' + Math.max(b.i, b.k), b.r0);
   let any = false;
   for (let it = 0; it < SB_RELAX_ITERS; it++) {
     // Accumulate every pair's correction first, then move: a sequential sweep
@@ -6114,7 +6260,7 @@ function sbRelax() {
     let moved = false;
     for (let i = 0; i < A.length; i++) {
       for (let k = i + 1; k < A.length; k++) {
-        const target = bondLen(A[i].el, A[k].el);
+        const target = bonded.get(i + ',' + k) || bondLen(A[i].el, A[k].el);
         let dx = A[k].x - A[i].x, dy = A[k].y - A[i].y;
         let d = Math.hypot(dx, dy);
         if (d >= target - SB_SETTLED) continue;
@@ -6172,7 +6318,12 @@ function drawSandbox() {
   if (sandbox.bonds.length) {
     const segs = sandbox.bonds.map(b => ({
       x1: A[b.i].x, y1: A[b.i].y, x2: A[b.k].x, y2: A[b.k].y,
-      mag: b.D / BOND_ENERGY_MAX
+      // Through bondShownMag, the same compressed depth scale the One Bond tab
+      // uses, because this tab now shows the same mixed set of strengths: a
+      // 799 kJ/mol C=O sits in the scene beside a 358 C–O, and against the old
+      // BOND_ENERGY_MAX of 498 the double would have been a permanent clipped
+      // white blob while the single went nearly dark.
+      mag: bondShownMag(b.D)
            * (BOND_FIELD_FLOOR + (1 - BOND_FIELD_FLOOR) * b.work)
            * b.contact * BOND_FIELD_GAIN * BOND_FIELD_BOOST,
       squeeze: BOND_FIELD_SQUEEZE,
@@ -6214,7 +6365,21 @@ function drawSandbox() {
   ctx.fillStyle = 'rgba(255,255,255,0.7)';
   ctx.font = '600 13px Inter, system-ui, sans-serif';
   ctx.textAlign = 'center';
-  for (const p of A) ctx.fillText(p.el, p.x, p.y + valenceRadius(p.el) + 18);
+  // The label goes below its atom, unless the rest of the molecule is below it —
+  // then it goes above. Carbonic acid's carbonyl oxygen sits directly over the
+  // carbon, and a label always-below put its O inside the carbon's nucleus,
+  // where it simply could not be read. A diatomic's two atoms are level, so the
+  // test ties and they keep the label they always had.
+  const midY = new Array(A.length).fill(null);
+  for (const m of sbMolecules()) {
+    if (m.idx.length < 2) continue;
+    const cy = m.idx.reduce((s, i) => s + A[i].y, 0) / m.idx.length;
+    for (const i of m.idx) midY[i] = cy;
+  }
+  A.forEach((p, i) => {
+    const up = midY[i] !== null && midY[i] > p.y + 1;
+    ctx.fillText(p.el, p.x, p.y + (up ? -valenceRadius(p.el) - 10 : valenceRadius(p.el) + 18));
+  });
   ctx.textAlign = 'left';
 
   sbDrawSelection(ctx);
@@ -6284,32 +6449,54 @@ function sbDrawValenceElectrons(c, A, bonds) {
 // drift apart. An O2 at rest is 131 px wide including both halos, so the
 // thumbnail is drawn 1:1 into a box that size and shown at half, which gives it
 // the crispness of a 2x asset for free.
+// Carbonic acid is far wider and taller than an O2, so the thumbnail FITS the
+// shape rather than assuming it is a horizontal pair: the scale is whatever
+// makes the molecule and its halos sit inside the box with a margin. A diatomic
+// comes out at the same size it always did, because at that size it is the fit
+// that binds and the result is the old 0.8.
 const SB_THUMB_W = 164, SB_THUMB_H = 104, SB_THUMB_SHRINK = 0.8;
-function sbThumb(cv, els) {
+function sbThumb(cv, shape) {
   cv.width = SB_THUMB_W; cv.height = SB_THUMB_H;
   const c = cv.getContext('2d');
-  const r0 = bondLen(els[0], els[1]);
-  const cx = SB_THUMB_W / 2, cy = SB_THUMB_H / 2;
-  const A = [{ el: els[0], x: cx - r0 / 2, y: cy },
-             { el: els[1], x: cx + r0 / 2, y: cy }];
-  const bonds = [{ i: 0, k: 1, r0, D: bondEnergy(els[0], els[1]),
-                   order: bondOrder(els[0], els[1]),
-                   work: 0, contact: sbContact(r0, r0) }];
-  // An O2 and both its halos just fill the box, so everything is drawn a little
-  // under size about the centre and the glow has room to fall off instead of
-  // being cut at the edge. The field is drawn with drawImage, so it follows
-  // this transform along with the atoms.
-  const k = SB_THUMB_SHRINK;
+  if (!shape || !shape.length) return;
+
+  // The molecule's own extent, halos included, about its origin.
+  let L = 0, R = 0, T = 0, B = 0;
+  for (const a of shape) {
+    const r = valenceRadius(a.el);
+    L = Math.max(L, r - a.lx); R = Math.max(R, r + a.lx);
+    T = Math.max(T, r - a.ly); B = Math.max(B, r + a.ly);
+  }
+  const k = Math.min(SB_THUMB_SHRINK,
+                     SB_THUMB_W / Math.max(1, L + R), SB_THUMB_H / Math.max(1, T + B));
+  // The atoms stay in BOX coordinates and the transform only scales about the
+  // box centre, exactly as the diatomic version did. The field buffer is indexed
+  // in the box's own pixels and clamps at 0, so an atom at a negative coordinate
+  // would simply lose its lobe — centring the shape here rather than in the
+  // transform is what keeps every atom inside the buffer.
+  //
+  // Centre the shape's BOX, not its origin: carbonic acid hangs further below
+  // its carbon than above it, and centring on the carbon crops the hydroxyls.
+  const cx = SB_THUMB_W / 2 + (L - R) / 2, cy = SB_THUMB_H / 2 + (T - B) / 2;
   c.setTransform(k, 0, 0, k, (1 - k) * SB_THUMB_W / 2, (1 - k) * SB_THUMB_H / 2);
 
-  // The scene's own lobe for a bond at rest: work 0, so the floor of the ramp.
-  const b = bonds[0];
-  drawFieldHeatmap(c, [{
-    x1: A[0].x, y1: A[0].y, x2: A[1].x, y2: A[1].y,
-    mag: b.D / BOND_ENERGY_MAX * BOND_FIELD_FLOOR * b.contact
+  const A = shape.map(a => ({ el: a.el, x: cx + a.lx, y: cy + a.ly }));
+  // The scene's own bonding rules, run on this shape in isolation, so the
+  // picture shows exactly the bonds — and the orders — the button will place.
+  const saved = sandbox.atoms;
+  sandbox.atoms = A;
+  sbRebuildBonds();
+  const bonds = sandbox.bonds;
+  sandbox.atoms = saved;
+  sbRebuildBonds();
+
+  // The scene's own lobes for bonds at rest: work 0, so the floor of the ramp.
+  drawFieldHeatmap(c, bonds.map(b => ({
+    x1: A[b.i].x, y1: A[b.i].y, x2: A[b.k].x, y2: A[b.k].y,
+    mag: bondShownMag(b.D) * BOND_FIELD_FLOOR * b.contact
          * BOND_FIELD_GAIN * BOND_FIELD_BOOST,
     squeeze: BOND_FIELD_SQUEEZE, load: 0,
-  }], SB_THUMB_W, SB_THUMB_H,
+  })), SB_THUMB_W, SB_THUMB_H,
     { width: BOND_FIELD_WIDTH, gain: BOND_FIELD_GAIN, colormap: BOND_COLORMAP });
 
   for (const p of A) drawShellBands(c, p.x, p.y, p.el, valenceRadius(p.el),
@@ -6351,24 +6538,35 @@ function sbClearance(x, y, el) {
 // nowhere can. Among the spots that clear, the one nearest a walking ring
 // position wins, so repeated presses still fan out around the middle instead of
 // all piling into the same corner of the scan order.
-function sbRoomFor(els) {
-  const r0 = bondLen(els[0], els[1]);
-  const rL = valenceRadius(els[0]), rR = valenceRadius(els[1]);
-  const rT = Math.max(rL, rR);
-  const x0 = SB_EDGE + r0 / 2 + rL, x1 = sceneW() - SB_EDGE - r0 / 2 - rR;
-  const y0 = world.top + SB_EDGE + rT, y1 = canvas.height - SB_EDGE - rT;
+// Where a whole SHAPE can go, or null if nowhere can. The legal band for the
+// origin is the scene inset by the shape's own reach on each side, so a lopsided
+// molecule — carbonic acid hangs further below its carbon than above it — gets
+// the room it actually needs rather than a square guess.
+function sbRoomFor(shape) {
+  if (!shape || !shape.length) return null;
+  let L = 0, R = 0, T = 0, B = 0;
+  for (const a of shape) {
+    const r = valenceRadius(a.el);
+    L = Math.max(L, r - a.lx); R = Math.max(R, r + a.lx);
+    T = Math.max(T, r - a.ly); B = Math.max(B, r + a.ly);
+  }
+  const x0 = SB_EDGE + L, x1 = sceneW() - SB_EDGE - R;
+  const y0 = world.top + SB_EDGE + T, y1 = canvas.height - SB_EDGE - B;
   if (x1 < x0 || y1 < y0) return null;
 
   const a = sandbox.spawnAt * 1.1;
-  const R = Math.min(sceneW(), canvas.height - world.top) * 0.28;
-  const px = (x0 + x1) / 2 + Math.cos(a) * R;
-  const py = (y0 + y1) / 2 + Math.sin(a) * R;
+  const RR = Math.min(sceneW(), canvas.height - world.top) * 0.28;
+  const px = (x0 + x1) / 2 + Math.cos(a) * RR;
+  const py = (y0 + y1) / 2 + Math.sin(a) * RR;
 
   let best = null, bestD = Infinity;
   for (let y = y0; y <= y1; y += SB_ROOM_STEP) {
     for (let x = x0; x <= x1; x += SB_ROOM_STEP) {
-      if (sbClearance(x - r0 / 2, y, els[0]) < 0) continue;
-      if (sbClearance(x + r0 / 2, y, els[1]) < 0) continue;
+      let ok = true;
+      for (const at of shape) {
+        if (sbClearance(x + at.lx, y + at.ly, at.el) < 0) { ok = false; break; }
+      }
+      if (!ok) continue;
       const d = Math.hypot(x - px, y - py);
       if (d < bestD) { best = { x, y }; bestD = d; }
     }
@@ -6376,26 +6574,72 @@ function sbRoomFor(els) {
   return best;
 }
 
-const SB_ADDABLE = [['sbAddH2', ['H', 'H']], ['sbAddO2', ['O', 'O']]];
+// ── What the ADD buttons place ──────────────────────────────────────────────
+// A species is a SHAPE, not a pair of elements: a list of atoms at offsets from
+// the molecule's own origin. The diatomics were two atoms laid out horizontally
+// in three different places (the spawn, the room scan, the button picture), and
+// a six-atom carbonic acid does not fit any of them. One list drives all three
+// now, so the button's picture is necessarily the thing the button places.
+function sbDiatomic(a, b) {
+  const r0 = bondLen(a, b);
+  return [{ el: a, lx: -r0 / 2, ly: 0 }, { el: b, lx: r0 / 2, ly: 0 }];
+}
+
+// Carbonic acid, built straight off the Lewis diagram: a trigonal carbon with
+// the double-bonded oxygen pointing up and the two hydroxyls splayed below, each
+// carrying its hydrogen turned outward. The C=O is drawn SHORTER than the two
+// C–O (lenMult 0.86, from 1.23 A against 1.43), which together with the wider
+// angle either side of it is what makes the double bond legible as a double
+// bond in the scene rather than something you have to count dots to find.
+function sbCarbonicAcid() {
+  const rCO1 = bondLenFor('C', 'O', 1);
+  const rCO2 = bondLenFor('C', 'O', 2);
+  const rOH  = bondLen('O', 'H');
+  const up   = -Math.PI / 2;                 // canvas y grows downward
+  const out  = [{ el: 'C', lx: 0, ly: 0 },
+                { el: 'O', lx: Math.cos(up) * rCO2, ly: Math.sin(up) * rCO2 }];
+  for (const s of [1, -1]) {
+    const a  = up + s * H2CO3_OCO;
+    const ox = Math.cos(a) * rCO1, oy = Math.sin(a) * rCO1;
+    // The H sits H2CO3_HOC off the O→C direction, turned to the OUTSIDE — the
+    // same turn on each side, mirrored, so the two hydroxyls open away from one
+    // another instead of folding their hydrogens into the middle.
+    const h  = Math.atan2(-oy, -ox) + s * H2CO3_HOC;
+    out.push({ el: 'O', lx: ox, ly: oy });
+    out.push({ el: 'H', lx: ox + Math.cos(h) * rOH, ly: oy + Math.sin(h) * rOH });
+  }
+  return out;
+}
+
+const SB_ADDABLE = [
+  ['sbAddH2',    'H2',    () => sbDiatomic('H', 'H')],
+  ['sbAddO2',    'O2',    () => sbDiatomic('O', 'O')],
+  ['sbAddH2CO3', 'H2CO3', sbCarbonicAcid],
+];
+function sbShapeOf(key) {
+  const row = SB_ADDABLE.find(r => r[1] === key);
+  return row ? row[2]() : null;
+}
 function sbSyncAddButtons() {
-  for (const [id, els] of SB_ADDABLE) {
+  for (const [id, key, build] of SB_ADDABLE) {
     const b = document.getElementById(id);
     if (!b) continue;
-    const ok = !!sbRoomFor(els);
+    const shape = build();
+    const ok = !!sbRoomFor(shape);
     b.disabled = !ok;
-    b.title = ok ? 'Add an ' + sbSpecies(els)
+    b.title = ok ? 'Add ' + sbSpeciesName(shape)
                  : 'No room left — delete or clear something first';
   }
 }
-function sbSpecies(els) { return els[0] + '2'; }
+function sbSpeciesName(shape) { return formulaOf(shape.map(a => a.el)); }
 
-function sbSpawn(els) {
-  const spot = sbRoomFor(els);
+function sbSpawn(key) {
+  const shape = typeof key === 'string' ? sbShapeOf(key) : key;
+  if (!shape) return;
+  const spot = sbRoomFor(shape);
   if (!spot) { sbSyncAddButtons(); return; }
   sandbox.spawnAt++;
-  const r0 = bondLen(els[0], els[1]);
-  sandbox.atoms.push({ el: els[0], x: spot.x - r0 / 2, y: spot.y });
-  sandbox.atoms.push({ el: els[1], x: spot.x + r0 / 2, y: spot.y });
+  for (const a of shape) sandbox.atoms.push({ el: a.el, x: spot.x + a.lx, y: spot.y + a.ly });
   sbRebuildBonds();
   sbUpdateReadout();
   sbSyncAddButtons();
@@ -6433,10 +6677,14 @@ function sbSelAtoms() {
 
 // Deletable: a whole molecule, two atoms, both the same element, bonded to each
 // other. That is exactly an untouched H2 or O2 — what the ADD buttons make.
+// Deletable: a whole molecule whose formula is one an ADD button makes — an
+// untouched H2, O2 or H2CO3. Comparing formulas rather than "two atoms, same
+// element" is what lets carbonic acid be deleted too, and it still refuses a
+// lone atom and anything the scene built for itself.
 function sbSelDeletable(idx) {
-  if (!sandbox.sel || sandbox.sel.kind !== 'mol' || !idx || idx.length !== 2) return false;
-  const a = sandbox.atoms[idx[0]], b = sandbox.atoms[idx[1]];
-  return !!a && !!b && a.el === b.el;
+  if (!sandbox.sel || sandbox.sel.kind !== 'mol' || !idx || idx.length < 2) return false;
+  const f = formulaOf(idx.map(i => sandbox.atoms[i] && sandbox.atoms[i].el).filter(Boolean));
+  return SB_ADDABLE.some(([, , build]) => sbSpeciesName(build()) === f);
 }
 
 function sbClearSel() { sandbox.sel = null; sandbox.xBox = null; }
@@ -6444,7 +6692,7 @@ function sbClearSel() { sandbox.sel = null; sandbox.xBox = null; }
 function sbDeleteSelection() {
   const idx = sbSelAtoms();
   if (!sbSelDeletable(idx)) return;
-  const name = sbSpecies([sandbox.atoms[idx[0]].el]);
+  const name = formulaOf(idx.map(i => sandbox.atoms[i].el));
   const kill = new Set(idx);
   sandbox.atoms = sandbox.atoms.filter((_, i) => !kill.has(i));
   sbClearSel();
@@ -6713,8 +6961,10 @@ function sbUpdateReadout() {
     : '\u2014';
 }
 
-document.getElementById('sbAddH2').addEventListener('click', () => sbSpawn(['H', 'H']));
-document.getElementById('sbAddO2').addEventListener('click', () => sbSpawn(['O', 'O']));
+for (const [id, key] of SB_ADDABLE) {
+  const b = document.getElementById(id);
+  if (b) b.addEventListener('click', () => sbSpawn(key));
+}
 document.getElementById('sbClear').addEventListener('click', () => {
   sandbox.atoms = []; sandbox.bonds = []; sandbox.spawnAt = 0;
   sbClearSel();
@@ -6757,8 +7007,10 @@ setViewModeActive(document.querySelector('.awheel-item[data-view="shells"]'));
 // tier is picked: the field buffer's resolution is read from it, and the
 // heatmap resizes that shared buffer to whatever box it is handed, so this also
 // has to happen before the world loop starts rather than between its frames.
-sbThumb(document.querySelector('#sbAddH2 .sb-thumb'), ['H', 'H']);
-sbThumb(document.querySelector('#sbAddO2 .sb-thumb'), ['O', 'O']);
+for (const [id, , build] of SB_ADDABLE) {
+  const cv = document.querySelector('#' + id + ' .sb-thumb');
+  if (cv) sbThumb(cv, build());
+}
 sbSyncAddButtons();
 // The sim opens on One Bond. It is the one that explains what a bond IS, and
 // the Reactions tab is easier to read once you have pulled one apart by hand.

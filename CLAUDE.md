@@ -2063,12 +2063,21 @@ the moves the tab is for:
 | H₂ + O₂ | 1066 | 4×500 − (436+498) |
 | pull the O₂ apart | 1564 | 4×500 − 436 |
 | **H₂O + O** | **1074** | **4×500 − 2×463** |
+| **H₂CO₃** | **559** | **6×500 − (799 + 2×358 + 2×463)** |
+| H₂CO₃ + H₂ + O₂ | 1625 | 10×500 − 3375 |
+
+The sandbox's lobes now go through `bondShownMag` as well, the same compressed
+depth scale One Bond uses, because this tab shows the same mixed set of
+strengths: a 799 kJ/mol C=O sits in the scene beside a 358 C–O, and against the
+old `BOND_ENERGY_MAX` of 498 the double would have been a permanently clipped
+white blob while the single went nearly dark. The cost is the same one One Bond
+pays — **H₂ and O₂ are a little dimmer than they were.**
 
 ### Bonding
 
-**Capped by valence** — H takes one, O two — so the sandbox only ever makes real
-species and the total cannot be driven down by piling atoms together. A third H
-dropped on a finished water is ignored.
+**Capped by valence** — H takes one, O two, **C four** — so the sandbox only ever
+makes real species and the total cannot be driven down by piling atoms together.
+A third H dropped on a finished water is ignored.
 
 The cap counts **bond order, not bonds**: an O=O is a double bond and uses up
 both of each oxygen's slots, the way it really does. So an intact O₂ is
@@ -2083,6 +2092,33 @@ nothing. Ranked by distance, a crushed H–H outranked a perfect O–H and stole
 atom — dropping a third H beside a finished water **pulled one of its bonds
 apart**. Ranked by energy released, the water survives.
 
+### Carbonic acid, and the double bond that is not in any table
+
+H₂CO₃ is the first molecule here that needs **two different bonds between the
+same two elements**: one C=O and two C–O on the same carbon. No element-pair
+table can say which is which, and `BOND_TYPES` cannot either — it holds both
+rows, but nothing in it says which row a particular bond in the scene should
+take.
+
+So the order is not looked up. **It falls out of what the atoms have left
+over.** `sbRebuildBonds` lays the singles down as it always did, and then
+`sbPromoteBonds` walks them: any promotable bond whose two atoms *both* still
+have a free slot becomes a double. On a carbonic acid that is exactly one bond —
+carbon has used 3 of 4, the two hydroxyl oxygens are full (a carbon and a
+hydrogen each), and only the bare oxygen still has a slot, so the C=O lands
+there and nowhere else. Every atom ends up with a full shell. **That is the
+Lewis structure, arrived at rather than hard-coded.**
+
+A pair is promotable only when `BOND_TYPES` holds both a single and a double for
+it, which today means C–O alone. O=O has no single in the table, so it is still
+made a double up front by `BOND_ORDER` and this pass never touches it; H₂ and
+water come through untouched for the same reason.
+
+Because it is a rule and not a template, **it survives being taken apart.**
+Measured: pull one H off an H₂CO₃ and the remainder re-promotes a *different*
+C–O, giving `C0=O2 C0–O1 C0–O4` — carbon still at 4 of 4. Put the H back and it
+is H₂CO₃ again with exactly one double.
+
 ### Geometry
 
 Molecules snap into the shape they actually have, but **only when you let go** —
@@ -2094,6 +2130,82 @@ and neighbours keep the side they were already on so they do not swap.
 
 Verified: a built H₂O lands at **104.5°** with both O–H at **49 px**, the
 natural length.
+
+**Carbonic acid's angles come off the Lewis structure and VSEPR.** The carbon is
+sp² with no lone pair of its own, so its three oxygens are trigonal planar — but
+not at a flat 120° each. The double bond takes more room than the two singles,
+which opens both O=C–O to **125.5°** and closes the (HO)–C–(OH) between them to
+**109°**. Those three are the whole circle, which is the check that they belong
+together: 125.5 + 125.5 + 109 = 360. Each hydroxyl's hydrogen then sits at
+**106.8°** off its oxygen's O→C direction.
+
+```javascript
+const H2CO3_OCO   = 125.5 * Math.PI / 180;   // O=C–O, both of them
+const H2CO3_HOCOH = 109.0 * Math.PI / 180;   // (HO)–C–(OH), what is left
+const H2CO3_HOC   = 106.8 * Math.PI / 180;   // H–O–C at each hydroxyl
+```
+
+Two things the snap had to learn:
+
+**A trigonal centre keeps its double pointing where it points.** The double bond
+takes the reference direction and the two singles open `H2CO3_OCO` either side,
+so a snap never spins the molecule.
+
+**A second shell.** Carbonic acid is the first molecule here deeper than a
+centre and its neighbours — each hydroxyl oxygen carries a hydrogen one bond
+further out, and those used to be "left where they are rather than guessed at",
+which on a six-atom molecule means they never find their angle at all. Each is
+now placed off its oxygen's O→C direction and **turned to the outside**, the
+side that oxygen already sits on, so the two hydroxyls open away from one
+another. Bending toward the centre instead would fold both hydrogens into the
+middle of the molecule.
+
+Measured on a spawned H₂CO₃, after the relax pass has had its say:
+
+| | target | measured |
+|---|---|---|
+| O=C–O (×2) | 125.5° | 125.5°, 125.5° |
+| (HO)–C–(OH) | 109° | 109.0° |
+| H–O–C (×2) | 106.8° | 106.8°, 106.8° |
+| C=O | 50.0 px | 50.0 |
+| C–O (×2) | 58.1 px | 58.1 |
+| O–H (×2) | 49.0 px | 49.0 |
+
+Lone electrons, which is the Lewis diagram itself: **C 0, every O 4 (two pairs),
+every H 0.** The renderer already derived these from `VALENCE − shared`, so
+giving carbon a valence of 4 and the C=O an order of 2 was the whole of it.
+
+### What the ADD buttons place
+
+A species is a **shape** — a list of atoms at offsets from the molecule's own
+origin — not a pair of elements. The diatomics were two atoms laid out
+horizontally in three separate places (the spawn, the room scan, the button
+picture), and a six-atom molecule fits none of them. One list drives all three
+now, so the button's picture is necessarily the thing the button places.
+
+That also generalised two things that had the pair baked in: the room scan
+insets the legal band by the shape's **own reach on each side** (carbonic acid
+hangs further below its carbon than above it), and the thumbnail **fits** the
+shape rather than assuming a horizontal pair. A diatomic still comes out at
+exactly the old size, because at that size the old 0.8 shrink is what binds.
+
+The thumbnail runs the scene's real bonding rules on the shape in isolation, so
+the picture shows the orders the button will actually place — the C=O in the
+H₂CO₃ button is a C=O for the same reason it is one in the scene.
+
+Deleting now compares **formulas** against what the ADD buttons make, rather
+than asking for "two atoms, the same element". That is what lets a carbonic acid
+be deleted too, and it still refuses a lone atom and anything the scene built
+for itself.
+
+`formulaOf` has a special case for it: Hill ordering gives CH₂O₃, which is
+correct and which nobody writes. It is H₂CO₃ everywhere it is taught, so it is
+H₂CO₃ here — the same reason OH is not written HO.
+
+Only **3** carbonic acids fit a 1033-wide canvas before the button greys out,
+against 45 H₂, because the molecule is large and the three-radii clearance is
+generous. The H₂ and O₂ buttons stay live when the H₂CO₃ one greys: the scan is
+per species, and smaller molecules still fit.
 
 ### Atoms cannot be squashed
 
@@ -2114,6 +2226,14 @@ Whatever the pointer holds is **pinned** — the push goes entirely into the fre
 end, so the hand always wins and the other atom slides away from it. Corrections
 are accumulated over a whole sweep and applied together; applying them as they
 are found let the order of the pairs decide where a crowded atom ended up.
+
+**A bonded pair's floor is that bond's own `r0`, not the element pair's.** This
+was a real bug the moment C=O arrived: a double is genuinely shorter than its
+single — 50.0 px against 58.1 — so judged by the element pair it reads as "too
+close", and the relax pass pushed it back out to single length on every sweep of
+every frame. The snap would place it correctly and the next frame would undo it.
+Unbonded pairs keep the element-pair distance, which is the hard-sphere floor
+and has nothing to do with what either atom happens to be bonded to.
 
 Two things it needs on top of the plain rule:
 
