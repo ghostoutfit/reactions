@@ -1474,12 +1474,68 @@ Added to all five element-keyed tables: `ELEMENTS` (`rScale` 1.42, from C's
 1.70 Å van der Waals against H's 1.20), `NUCLEONS` `[6,6]`, `ATOM_SHELLS`
 `[2,4]`, `SHELL_FRAC` `[0.18,1]`, `VALENCE` 4.
 
-**Its colour is a compromise.** CPK carbon is black, and these tabs draw light
-on black — a true graphite carbon loses its shell band and its electron dots
-against the background. `110,120,138` is dark enough to read as the dark one
-beside hydrogen's `185,192,205` and still carries a halo. Size does the rest:
-at 1.42 it is the biggest atom here, and the nucleus shows six protons against
-oxygen's eight.
+Size does part of the work on its own: at 1.42 it is the biggest atom here, and
+the nucleus shows six protons against oxygen's eight.
+
+### Carbon is black, and black took three things
+
+It was briefly a dark slate `110,120,138` — dark enough to read as "the dark
+one" beside hydrogen, light enough to keep glowing. That is not what carbon
+looks like. Making it actually black needed the renderer to learn three things,
+because **every other atom here is drawn as light on a near-black background,
+and that only works while every colour is lighter than the background.**
+
+**1. A body.** An atom was a shell band and a nucleus — a glow, with nothing
+filled in. An atom with no surface has nowhere to be black, which is why carbon
+kept reading as a pale ring however dark `rgb` was set. `drawAtomBody` fills a
+disc for any element with `body: true`, solid to `BODY_CORE` (0.72) of the
+radius and then faded, so it reads as a sphere rather than a sticker.
+
+`bodyAlpha` defaults to **1**, and the comment explains the measurement that
+settled it. At 0.92 the carbon's outer side reads luminance **11.5** against a
+background of 20.7 — properly black — but the side lying over the bright part
+of a bond lobe comes back up to **26.4**, *lighter* than the scene, which is the
+one thing a black atom must not be. 8% of a near-white lobe is enough to undo
+it. At 1 it is 11–14 everywhere, including over each oxygen. The cost is that a
+C–O lobe is now drawn *around* the carbon rather than through it; dev slider
+**Carbon opacity** if that trade ever wants revisiting.
+
+**2. An ink.** `ELEMENTS.C.ink` is `205,210,224`, and it is what carbon's shell
+band and electron dots are drawn in. The body colour cannot do that job — black
+dots on a black atom are not dots. The identity colour and the drawing colour
+come apart here and only here; every other element leaves `ink` unset and
+`elemInk` falls back to `rgb`.
+
+**3. A layer.** `ELEMENTS.C.layer` is 1, and `byLayer` sorts atoms so higher
+layers are painted last. Carbon is the centre of everything it is in, so it is
+always the one with neighbours overlapping it, and **a black atom under a red
+oxygen is just a darker red.** Over the top it is a black disc against red.
+
+The electrons are deliberately *not* in that sort — they are painted after every
+body, on both the Sandbox and its thumbnails. The shared pair in a C–O gap falls
+**inside** the carbon's own radius (the bond is 58 px, the carbon's radius 51),
+so a carbon painted over them would hide the very dots the Lewis reading is made
+of.
+
+### The scene had to come off the floor
+
+Black on a background two values off black is not a colour, it is a hole. The
+themes each carry a near-black `bg` and the canvases cleared to a hardcoded copy
+of theme A's `#05040f` = `rgb(5,4,15)`. The scene now sits a measured `bgLift`
+above whatever the theme's base is — **the theme still owns the hue, the lift
+owns how far off the floor it sits** — weighted toward blue the way the base
+colours are, so lifting it does not wash the tint out to grey.
+
+Default 34, giving `rgb(20,18,49)` on theme A. Dev slider **Scene lift**; at 0
+it reproduces `rgb(5,4,15)` exactly, which is the check that nothing else moved.
+
+**The bar chart's panel had to come with it.** It was a fixed
+`rgba(4,3,20,0.88)`, which over the old `(5,4,15)` scene composited to `(4,3,19)`
+— all but the same colour, which is why it read as a strip of the background
+with a glowing edge rather than a slab. Lifting the scene alone turned it into a
+dark rectangle beside a lighter scene. `panelBg()` now derives it from the scene
+by the ratios it used to sit at, so it stays a hair darker and a hair bluer than
+whatever the scene is, on every theme.
 
 ### The glow needed a wider ceiling, and then a compressed one
 

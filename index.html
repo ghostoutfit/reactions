@@ -27,7 +27,7 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
   body {
-    background: #05040f;
+    background: #05040f;   /* replaced at startup by applySceneBg() */
     color: var(--text-bright);
     font-family: 'Lexend', sans-serif;
     overflow: hidden;
@@ -1004,17 +1004,105 @@ const ELEMENTS = {
   H:  { label: 'H',  rgb: '185,192,205', rScale: 1.00 },   // grey
   O:  { label: 'O',  rgb: '232,56,47',   rScale: 1.27 },   // red
   He: { label: 'He', rgb: '127,219,232', rScale: 1.17 },   // pale cyan — noble
-  // Carbon is CPK's dark grey, but not SO dark that it stops glowing: everything
-  // on these tabs is drawn as light on black, and a true graphite carbon loses
-  // its shell bands and its electron dots against the background. 110,120,138 is
-  // dark enough to read as "the dark one" beside hydrogen's 185,192,205 and
-  // still carries a visible halo. Size does the rest of the work — C is 1.42 to
-  // H's 1.00, the biggest atom here.
-  C:  { label: 'C',  rgb: '110,120,138', rScale: 1.42 },   // dark slate (C 1.70 Å)
+  // Carbon is CPK black, and black needs two things the other elements do not.
+  //
+  // `ink` is what its SHELL BAND and ELECTRON DOTS are drawn in. The body
+  // colour cannot do that job: black dots on a black atom are not dots. So the
+  // identity colour and the drawing colour come apart here, and only here —
+  // every other element leaves `ink` unset and keeps using `rgb` for both.
+  //
+  // `layer` lifts it above the other atoms in every pass. Carbon is the centre
+  // of everything it is in, so it is always the one with neighbours overlapping
+  // it, and a black atom UNDER a red oxygen is just a darker red. Drawn over the
+  // top, it is a black disc against red, which is what it should look like.
+  C:  { label: 'C',  rgb: '10,10,14', rScale: 1.42,        // CPK black (C 1.70 Å)
+        ink: '205,210,224', layer: 1, body: true },
 };
+// The colour an element's shells and electrons are drawn in, which is its own
+// colour unless it is too dark to see itself by.
+function elemInk(el) {
+  const e = ELEMENTS[el] || ELEMENTS[DEFAULT_ELEMENT];
+  return e.ink || e.rgb;
+}
+function elemLayer(el) { return (ELEMENTS[el] && ELEMENTS[el].layer) || 0; }
+
+// A FILLED body, for an element whose colour is the thing you are meant to see
+// rather than a tint on a glow. Every other atom here is drawn as light — a
+// shell band and a nucleus over the background — and that works because every
+// other colour is lighter than the background. Black is not: an atom with no
+// surface has nowhere to be black, which is why carbon kept reading as a pale
+// ring however dark its `rgb` was set.
+//
+// Solid to BODY_CORE of the radius, then faded out, so it reads as a sphere
+// rather than a sticker cut from paper.
+//
+// `bodyAlpha` is the trade-off, and it is a slider because it is a real one.
+// The body has to COVER what is behind it — that is the whole point — but what
+// is behind a carbon is usually a BOND'S FIELD, which is the One Bond tab's
+// entire reading. Measured at 0.92: the carbon's outer side reads lum 11.5
+// against a background of 20.7, properly black, but the side lying over the
+// bright part of the lobe comes back up to 26.4 — LIGHTER than the scene, which
+// is the one thing a black atom must not be. 8% of a near-white lobe is enough
+// to undo it. So the default is 1: opaque, black everywhere, and the lobe is
+// drawn around the carbon rather than through it. Dev slider `Carbon opacity`.
+const BODY_CORE = 0.72;
+let bodyAlpha = 1;
+function drawAtomBody(c, x, y, el, vr) {
+  const e = ELEMENTS[el];
+  if (!e || !e.body) return;
+  const g = c.createRadialGradient(x, y, 0, x, y, vr);
+  g.addColorStop(0,          'rgba(' + e.rgb + ',' + bodyAlpha + ')');
+  g.addColorStop(BODY_CORE,  'rgba(' + e.rgb + ',' + (bodyAlpha * 0.97) + ')');
+  g.addColorStop(0.9,        'rgba(' + e.rgb + ',' + (bodyAlpha * 0.55) + ')');
+  g.addColorStop(1,          'rgba(' + e.rgb + ',0)');
+  c.fillStyle = g;
+  c.beginPath(); c.arc(x, y, vr, 0, Math.PI * 2); c.fill();
+}
+// Atoms in the order they should be PAINTED: higher layers last, so they land
+// on top. A stable sort, so atoms on one layer keep the order they were given.
+function byLayer(atoms) {
+  return atoms.map((p, i) => [p, i])
+              .sort((a, b) => elemLayer(a[0].el) - elemLayer(b[0].el) || a[1] - b[1])
+              .map(a => a[0]);
+}
 const DEFAULT_ELEMENT = 'H';
 function elemOf(p) { return ELEMENTS[p.el] || ELEMENTS[DEFAULT_ELEMENT]; }
 const rgba = (rgb, a) => `rgba(${rgb},${a})`;
+
+// ── How dark the scene is ───────────────────────────────────────────────────
+// The themes each carry a near-black `bg`, and the canvases used to clear to a
+// hardcoded copy of theme A's. Carbon broke that: it reads as BLACK, and black
+// on a background two values off black is not a colour, it is a hole. So the
+// scene sits a measured amount above whatever the theme's base is — the theme
+// still owns the hue, this owns how far off the floor it sits.
+//
+// The lift is weighted toward blue the way the base colours are, so lifting it
+// does not wash the tint out to grey. Dev slider `Scene lift`.
+let bgLift = 34;
+let themeBg = '#05040f';
+function sceneBgRgb() {
+  const [r, g, b] = _rgbOf(themeBg).split(',').map(Number);
+  return [Math.min(255, r + Math.round(bgLift * 0.45)),
+          Math.min(255, g + Math.round(bgLift * 0.40)),
+          Math.min(255, b + bgLift)];
+}
+function sceneBg() { return 'rgb(' + sceneBgRgb().join(',') + ')'; }
+
+// The bar chart's panel. It was a fixed rgba(4,3,20,0.88), which over the old
+// (5,4,15) scene composited to (4,3,19) — all but the same colour, which is why
+// it read as a strip of the background with a glowing edge rather than a slab.
+// Lifting the scene without lifting this turned it into a dark rectangle beside
+// a lighter scene. It now follows the scene by the ratios it used to sit at,
+// so it stays a hair darker and a hair bluer than whatever the scene is.
+function panelBg() {
+  const [r, g, b] = sceneBgRgb();
+  return 'rgba(' + Math.round(r * 0.8) + ',' + Math.round(g * 0.75) + ',' +
+                   Math.min(255, Math.round(b * 1.33)) + ',0.88)';
+}
+function applySceneBg() {
+  document.body.style.background = sceneBg();
+  document.documentElement.style.setProperty('--bg', sceneBg());
+}
 
 // Centre-to-centre bond length, as a fraction of the two atoms' radii summed:
 // < 1 so bonded atoms visibly overlap the way a space-filling model does.
@@ -3783,7 +3871,7 @@ function drawWalls() {
 }
 
 function drawWorld() {
-  ctx.fillStyle = document.body.classList.contains('screenshot-mode') ? getBgColor() : '#05040f';
+  ctx.fillStyle = document.body.classList.contains('screenshot-mode') ? getBgColor() : sceneBg();
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   ctx.save();
@@ -3873,7 +3961,7 @@ function shellWobbleAt(seed, r) {
 
 function drawAtomShells(c, p) {
   drawShellBands(c, p.x, p.y, p.el, valenceRadius(p.el),
-                 ELEMENTS[p.el].rgb, worldNucleusR(p.el));
+                 elemInk(p.el), worldNucleusR(p.el));
 }
 
 // The inner shells' electrons. Reactions models only valence electrons — the
@@ -3939,7 +4027,7 @@ function drawElectronsAsDots(b, dc = ctx) {
       ly = at.ly + r * Math.sin(ang) + wy;
     }
     drawElectronDot(dc, b.x + lx * ca - ly * sa, b.y + lx * sa + ly * ca,
-                    ELEMENTS[e.el].rgb, false, SHELL_DOT_R);
+                    elemInk(e.el), false, SHELL_DOT_R);
   }
 }
 
@@ -4184,7 +4272,7 @@ function drawBarChart() {
   const LIGHT = document.body.classList.contains('screenshot-mode');
 
   c.save();
-  c.fillStyle = LIGHT ? 'rgba(255,255,255,0.96)' : 'rgba(4,3,20,0.88)';
+  c.fillStyle = LIGHT ? 'rgba(255,255,255,0.96)' : panelBg();
   c.fillRect(0, 0, W, H);
 
   // Left border glow
@@ -4575,6 +4663,17 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     row('devFlare',   'Flare on impact', 0,    5,   0.1,  FLARE_GAIN,  '#46a5ff') +
     '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
     '<div style="font-size:9px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.4;margin-top:8px;">' +
+      'Scene</div>' +
+    row('devBgLift',  'Scene lift',      0,   60,  1,    bgLift,           '#9fb0ff') +
+    row('devBodyA',   'Carbon opacity',  0.5, 1,   0.02, bodyAlpha,        '#9fb0ff') +
+    '<div style="opacity:0.45;font-size:10px;">1 = the black body covers the ' +
+      'bond field behind it; lower lets the lobe through, at the cost of the ' +
+      'carbon reading lighter than the scene where the lobe is brightest</div>' +
+    '<div style="opacity:0.45;font-size:10px;">how far the background sits above ' +
+      'the theme’s near-black. 0 is the old floor, on which a CPK-black ' +
+      'carbon is a hole rather than a colour</div>' +
+    '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
+    '<div style="font-size:9px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.4;margin-top:8px;">' +
       'One Bond tab</div>' +
     row('devBLobeW',  'Lobe width',      0.1,  0.8, 0.02, BOND_FIELD_WIDTH, '#7b6fff') +
     row('devBLobeG',  'Lobe brightness', 0.3,  3,   0.05, BOND_FIELD_GAIN,  '#7b6fff') +
@@ -4700,6 +4799,8 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   bind('devBFloor',   v => BOND_FIELD_FLOOR = v, false, v => v.toFixed(2));
   bind('devBBoost',   v => BOND_FIELD_BOOST = v, false, v => v.toFixed(2));
   bind('devBGamma',   v => bondShownGamma = v, false, v => v.toFixed(2));
+  bind('devBgLift',   v => { bgLift = v; applySceneBg(); }, false, v => v.toFixed(0));
+  bind('devBodyA',    v => bodyAlpha = v, false, v => v.toFixed(2));
   bind('devLoneArc',  v => { loneArcFrac = v;
          for (const b of world.bodies) buildElectrons(b);
          if (bondTab.on) initBondElectrons(); },
@@ -4864,7 +4965,8 @@ function applyTheme(key) {
   r.setProperty('--ui-border',    t.uiborder);
   r.setProperty('--text-dim',     t.textdim);
   r.setProperty('--text-bright',  t.textbright);
-  document.body.style.background = t.bg;
+  themeBg = t.bg;
+  applySceneBg();
   document.body.classList.remove('screenshot-mode');
   document.getElementById('themeLight').classList.remove('active');
   document.querySelectorAll('.theme-btn:not(#themeLight):not([data-theme="L"])').forEach(b => b.classList.remove('active'));
@@ -5638,7 +5740,7 @@ function stepBondTab(dt) {
 function drawBondTab() {
   const W = canvas.width, H = canvas.height;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--bg') || '#05040f';
+  ctx.fillStyle = sceneBg();
   ctx.fillRect(0, 0, W, H);
 
   const [A, B] = bondTabAtoms();
@@ -5675,9 +5777,13 @@ function drawBondTab() {
   drawFieldHeatmap(ctx, seg, W, H,
     { width: BOND_FIELD_WIDTH, gain: BOND_FIELD_GAIN, colormap: BOND_COLORMAP });
 
-  // Shell bands under everything, so the electrons sit on top of their shells.
-  drawShellBands(ctx, A.x, A.y, A.el, valenceRadius(A.el) * z, ELEMENTS[A.el].rgb);
-  drawShellBands(ctx, B.x, B.y, B.el, valenceRadius(B.el) * z, ELEMENTS[B.el].rgb);
+  // Shell bands under everything, so the electrons sit on top of their shells —
+  // and in layer order, so a C–O squeezed to where the two discs overlap shows
+  // the carbon in front of the oxygen rather than tinted by it.
+  for (const at of byLayer([A, B])) {
+    drawAtomBody(ctx, at.x, at.y, at.el, valenceRadius(at.el) * z);
+    drawShellBands(ctx, at.x, at.y, at.el, valenceRadius(at.el) * z, elemInk(at.el));
+  }
 
   // The two nuclei. No halo around them: the only glow on this screen should
   // be the bond's. An atom-coloured cloud at the valence radius read as a
@@ -5699,7 +5805,7 @@ function drawBondTab() {
     const ang = e.ang + bondTab.spin;
     const [wx, wy] = shellWobbleAt(e.ang * 3.1 + e.side * 1.9 + e.shell, r);
     drawElectronDot(ctx, at.x + Math.cos(ang) * r + wx, at.y + Math.sin(ang) * r + wy,
-                    e.inner ? INNER_E_COLOUR : ELEMENTS[at.el].rgb, e.inner);
+                    e.inner ? INNER_E_COLOUR : elemInk(at.el), e.inner);
   }
 
   // The bonding electrons last, over everything. Each keeps the colour of the
@@ -5925,7 +6031,7 @@ function takeBondSnapshot() {
   const thumb = document.createElement('canvas');
   thumb.width = 192; thumb.height = Math.round(192 / SNAP_ASPECT);
   const tc = thumb.getContext('2d');
-  tc.fillStyle = getComputedStyle(document.body).getPropertyValue('--bg') || '#05040f';
+  tc.fillStyle = sceneBg();
   tc.fillRect(0, 0, thumb.width, thumb.height);
   // drawBondTab has already painted this frame, so the canvas is current.
   tc.drawImage(canvas, sx, sy, cw, ch, 0, 0, thumb.width, thumb.height);
@@ -6310,7 +6416,7 @@ function sbRelax() {
 function drawSandbox() {
   const W = canvas.width, H = canvas.height;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--bg') || '#05040f';
+  ctx.fillStyle = sceneBg();
   ctx.fillRect(0, 0, W, H);
   const A = sandbox.atoms;
 
@@ -6333,11 +6439,20 @@ function drawSandbox() {
       { width: BOND_FIELD_WIDTH, gain: BOND_FIELD_GAIN, colormap: BOND_COLORMAP });
   }
 
-  for (const p of A) drawShellBands(ctx, p.x, p.y, p.el, valenceRadius(p.el),
-                                    ELEMENTS[p.el].rgb, worldNucleusR(p.el));
-  for (const p of A) drawInnerElectrons(ctx, p);
+  // Painted in layer order, so carbon lands on top of the oxygens it sits
+  // between rather than under them. The ELECTRONS are not in this: they go on
+  // after every body, because the shared pair in a C–O gap falls INSIDE the
+  // carbon's own radius, and a carbon painted over them would hide the very
+  // dots the Lewis reading is made of.
+  const P = byLayer(A);
+  for (const p of P) {
+    drawAtomBody(ctx, p.x, p.y, p.el, valenceRadius(p.el));
+    drawShellBands(ctx, p.x, p.y, p.el, valenceRadius(p.el),
+                   elemInk(p.el), worldNucleusR(p.el));
+  }
+  for (const p of P) drawInnerElectrons(ctx, p);
+  for (const p of P) drawNucleons(ctx, p.x, p.y, p.el, shellWobble, WORLD_NUCLEON_R);
   sbDrawValenceElectrons(ctx, A, sandbox.bonds);
-  for (const p of A) drawNucleons(ctx, p.x, p.y, p.el, shellWobble, WORLD_NUCLEON_R);
 
   // A line along the bond under the pointer says the whole molecule is the
   // handle; a ring says the single atom is.
@@ -6411,7 +6526,7 @@ function sbDrawValenceElectrons(c, A, bonds) {
         const [wx, wy] = shellWobbleAt(b.i * 3.3 + b.k * 1.7 + pr * 5.9 + q * 2.1, spread);
         drawElectronDot(c, mx + ux * along + px * off + wx,
                              my + uy * along + py * off + wy,
-                        ELEMENTS[q ? pk.el : pi.el].rgb, false, SHELL_DOT_R);
+                        elemInk(q ? pk.el : pi.el), false, SHELL_DOT_R);
       }
     }
   }
@@ -6437,7 +6552,7 @@ function sbDrawValenceElectrons(c, A, bonds) {
         : facing + q * Math.PI * 2 * 0.6180339887498949;
       const [wx, wy] = shellWobbleAt(ang * 3.1 + i, r);
       drawElectronDot(c, p.x + Math.cos(ang) * r + wx, p.y + Math.sin(ang) * r + wy,
-                      ELEMENTS[p.el].rgb, false, SHELL_DOT_R);
+                      elemInk(p.el), false, SHELL_DOT_R);
     }
   });
 }
@@ -6499,11 +6614,15 @@ function sbThumb(cv, shape) {
   })), SB_THUMB_W, SB_THUMB_H,
     { width: BOND_FIELD_WIDTH, gain: BOND_FIELD_GAIN, colormap: BOND_COLORMAP });
 
-  for (const p of A) drawShellBands(c, p.x, p.y, p.el, valenceRadius(p.el),
-                                    ELEMENTS[p.el].rgb, worldNucleusR(p.el));
-  for (const p of A) drawInnerElectrons(c, p);
+  const P = byLayer(A);                       // same layer order as the scene
+  for (const p of P) {
+    drawAtomBody(c, p.x, p.y, p.el, valenceRadius(p.el));
+    drawShellBands(c, p.x, p.y, p.el, valenceRadius(p.el),
+                   elemInk(p.el), worldNucleusR(p.el));
+  }
+  for (const p of P) drawInnerElectrons(c, p);
+  for (const p of P) drawNucleons(c, p.x, p.y, p.el, 0, WORLD_NUCLEON_R);
   sbDrawValenceElectrons(c, A, bonds);
-  for (const p of A) drawNucleons(c, p.x, p.y, p.el, 0, WORLD_NUCLEON_R);
 }
 
 // ── Placing, dragging, reading out ──────────────────────────────────────────
