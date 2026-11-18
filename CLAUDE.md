@@ -757,6 +757,70 @@ dose per hit and ~3× as many hits: **~27× the pumping rate for 3× the speed**
 That is the entire separation between Low and High, and it is why no
 `tempLevel` test appears anywhere in the mechanism.
 
+#### Bond storage: three ways, on one dev control
+
+The stack above is a modelling **choice**, and the other two choices are worth
+being able to see beside it. Dev panel, under Bond breaking, as `vibMode`:
+
+| setting | stacks? | colour ramp | bar chart | breaks on |
+|---|---|---|---|---|
+| `shown` *(ships)* | yes, to `bondLevels` | reads it | counts it | the running total |
+| `none` | no | nothing to read | nothing to count | one hit alone |
+| `hidden` | yes, identically | reads **zero** | counts **nothing** | the running total |
+
+**`none` — one hit or nothing.** A hit either carries a whole dissociation
+energy on its own or the bond shrugs it off: the dose goes straight back into
+the motion the restitution took it out of, in the same step, and the bond is
+left exactly as it was. No bite out of the motion, so no `sag` either — the
+band has nothing to make allowances for when the energy never actually left.
+This is the honest hard-sphere reading, and it is the setting for asking whether
+accumulation is doing real work or just making the sim feel busier.
+
+Note the restitution still runs and the energy is handed back by scaling each
+body's velocity, so the pair separates in the direction an inelastic bounce set
+but at elastic speed. Same energy, very slightly different bounce. Deciding
+before the impulse instead would be a bigger restructure for no visible gain.
+
+**`hidden` — the same stack, with the lights off.** Stacks and breaks *exactly*
+like `shown`; the colour ramp reads zero and the bar chart never counts it, so a
+bond gives no warning and the bars do not move until it actually goes. This is
+provably display-only: `vibLoad` is called from two places, both of them
+drawing, and `fieldsKJ` reaches the physics nowhere — `anchorEnergyTotal` runs
+only at spawn, when nothing is stored, and `motionKJ` is read only by the bar.
+It is the setting for asking whether the ramp and the rising fields bar are what
+make the breaking legible, or whether the world reads the same without them.
+
+Hiding it loses nothing: motion is read off the constant total as the remainder,
+so `hidden` simply reports the stored energy as still being in motion. Breaking
+then moves the bars by the whole dissociation energy at the moment it happens,
+instead of part of it leaking across beforehand.
+
+Measured — two H₂CO₃ taken to atoms, which needs 8 breaks and has no
+recombination to confound it, twelve 90 s runs at Med:
+
+| | mean breaks | first break |
+|---|---|---|
+| `shown` | 4.3 | 16.7 s |
+| `hidden` | **4.3** | 19.4 s |
+| `none` | 3.8 | **28.4 s** |
+
+`hidden` lands on `shown`'s number exactly, which is the claim. At **High** all
+three reach 8 of 8 in every run — single hits there routinely carry a whole
+dissociation energy, so the stack has little left to contribute, and `none` only
+delays the first break (≈5.9 s against ≈3.0 s). At **Low** none of the three
+breaks anything in 90 s. So the setting bites hardest at Med, which is where the
+question it asks is interesting.
+
+Changing the setting **hands back whatever the world is holding** — the same
+contract the strong-water toggle keeps — rather than leaving energy in a field
+the new mode cannot fill, release or show. Measured across a `shown → hidden`
+switch holding 220 kJ/mol: fields −220, motion +220, real total unchanged. With
+the stack off, a join's leftover goes to speed rather than a glow, since a bond
+that cannot hold a collision's energy cannot hold a join's either.
+
+The dev diagnostics — `energySplit`, `vibPeak`, `runBreakTests` — stay honest in
+all three. The secret is kept from the picture, not from the instruments.
+
 #### The bond that would actually let go
 
 With two atoms there was one candidate and this question did not exist. With six

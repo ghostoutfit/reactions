@@ -3376,6 +3376,9 @@ function breakThreshold(b) {
 // of capacity leaves a real window where the bond is fully pink and still
 // whole, which is the "about to go" the colour is for.
 function vibLoad(b) {
+  // 'hidden' keeps the accumulation and blinds the colour to it — this is the
+  // single place the ramp reads the field, so nothing else has to know.
+  if (!vibVisible()) return 0;
   const f = bondEnergyFactor(b);
   const cap = breakEnergy * colourFull * f;
   return cap > 0 ? Math.min(1, b.vib / cap) : 0;
@@ -3458,14 +3461,88 @@ function canStoreVib(b) {
   return b.els.length > 1 && !(strongWater && isWater(b));
 }
 
+// ─── HOW A BOND HOLDS WHAT IT IS GIVEN ───────────────────────────────────────
+// Three ways, on one dev-panel control, because the stack above is a modelling
+// CHOICE and the other two choices are worth being able to see beside it.
+//
+//   'shown'  — what ships, and everything above describes it. A bond stacks up
+//              to `bondLevels` collisions' worth, the colour ramp reads it, and
+//              the bar chart counts it as energy that has gone into the field.
+//              A bond breaks because one hit was nearly enough and the bond was
+//              already loaded, which is a story you can watch.
+//
+//   'none'   — no stack at all. A hit either carries a whole dissociation
+//              energy on its own or the bond shrugs it off: the dose goes
+//              straight back into the motion it came out of, in the same step,
+//              and the bond is exactly as it was. Nothing is ever stored, so
+//              there is nothing to colour and nothing for the bars to count.
+//              This is the honest hard-sphere reading — a bond breaks because
+//              ONE collision was violent enough, full stop — and it makes
+//              breaking much rarer, which is the point of having it.
+//
+//   'hidden' — stacks and breaks EXACTLY like 'shown', and shows nothing. The
+//              colour ramp reads zero and the bar chart never counts it, so a
+//              bond gives no warning and the bars do not move until it goes.
+//              The accumulation is real and is doing all the same work; it is
+//              only the two displays that are blind to it. For asking whether
+//              the ramp and the rising fields bar are what make the breaking
+//              legible, or whether the world reads the same without them.
+//
+// The dev diagnostics (`energySplit`, `vibPeak`, `runBreakTests`) stay honest in
+// all three: the secret is kept from the picture, not from the instruments.
+let vibMode = 'shown';
+const VIB_MODES = {
+  shown:  'stepped, shown',
+  none:   'one hit or nothing',
+  hidden: 'stepped, hidden',
+};
+function vibStacks()  { return vibMode !== 'none'; }
+function vibVisible() { return vibMode !== 'hidden'; }
+
+// Changing the mode hands back whatever the world is holding, rather than
+// leaving it in a field that the new mode cannot fill, release or show. The
+// energy moves between the two bars and the total does not change — the same
+// contract the strong-water toggle keeps, and it is what stops the bars jumping
+// as the switch is thrown.
+function setVibMode(name) {
+  if (!VIB_MODES[name] || name === vibMode) return;
+  vibMode = name;
+  for (const b of world.bodies) {
+    if (!(b.vib > 0)) continue;
+    returnFieldEnergy(b, b.vib * doseUnit());
+    b.vib = 0; b.vibN = 0;
+  }
+  logAction('Bond storage: ' + VIB_MODES[name]);
+}
+
 function queueIfBroken(b, energy) {
   if (!canStoreVib(b) || b.broken) return;
+  const dose = energy / doseUnit();
+
+  // NO STACK: this hit breaks the bond on its own or it does not. What does not
+  // break goes straight back into the motion the restitution took it out of, in
+  // the same step, so the bond is left exactly as it was and nothing is lost.
+  // No bite out of the motion either, so no `sag` — the band has nothing to
+  // make allowances for when the energy never actually left.
+  if (!vibStacks()) {
+    if (dose > vibPeak) vibPeak = dose;
+    if (breakBonds && dose >= breakThreshold(b)) {
+      const ke0 = 0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy);
+      b.sag = Math.min(1, b.sag + energy / Math.max(1e-6, ke0 + energy));
+      b.vib = dose;
+      b.broken = dose;
+      world.breaking.push(b);
+      return;
+    }
+    returnFieldEnergy(b, energy);
+    return;
+  }
+
   // Record how big a bite this was out of THIS body's motion, so the band lets
   // it run slow for a moment instead of buying the speed back off its spin.
   const ke = 0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy);
   b.sag = Math.min(1, b.sag + energy / Math.max(1e-6, ke + energy));
 
-  const dose = energy / doseUnit();
   const sum  = b.vib + dose;
   if (sum > vibPeak) vibPeak = sum;
 
@@ -4057,7 +4134,9 @@ function joinBodies(a, b, els) {
   // straight back as speed, so nothing is created and nothing is lost either
   // way — fieldsKJ counts `vib`, so the bars balance whichever of the two it is.
   let left = spinE - rotE;
-  const room = joinVibCap * breakThreshold(nb) * doseUnit();
+  // A bond that cannot hold a collision's energy cannot hold a join's either,
+  // so with the stack off the whole lot goes to speed instead of a glow.
+  const room = vibStacks() ? joinVibCap * breakThreshold(nb) * doseUnit() : 0;
   if (left > 0 && room > 0) {
     const take = Math.min(left, room);
     nb.vib = take / doseUnit();
@@ -4204,6 +4283,14 @@ function energyInFields() {
   return world.bodies.reduce((a, b) => a + b.vib * u, 0);
 }
 
+// What the DISPLAYS are allowed to know about it. 'hidden' reports nothing
+// stored, so the line graph's fields trace and the bar chart both sit still
+// while a bond loads up, and move only when it actually breaks. The function
+// above stays honest, and the dev diagnostics read that one.
+function shownFieldEnergy() {
+  return vibVisible() ? energyInFields() : 0;
+}
+
 function energyOfMotion() {
   return world.bodies.reduce((a, b) =>
     a + 0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy)
@@ -4237,13 +4324,16 @@ function kjPerSim() { return BOND_ENERGY_MAX / (breakEnergy * doseUnit()); }
 // been put in; breaking it pays the remainder, which is why fields RISES when a
 // molecule comes apart.
 function fieldsKJ() {
-  let e = 0, stored = 0;
+  let e = 0;
   for (const b of world.bodies) {
     e += b.els.length * SB_FREE_ATOM;
     for (const bd of b.bonds) e -= bondEnergyOf(b, bd);
-    stored += b.vib;
   }
-  return e + stored * doseUnit() * kjPerSim();
+  // Motion is read off the total as the remainder, so leaving the stored term
+  // out does not lose it: 'hidden' simply reports it as still being in motion,
+  // which is exactly the secret being kept. Breaking still moves the bars by
+  // the whole dissociation energy at the moment it happens.
+  return e + shownFieldEnergy() * kjPerSim();
 }
 
 // THE TOTAL IS A CONSTANT, and motion is read off it as the remainder.
@@ -4718,7 +4808,7 @@ function resetEnergyTrace() {
 }
 
 function sampleEnergy() {
-  energyTrace.push({ t: world.time, motion: energyOfMotion(), fields: energyInFields() });
+  energyTrace.push({ t: world.time, motion: energyOfMotion(), fields: shownFieldEnergy() });
   while (energyTrace.length > GRAPH_SAMPLES) energyTrace.shift();
   const cutoff = world.time - GRAPH_WINDOW;
   while (energyTrace.length && energyTrace[0].t < cutoff) energyTrace.shift();
@@ -5026,7 +5116,7 @@ function updateEnergyPct() {
   if (!el) return;
   el.textContent = Math.round(energyOfMotion() / energyAtSpawn * 100) + '%';
   const fl = document.getElementById('energyPctFields');
-  if (fl) fl.textContent = Math.round(energyInFields() / energyAtSpawn * 100) + '%';
+  if (fl) fl.textContent = Math.round(shownFieldEnergy() / energyAtSpawn * 100) + '%';
 }
 
 // With the band off the graph is a correctness check — a flat line means the
@@ -5265,6 +5355,16 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
       '<span>Hard hits break bonds</span>' +
     '</label>' +
     '<div id="devBreakNote" style="opacity:0.45;font-size:10px;margin-left:21px;"></div>' +
+    '<label style="display:flex;justify-content:space-between;align-items:center;margin:9px 0 3px;">' +
+      '<span>Bond storage</span>' +
+      '<select id="devVibMode" style="background:#141822;color:#cfe3ff;border:1px solid #2a3344;' +
+        'border-radius:4px;font:inherit;font-size:11px;padding:1px 3px;max-width:118px;">' +
+        Object.keys(VIB_MODES).map(k =>
+          '<option value="' + k + '"' + (k === vibMode ? ' selected' : '') + '>' +
+          VIB_MODES[k] + '</option>').join('') +
+      '</select>' +
+    '</label>' +
+    '<div id="devVibModeNote" style="opacity:0.45;font-size:10px;"></div>' +
     row('devBreakH', 'Bond capacity',  0.5, 12, 0.25, breakEnergy,  '#ffc24a') +
     row('devColFull','Full pink at',    0.3, 1.2, 0.05, colourFull,   '#ffc24a') +
     row('devVibTau', 'Vibration hold',  0.3, 8, 0.1,  VIB_TAU,      '#ffc24a') +
@@ -5525,6 +5625,21 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     bondCircles = circles.checked;
     syncCirclesNote();
     logAction('H₂ bond circles ' + (bondCircles ? 'on' : 'off'));
+  });
+
+  // Whether a bond stacks collision energy, and whether anything shows it
+  const vmSel  = panel.querySelector('#devVibMode');
+  const vmNote = panel.querySelector('#devVibModeNote');
+  const syncVibModeNote = () => {
+    vmNote.textContent =
+      vibMode === 'none'   ? 'One hit carries a whole bond or the bond shrugs it off'
+    : vibMode === 'hidden' ? 'Stacks and breaks as usual; no colour, no bar, no warning'
+                           : 'Hits stack up to the bond’s order; colour and bars read it';
+  };
+  syncVibModeNote();
+  vmSel.addEventListener('change', () => {
+    setVibMode(vmSel.value);
+    syncVibModeNote();
   });
 
   // Which colour ramp the field lobes use
