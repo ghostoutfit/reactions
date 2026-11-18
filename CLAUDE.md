@@ -3252,13 +3252,65 @@ landmark with no corner at any of them, which is the point: the reaction moves
 in steps and the line that shows it should not look like it does.
 
 Labels: `REACTANTS` left, `PRODUCTS` right, `REACTION PROGRESS` centred under
-the axis — and **only that one is centred**. A second centred label below it
-read as a two-line caption rather than as two separate things. So the halfway
-mark is labelled **on the dashed line itself**, drawn last so it sits over the
-curves, placed midway between the two at that point and carrying its own
-backing: the gap between the curves is wide in one run and narrow in the next,
-so a position chosen in advance cannot be relied on. A vertical label up the
-dashed line was tried first and clipped, for the same reason.
+the axis — and **only that one is centred**. The halfway mark carries no words
+at all, just its dashed line. Three versions of naming it were built and all
+three came off: stacked under the title it read as a two-line caption, running
+up the dashed line it clipped, and sitting on the line in a backed pill it was a
+label looking for somewhere to not be in the way. The dashed line says where the
+midpoint is on its own.
+
+### Smoothing is done to the data, not to the spline
+
+The spline already has no corners — it is C1 through every landmark by
+construction — so the wiggles left in the line are not a drawing problem. They
+are in the numbers: each landmark is a single snapshot of a noisy world, taken
+at the one frame the reaction crossed that step, so neighbouring landmarks
+disagree by more than the reaction itself moved. Raising the spline's tension
+would only bulge those wiggles, not remove them.
+
+So a **Laplacian pass** over the landmark heights — each pulled towards the
+average of its two neighbours — run more times the further `graphSmooth` goes.
+Dev panel, under Line graph, default **0.35**.
+
+**Smoothing harder means more passes, never a heavier one.** The weight per pass
+is fixed at a half, because at a full weight a point is not pulled towards its
+neighbours' average, it is *replaced* by it: the odd and even landmarks stop
+talking to each other and the pass oscillates between two interleaved sets
+instead of diffusing. The first build had the slider set the weight, and the
+measured wiggle fell 36.7 → 14.0 → 12.2 → 11.6 → 11.0 as it went up and then
+**jumped back to 22.6 at the very top**. That last number is the oscillation and
+nothing else.
+
+The trade is hump height against wiggle — measured on one finished water run,
+wiggle as mean |second difference| × 1000, hump as the peak's rise above the
+reactants:
+
+| `graphSmooth` | hump kept | wiggle |
+|---|---|---|
+| 0 (raw) | 100% | 35.3 |
+| 0.2 | 86% | 15.4 |
+| **0.35** | **80%** | **14.4** |
+| 0.6 | 72% | 13.0 |
+| 1 | 60% | 11.4 |
+
+The knee is at about 0.2 — nearly all the noise goes for 14% of the hump, and
+past that you pay hump for very little. The wiggle never reaches zero because
+the hump itself has curvature; 11 is the shape, not noise, which is why even the
+top of the slider leaves a reaction curve rather than a straight line.
+
+Three things the pass does not touch:
+
+- **The ends are pinned.** The reactants' energy and the energy at the furthest
+  point reached are real readings about real states. Smoothing is here to take
+  the noise out of the path between them, not to move them.
+- **Heights only, never x.** Those are the progress levels, and 0.5 means every
+  molecule is in pieces. That one is not up for averaging — verified, the peak
+  stays at p = 0.5 at every setting.
+- **The mirror survives.** Motion and fields sum to 1 at every landmark and the
+  pass is linear and identical on both, so the smoothed pair still sums to 1.
+
+The markers read the smoothed heights too, so they sit on the line rather than
+beside it.
 
 ## What is deliberately left standing
 

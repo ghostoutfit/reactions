@@ -4896,22 +4896,77 @@ function sampleEnergy() {
   progressTrace.sort((a, b) => a.p - b.p);
 }
 
-// The recorded value at some progress, interpolated between landmarks when a
-// step was jumped over — a shatter can free three atoms at once, so the level
-// between them was never visited and has nothing recorded at it.
-function traceAt(key, p) {
+// SMOOTHING THE LINE, which is smoothing the DATA and not the spline.
+//
+// The spline already has no corners — it is C1 through every landmark by
+// construction — so the wiggles left in the line are not a drawing problem.
+// They are in the numbers: each landmark is a single snapshot of a noisy world,
+// taken at the one frame the reaction crossed that step, so neighbouring
+// landmarks disagree by more than the reaction itself moved. Raising the
+// spline's tension would only bulge those wiggles, not remove them.
+//
+// So a Laplacian pass over the landmark heights — each is pulled towards the
+// average of its two neighbours — run more times the further the slider goes.
+// At 0 the raw landmarks are drawn, which is where this started.
+//
+// SMOOTHING HARDER MEANS MORE PASSES, NEVER A HEAVIER ONE. The weight per pass
+// is fixed at a half, because at a full weight a point is not pulled towards
+// its neighbours' average, it is REPLACED by it — the odd and even landmarks
+// stop talking to each other and the pass oscillates between two interleaved
+// sets instead of diffusing. Measured on a finished water run, the wiggle in
+// the line fell 36.7 → 14.0 → 12.2 → 11.6 → 11.0 as the weight was raised, and
+// then jumped back to 22.6 at the very top. That last number is the oscillation
+// and nothing else, and it is why the slider now buys passes.
+//
+// The ends are PINNED. The reactants' energy and the energy at the reaction's
+// furthest point are both real readings about real states, and smoothing is
+// here to take the noise out of the path between them, not to move them.
+//
+// Heights only, never the x positions: those are the progress levels, and 0.5
+// means every molecule is in pieces. That one is not up for averaging.
+//
+// It cannot break the mirror, either: motion and fields sum to 1 at every
+// landmark, and the pass is linear and identical on both, so the smoothed pair
+// still sums to 1.
+let graphSmooth = 0.35;
+const SMOOTH_MAX_PASSES = 20;
+const SMOOTH_W = 0.5;
+
+function smoothedSeries(key) {
+  const v = progressTrace.map(s => s[key]);
+  if (v.length < 3 || graphSmooth <= 0) return v;
+  const total = Math.max(0, graphSmooth) * SMOOTH_MAX_PASSES;
+  const whole = Math.floor(total);
+  for (let pass = 0; pass <= whole; pass++) {
+    // The last one is a PART pass, so the slider slides instead of clicking
+    // from one whole pass to the next.
+    const w = SMOOTH_W * (pass < whole ? 1 : total - whole);
+    if (w <= 0) break;
+    const was = v.slice();
+    for (let i = 1; i < v.length - 1; i++) {
+      v[i] = was[i] + w * ((was[i - 1] + was[i + 1]) / 2 - was[i]);
+    }
+  }
+  return v;
+}
+
+// The drawn height at some progress, interpolated between landmarks when a step
+// was jumped over — a shatter can free three atoms at once, so the level between
+// them was never visited and has nothing recorded at it. Reads the smoothed
+// heights, so the marker sits on the line rather than beside it.
+function traceAt(vals, p) {
   const T = progressTrace;
-  if (!T.length) return 0;
-  if (p <= T[0].p) return T[0][key];
-  if (p >= T[T.length - 1].p) return T[T.length - 1][key];
+  if (!T.length || !vals.length) return 0;
+  if (p <= T[0].p) return vals[0];
+  if (p >= T[T.length - 1].p) return vals[vals.length - 1];
   for (let i = 0; i < T.length - 1; i++) {
     if (p >= T[i].p && p <= T[i + 1].p) {
       const span = T[i + 1].p - T[i].p;
       const f = span > 1e-9 ? (p - T[i].p) / span : 0;
-      return T[i][key] + f * (T[i + 1][key] - T[i][key]);
+      return vals[i] + f * (vals[i + 1] - vals[i]);
     }
   }
-  return T[T.length - 1][key];
+  return vals[vals.length - 1];
 }
 
 // A Catmull-Rom spline laid down as beziers: the curve passes through every
@@ -4978,9 +5033,12 @@ function drawEnergyGraph() {
 
   // The axis says what it is. A reaction coordinate with no words on it is just
   // a squiggle, and the two ends are the whole reason for drawing it this way.
-  // Only ONE label is centred under the axis — the title. A second centred label
-  // below it read as a two-line caption rather than as two separate things, so
-  // the halfway mark is labelled on the line itself, further down.
+  //
+  // Only ONE label is centred under the axis — the title. The halfway mark
+  // carries no words at all: the dashed line is enough to show where it is, and
+  // every version that named it — stacked under the title, running up the line,
+  // sitting on the line in a backed pill — was a label looking for somewhere to
+  // not be in the way.
   graphCtx.save();
   graphCtx.fillStyle = textCol;
   graphCtx.font = '700 9px Lexend, sans-serif';
@@ -5001,8 +5059,12 @@ function drawEnergyGraph() {
   // height the bar beside it stood at when the reaction passed that landmark.
   const py = (f) => TOP + gH * (1 - Math.max(0, Math.min(1, f)));
 
+  // Smoothed once per draw, then shared by the lines and the markers so the
+  // markers cannot drift off the curve they are supposed to be sitting on.
+  const series = { motion: smoothedSeries('motion'), fields: smoothedSeries('fields') };
+
   const stroke = (key, col, glow, lw, blur, alpha) => {
-    const pts = progressTrace.map(s => ({ x: px(s.p), y: py(s[key]) }));
+    const pts = progressTrace.map((s, i) => ({ x: px(s.p), y: py(series[key][i]) }));
     graphCtx.save();
     graphCtx.globalAlpha = alpha;
     graphCtx.shadowBlur = LIGHT ? 0 : blur;
@@ -5029,7 +5091,7 @@ function drawEnergyGraph() {
   const mx = px(progressNow);
   for (const [key, col, glow] of [['fields', fieldsCol, fieldsCol],
                                   ['motion', motionCol, motionGlow]]) {
-    const y = py(traceAt(key, progressNow));
+    const y = py(traceAt(series[key], progressNow));
     graphCtx.save();
     graphCtx.shadowBlur = LIGHT ? 0 : 10;
     graphCtx.shadowColor = glow;
@@ -5037,25 +5099,6 @@ function drawEnergyGraph() {
     graphCtx.beginPath(); graphCtx.arc(mx, y, 3.2, 0, Math.PI * 2); graphCtx.fill();
     graphCtx.restore();
   }
-
-  // THE HALFWAY MARK, labelled on the line and drawn last so it sits over the
-  // curves rather than under them. It goes midway between the two at that
-  // point, which is the emptiest the plot gets, and carries its own backing so
-  // it stays legible wherever the run happens to put the curves — the gap
-  // between them is wide in one run and narrow in the next, so a position
-  // chosen in advance cannot be relied on.
-  graphCtx.save();
-  graphCtx.font = '700 7px Lexend, sans-serif';
-  graphCtx.textAlign = 'center';
-  graphCtx.textBaseline = 'middle';
-  const label = 'ALL ATOMS FREE';
-  const tw = graphCtx.measureText(label).width;
-  const yMid = (py(traceAt('fields', 0.5)) + py(traceAt('motion', 0.5))) / 2;
-  graphCtx.fillStyle = LIGHT ? 'rgba(255,255,255,0.88)' : 'rgba(9,7,24,0.88)';
-  graphCtx.fillRect(px(0.5) - tw / 2 - 4, yMid - 6, tw + 8, 12);
-  graphCtx.fillStyle = dimCol;
-  graphCtx.fillText(label, px(0.5), yMid);
-  graphCtx.restore();
 }
 
 // ─── Energy bar chart ─────────────────────────────────────────────────────────
@@ -5568,6 +5611,12 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     row('devFieldsZero','Fields zero',   0, 3000, 50,  fieldsZeroKJ, '#00e5ff') +
     '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
     '<div style="font-size:9px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.4;margin-top:8px;">' +
+      'Line graph</div>' +
+    row('devGraphSmooth', 'Curve smoothing', 0, 1, 0.05, graphSmooth, '#00e5ff') +
+    '<div style="opacity:0.45;font-size:10px;">Averages each landmark towards its ' +
+      'neighbours. The two ends stay put.</div>' +
+    '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
+    '<div style="font-size:9px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.4;margin-top:8px;">' +
       'Recombination</div>' +
     '<label style="display:flex;align-items:center;gap:7px;margin:9px 0 2px;cursor:pointer;">' +
       '<input type="checkbox" id="devRecomb" style="margin:0">' +
@@ -5685,6 +5734,8 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   bind('devBarZero', v => barZeroAt  = v, false,
        v => Math.round(v * 100) + '% of the broken floor');
   bind('devFieldsZero', v => fieldsZeroKJ = v, false, v => Math.round(v) + ' kJ/mol');
+  bind('devGraphSmooth', v => graphSmooth = v, false,
+       v => v > 0 ? Math.round(v * 100) + '%' : 'raw steps');
   bind('devRecombPull', v => recombPull  = v, false, v => Math.round(v) + ' px/s²');
   bind('devRecombRange', v => recombRange = v, false, v => v.toFixed(1) + '× natural');
   bind('devJoinForm', v => joinFormSec = v, false,
