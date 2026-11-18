@@ -1023,13 +1023,53 @@ const ELEMENTS = {
   // it, and a black atom UNDER a red oxygen is just a darker red. Drawn over the
   // top, it is a black disc against red, which is what it should look like.
   C:  { label: 'C',  rgb: '10,10,14', rScale: 1.42,        // CPK black (C 1.70 Å)
-        ink: '205,210,224', layer: 1, body: true },
+        ink: '205,210,224', eInk: '0,0,0', layer: 1, body: true },
 };
 // The colour an element's shells and electrons are drawn in, which is its own
 // colour unless it is too dark to see itself by.
 function elemInk(el) {
   const e = ELEMENTS[el] || ELEMENTS[DEFAULT_ELEMENT];
   return e.ink || e.rgb;
+}
+
+// ─── CARBON'S THREE INKS ──────────────────────────────────────────────────────
+// `ink` started as one colour doing three jobs, and carbon is the element that
+// pulls them apart, because it is the only one whose own colour is too dark to
+// draw itself with. The three want different answers:
+//
+//   the SHELL BAND  wants to be dark, so a carbon reads as a black atom with a
+//                   faint ring rather than a bright grey halo with a black
+//                   middle. `carbonShellDark` pulls it towards black; it is a
+//                   slider because it is a judgement made by eye.
+//   the ELECTRONS   want to be TRULY BLACK. They are carbon's electrons and
+//                   carbon is black. Where one lies over a red oxygen or a
+//                   bright bond it reads as a hole punched in it, which is
+//                   exactly what a black dot should look like.
+//   the ICON RING   wants the ORIGINAL light grey and keeps it. An icon is 20
+//                   px across with no scene behind it, and the ring is the only
+//                   thing saying there is an atom there — darkening that is how
+//                   you get a blank circle. Scene rules do not apply at icon
+//                   size, and this is the one place the old comment's warning
+//                   still bites: a black ring on a black disc is not a ring.
+let carbonShellDark = 0.8;     // dev slider: how far C's band is pulled to black
+
+function darkenRGB(col, f) {
+  const k = Math.max(0, 1 - f);
+  return _rgbOf(col).split(',').map(v => Math.round(Number(v) * k)).join(',');
+}
+
+// For the shell BAND. Scoped to elements with a body, which is carbon and only
+// carbon — the ones dark enough to need the split in the first place.
+function elemShellInk(el) {
+  const e = ELEMENTS[el] || ELEMENTS[DEFAULT_ELEMENT];
+  const base = e.ink || e.rgb;
+  return (e.body && carbonShellDark > 0) ? darkenRGB(base, carbonShellDark) : base;
+}
+
+// For the electron DOTS.
+function elemEInk(el) {
+  const e = ELEMENTS[el] || ELEMENTS[DEFAULT_ELEMENT];
+  return e.eInk || e.ink || e.rgb;
 }
 function elemLayer(el) { return (ELEMENTS[el] && ELEMENTS[el].layer) || 0; }
 
@@ -2569,6 +2609,28 @@ const MOLECULE_SHAPES = {
     geometry: () => sbCarbonicAcid(),
     //  0 C, 1 O (the double, straight up), 2 O + 3 H, 4 O + 5 H
     bonds: [[0, 1, 2], [0, 2, 1], [2, 3, 1], [0, 4, 1], [4, 5, 1]],
+  },
+  // CARBON DIOXIDE IS STRAIGHT, AND BOTH ITS BONDS ARE DOUBLE.
+  //
+  // Neither falls out of the generic path. A three-atom molecule with no shape
+  // of its own gets water's bend, and `moleculeBonds` would leave the two C–O
+  // orders to the element-pair table, which says single — the same table that
+  // could not tell carbonic acid's C=O from its two C–O. Both have to be said
+  // here. With them said, the carbon has spent all four of its electrons and
+  // has no lone pairs to bend anything with, which is exactly why it is linear.
+  //
+  // In H2CO3 only the oxygen with no hydrogen on it carries the double; the two
+  // hydroxyl oxygens are each full with a carbon and a hydrogen. Take both
+  // hydrogens off and those oxygens have a slot free again, and the molecule
+  // that is left is this one.
+  OCO: {
+    geometry: () => {
+      const r = bondLenFor('C', 'O', 2);
+      return [{ el: 'O', lx: -r, ly: 0 },
+              { el: 'C', lx:  0, ly: 0 },
+              { el: 'O', lx:  r, ly: 0 }];
+    },
+    bonds: [[0, 1, 2], [1, 2, 2]],
   },
 };
 function moleculeShape(els) { return MOLECULE_SHAPES[els.join('')] || null; }
@@ -4753,7 +4815,7 @@ function shellWobbleAt(seed, r) {
 
 function drawAtomShells(c, p) {
   drawShellBands(c, p.x, p.y, p.el, valenceRadius(p.el),
-                 elemInk(p.el), worldNucleusR(p.el));
+                 elemShellInk(p.el), worldNucleusR(p.el));
 }
 
 // The inner shells' electrons. Reactions models only valence electrons — the
@@ -4819,7 +4881,7 @@ function drawElectronsAsDots(b, dc = ctx) {
       ly = at.ly + r * Math.sin(ang) + wy;
     }
     drawElectronDot(dc, b.x + lx * ca - ly * sa, b.y + lx * sa + ly * ca,
-                    elemInk(e.el), false, SHELL_DOT_R);
+                    elemEInk(e.el), false, SHELL_DOT_R);
   }
 }
 
@@ -5773,6 +5835,10 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     row('devShHold',  'One Bond centre hold', 0.01, 1, 0.01, bondCentreHold, '#7bffd0') +
     '<div style="opacity:0.45;font-size:10px;">One Bond only \u2014 the shells ' +
       'view seats its bonding electrons outright</div>' +
+    row('devCDark',   'Carbon shell dark',  0, 1, 0.05, carbonShellDark, '#7bffd0') +
+    '<div style="opacity:0.45;font-size:10px;">how far carbon\u2019s outer band is ' +
+      'pulled to black; its electrons are black outright, and the icon ring is ' +
+      'left light so a 20 px icon is not a blank circle</div>' +
     '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
     '<label style="display:flex;align-items:center;gap:7px;margin:9px 0 2px;cursor:pointer;">' +
       '<input type="checkbox" id="devEqui" checked style="margin:0">' +
@@ -5894,6 +5960,8 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
          if (bondTab.on) initBondElectrons(); },
        false, v => Math.round(v * 360) + '\u00b0');
   bind('devShHold',   v => bondCentreHold = v, false, v => v.toFixed(2));
+  bind('devCDark',    v => carbonShellDark = v, false,
+       v => v <= 0 ? 'off' : Math.round(v * 100) + '% to black');
 
   // Equipartition on/off, so both can be compared side by side
   const equi = panel.querySelector('#devEqui');
@@ -6900,7 +6968,7 @@ function drawBondTab() {
   // the carbon in front of the oxygen rather than tinted by it.
   for (const at of byLayer([A, B])) {
     drawAtomBody(ctx, at.x, at.y, at.el, valenceRadius(at.el) * z);
-    drawShellBands(ctx, at.x, at.y, at.el, valenceRadius(at.el) * z, elemInk(at.el));
+    drawShellBands(ctx, at.x, at.y, at.el, valenceRadius(at.el) * z, elemShellInk(at.el));
   }
 
   // The two nuclei. No halo around them: the only glow on this screen should
@@ -6923,7 +6991,7 @@ function drawBondTab() {
     const ang = e.ang + bondTab.spin;
     const [wx, wy] = shellWobbleAt(e.ang * 3.1 + e.side * 1.9 + e.shell, r);
     drawElectronDot(ctx, at.x + Math.cos(ang) * r + wx, at.y + Math.sin(ang) * r + wy,
-                    e.inner ? INNER_E_COLOUR : elemInk(at.el), e.inner);
+                    e.inner ? INNER_E_COLOUR : elemEInk(at.el), e.inner);
   }
 
   // The bonding electrons last, over everything. Each keeps the colour of the
@@ -7399,9 +7467,21 @@ function sbSnapMolecule(mol) {
                       .sort((p, q) => wrapAngle(angOf(p) - base) - wrapAngle(angOf(q) - base));
     offs = new Map([[di, 0], [rest[0], -H2CO3_OCO], [rest[1], H2CO3_OCO]]);
   } else {
-    // Two neighbours open to water's bend; one sits on the axis. Three or more
-    // without a double share the circle evenly.
-    const spread = order.length === 2 ? H2O_ANGLE
+    // TWO NEIGHBOURS: BENT OR STRAIGHT, and the atom's own electrons decide.
+    //
+    // Water's oxygen keeps two lone pairs after its two bonds, and those pairs
+    // take up room — they push the hydrogens down to 104.5°. Carbon dioxide's
+    // carbon has spent all four of its electrons on the two double bonds, has
+    // nothing left over to push with, and is straight. Same rule, two answers.
+    //
+    // Read off the leftover electrons rather than by naming CO2, so it is the
+    // same arithmetic that already decides how many lone pairs get drawn on the
+    // atom — the picture and the shape cannot disagree about what is left.
+    //
+    // Three or more without a double still share the circle evenly.
+    const sharedAtC = order.reduce((s, i) => s + (ord.get(c + ',' + i) || 1), 0);
+    const loneAtC   = Math.max(0, (VALENCE[A[c].el] || 0) - sharedAtC);
+    const spread = order.length === 2 ? (loneAtC > 0 ? H2O_ANGLE : Math.PI)
                  : order.length > 2   ? Math.PI * 2 * (order.length - 1) / order.length
                  : 0;
     offs = new Map(order.map((i, k) =>
@@ -7566,7 +7646,7 @@ function drawSandbox() {
   for (const p of P) {
     drawAtomBody(ctx, p.x, p.y, p.el, valenceRadius(p.el));
     drawShellBands(ctx, p.x, p.y, p.el, valenceRadius(p.el),
-                   elemInk(p.el), worldNucleusR(p.el));
+                   elemShellInk(p.el), worldNucleusR(p.el));
   }
   for (const p of P) drawInnerElectrons(ctx, p);
   for (const p of P) drawNucleons(ctx, p.x, p.y, p.el, shellWobble, WORLD_NUCLEON_R);
@@ -7644,7 +7724,7 @@ function sbDrawValenceElectrons(c, A, bonds) {
         const [wx, wy] = shellWobbleAt(b.i * 3.3 + b.k * 1.7 + pr * 5.9 + q * 2.1, spread);
         drawElectronDot(c, mx + ux * along + px * off + wx,
                              my + uy * along + py * off + wy,
-                        elemInk(q ? pk.el : pi.el), false, SHELL_DOT_R);
+                        elemEInk(q ? pk.el : pi.el), false, SHELL_DOT_R);
       }
     }
   }
@@ -7670,7 +7750,7 @@ function sbDrawValenceElectrons(c, A, bonds) {
         : facing + q * Math.PI * 2 * 0.6180339887498949;
       const [wx, wy] = shellWobbleAt(ang * 3.1 + i, r);
       drawElectronDot(c, p.x + Math.cos(ang) * r + wx, p.y + Math.sin(ang) * r + wy,
-                      elemInk(p.el), false, SHELL_DOT_R);
+                      elemEInk(p.el), false, SHELL_DOT_R);
     }
   });
 }
@@ -7736,7 +7816,7 @@ function sbThumb(cv, shape) {
   for (const p of P) {
     drawAtomBody(c, p.x, p.y, p.el, valenceRadius(p.el));
     drawShellBands(c, p.x, p.y, p.el, valenceRadius(p.el),
-                   elemInk(p.el), worldNucleusR(p.el));
+                   elemShellInk(p.el), worldNucleusR(p.el));
   }
   for (const p of P) drawInnerElectrons(c, p);
   for (const p of P) drawNucleons(c, p.x, p.y, p.el, 0, WORLD_NUCLEON_R);

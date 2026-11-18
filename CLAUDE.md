@@ -1827,10 +1827,41 @@ C–O lobe is now drawn *around* the carbon rather than through it; dev slider
 **Carbon opacity** if that trade ever wants revisiting.
 
 **2. An ink.** `ELEMENTS.C.ink` is `205,210,224`, and it is what carbon's shell
-band and electron dots are drawn in. The body colour cannot do that job — black
+band and electron dots were drawn in. The body colour cannot do that job — black
 dots on a black atom are not dots. The identity colour and the drawing colour
 come apart here and only here; every other element leaves `ink` unset and
 `elemInk` falls back to `rgb`.
+
+#### …and the ink turned out to be three inks
+
+One colour was doing three jobs, and carbon is the element that pulls them
+apart, because it is the only one whose own colour is too dark to draw itself
+with. The three want different answers:
+
+| | function | carbon's value | why |
+|---|---|---|---|
+| shell band | `elemShellInk` | `41,42,45` at the default | a black atom wants a faint ring, not a bright grey halo round a black middle |
+| electron dots | `elemEInk` | `0,0,0` | they are carbon's electrons and carbon is black |
+| icon ring | `elemInk` | `205,210,224`, unchanged | an icon is 20 px with no scene behind it |
+
+`carbonShellDark` (dev slider **Carbon shell dark**, default **0.8**) pulls the
+band towards black; `darkenRGB` does the lerp. It is scoped to elements with
+`body: true`, which is carbon and only carbon — the ones dark enough to have
+needed the split in the first place.
+
+**The icon ring keeps the light grey and that is deliberate.** Scene rules do
+not apply at icon size: the ring is the only thing saying there is an atom
+there, and darkening it is how you get a blank circle. This is the one place the
+warning above still bites.
+
+**Truly black electrons are visible, which was not obvious.** They sit at the
+shell radius, just past where the body has faded, so against the halo they read
+as black pinpricks — checked on the free carbons a finished carbonic run leaves
+behind, where all four show clearly. The ones that fall *inside* the body are
+another matter: a C–O bonding pair is seated at the midpoint of a 50 px bond,
+which is inside the carbon's own radius, and there it is black on black. The
+Lewis reading in the Sandbox still has the oxygen's half of each shared pair,
+which is red and sits in the same gap.
 
 **3. A layer.** `ELEMENTS.C.layer` is 1, and `byLayer` sorts atoms so higher
 layers are painted last. Carbon is the centre of everything it is in, so it is
@@ -2512,6 +2543,47 @@ and neighbours keep the side they were already on so they do not swap.
 
 Verified: a built H₂O lands at **104.5°** with both O–H at **49 px**, the
 natural length.
+
+#### Two neighbours: bent or straight, and the atom's own electrons decide
+
+"Two of them open to water's 104.5°" was not a rule, it was water's answer
+applied to everything, and **CO₂ is straight**. Water's oxygen keeps two lone
+pairs after its two bonds and those pairs take up room — they push the hydrogens
+down to 104.5°. Carbon dioxide's carbon has spent all four of its electrons on
+the two double bonds, has nothing left over to push with, and is linear.
+
+So the spread is read off the leftover electrons, `VALENCE[el] − Σ bond order`,
+rather than by naming CO₂ — the same arithmetic that already decides how many
+lone pairs get *drawn* on the atom, so the picture and the shape cannot disagree
+about what is left. Any lone pair → bent; none → 180°.
+
+**Both C=O doubles were already right**, which is worth recording because it was
+the thing most likely to need fixing and did not. `sbPromoteBonds` places the
+singles first and then promotes any bond whose two atoms both still have a slot:
+on a CO₂ the carbon has used 2 of 4 and each oxygen 1 of 2, so *both* bonds
+promote and every atom ends full. On an H₂CO₃ the same rule promotes exactly one
+— the two hydroxyl oxygens are already full with a carbon and a hydrogen each,
+and only the bare oxygen has a slot. The Lewis structure arrives rather than
+being hard-coded, and it gives a different answer for the two molecules without
+being told about either.
+
+Verified on a hand-built CO₂: `C=O` and `C=O`, D **799** each, both at **50 px**,
+O=C=O at **180.0°**, carbon holding **0** lone pairs. And nothing else moved —
+water still 104.5° with two O–H singles, O₂ still order 2, H₂ still order 1, and
+H₂CO₃ still one double with its carbon's three angles at 125.5 / 125.5 / 109.
+
+The world has the same molecule in `MOLECULE_SHAPES.OCO`, and it has to say
+*both* things explicitly: a three-atom molecule with no shape of its own gets
+water's bend, and `moleculeBonds` would leave the two C–O orders to the
+element-pair table, which says single — the same table that could not tell
+carbonic acid's C=O from its two C–O. Verified: 180.0°, both orders 2, both
+50 px.
+
+**Not yet done, and flagged:** a CO₂ that appears in the *Reactions* tab by
+peeling an H₂CO₃ down is assembled from live coordinates, not from this table,
+so it keeps the ~125.5° it had inside its parent. Straightening it means
+re-snapping a peeled residue to its table shape when one exists, which is a
+visible jump at the break and a decision of its own.
 
 **Carbonic acid's angles come off the Lewis structure and VSEPR.** The carbon is
 sp² with no lone pair of its own, so its three oxygens are trigonal planar — but
