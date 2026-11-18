@@ -1803,76 +1803,58 @@ Added to all five element-keyed tables: `ELEMENTS` (`rScale` 1.42, from C's
 Size does part of the work on its own: at 1.42 it is the biggest atom here, and
 the nucleus shows six protons against oxygen's eight.
 
-### Carbon is black, and black took three things
+### Carbon is yellow, and yellow draws itself
 
-It was briefly a dark slate `110,120,138` — dark enough to read as "the dark
-one" beside hydrogen, light enough to keep glowing. That is not what carbon
-looks like. Making it actually black needed the renderer to learn three things,
-because **every other atom here is drawn as light on a near-black background,
-and that only works while every colour is lighter than the background.**
+`#ffee00` = `255,238,0`. It was CPK black for a long stretch, and black needed a
+pile of machinery no other element here wants. **All of it is gone**, because a
+colour lighter than the background needs none of it:
 
-**1. A body.** An atom was a shell band and a nucleus — a glow, with nothing
-filled in. An atom with no surface has nowhere to be black, which is why carbon
-kept reading as a pale ring however dark `rgb` was set. `drawAtomBody` fills a
-disc for any element with `body: true`, solid to `BODY_CORE` (0.72) of the
-radius and then faded, so it reads as a sphere rather than a sticker.
+| black needed | yellow needs |
+|---|---|
+| `body: true` and `drawAtomBody`, a filled disc, because an atom drawn as light has nowhere to be black | nothing — it is drawn as light, like H, O and He |
+| a separate `ink`, because black dots on a black atom are not dots | nothing — one colour does the band, the dots and the icon ring |
+| that ink split three ways, the band dimmed by `carbonShellDark` and the dots forced to `0,0,0` | nothing |
 
-`bodyAlpha` defaults to **1**, and the comment explains the measurement that
-settled it. At 0.92 the carbon's outer side reads luminance **11.5** against a
-background of 20.7 — properly black — but the side lying over the bright part
-of a bond lobe comes back up to **26.4**, *lighter* than the scene, which is the
-one thing a black atom must not be. 8% of a near-white lobe is enough to undo
-it. At 1 it is 11–14 everywhere, including over each oxygen. The cost is that a
-C–O lobe is now drawn *around* the carbon rather than through it; dev slider
-**Carbon opacity** if that trade ever wants revisiting.
+`ELEMENTS.C` is now an ordinary row in the table: `rgb`, `rScale`, `layer`.
 
-**2. An ink.** `ELEMENTS.C.ink` is `205,210,224`, and it is what carbon's shell
-band and electron dots were drawn in. The body colour cannot do that job — black
-dots on a black atom are not dots. The identity colour and the drawing colour
-come apart here and only here; every other element leaves `ink` unset and
-`elemInk` falls back to `rgb`.
-
-#### …and the ink turned out to be three inks
-
-One colour was doing three jobs, and carbon is the element that pulls them
-apart, because it is the only one whose own colour is too dark to draw itself
-with. The three want different answers:
-
-| | function | carbon's value | why |
-|---|---|---|---|
-| shell band | `elemShellInk` | `41,42,45` at the default | a black atom wants a faint ring, not a bright grey halo round a black middle |
-| electron dots | `elemEInk` | `0,0,0` | they are carbon's electrons and carbon is black |
-| icon ring | `elemInk` | `205,210,224`, unchanged | an icon is 20 px with no scene behind it |
-
-`carbonShellDark` (dev slider **Carbon shell dark**, default **0.8**) pulls the
-band towards black; `darkenRGB` does the lerp. It is scoped to elements with
-`body: true`, which is carbon and only carbon — the ones dark enough to have
-needed the split in the first place.
-
-**The icon ring keeps the light grey and that is deliberate.** Scene rules do
-not apply at icon size: the ring is the only thing saying there is an atom
-there, and darkening it is how you get a blank circle. This is the one place the
-warning above still bites.
-
-**Truly black electrons are visible, which was not obvious.** They sit at the
-shell radius, just past where the body has faded, so against the halo they read
-as black pinpricks — checked on the free carbons a finished carbonic run leaves
-behind, where all four show clearly. The ones that fall *inside* the body are
-another matter: a C–O bonding pair is seated at the midpoint of a 50 px bond,
-which is inside the carbon's own radius, and there it is black on black. The
-Lewis reading in the Sandbox still has the oxygen's half of each shared pair,
-which is red and sits in the same gap.
-
-**3. A layer.** `ELEMENTS.C.layer` is 1, and `byLayer` sorts atoms so higher
-layers are painted last. Carbon is the centre of everything it is in, so it is
-always the one with neighbours overlapping it, and **a black atom under a red
-oxygen is just a darker red.** Over the top it is a black disc against red.
+**`layer` stays, and it was never about the colour.** `ELEMENTS.C.layer` is 1
+and `byLayer` paints higher layers last. Carbon is the centre of everything it
+is in, so it is always the one with neighbours overlapping it, and the sort is
+what keeps a C–O reading as a carbon in front of an oxygen rather than a blend
+of the two.
 
 The electrons are deliberately *not* in that sort — they are painted after every
 body, on both the Sandbox and its thumbnails. The shared pair in a C–O gap falls
 **inside** the carbon's own radius (the bond is 58 px, the carbon's radius 51),
 so a carbon painted over them would hide the very dots the Lewis reading is made
-of.
+of. That was true when carbon was an opaque black disc and it stays true now
+that it is a ring, because the ring's glow is still drawn over that gap.
+
+#### What was kept and what went
+
+`drawAtomBody` and `BODY_CORE` **stay, dormant.** No element sets `body: true`
+any more, so the function returns on its first line every time. It is the
+general answer for an element darker than the background, the measurements in
+its comment are the record of what that costs, and the next dark element will
+want it.
+
+`elemShellInk` and `elemEInk` **stay, as names.** Both fall through to `elemInk`
+for every element in the table today. They are kept separate because they are
+separate questions and carbon spent a while answering them differently: an
+element dark enough to need that again sets `ink` for its band and `eInk` for
+its dots, and no call site has to change.
+
+The two dev sliders **went**: *Carbon opacity* drove `bodyAlpha`, which nothing
+reads now, and *Carbon shell dark* drove `carbonShellDark`, which no longer
+exists. A dev control that moves nothing is worse than no control — the sliders
+come back with the machinery if it is ever woken up.
+
+Verified after the change: all four of `elemInk`, `elemShellInk`, `elemEInk` and
+`ELEMENTS.C.rgb` return `255,238,0`; `body` false; `layer` still 1; the dev
+panel opens with its remaining 52 sliders and no console errors. Checked by eye
+in all four places carbon is drawn — the Sandbox scene, the Sandbox ADD button
+thumbnails, the Reactions world and its picker icon, and One Bond's C–O.
+
 
 ### The scene had to come off the floor
 

@@ -1011,19 +1011,25 @@ const ELEMENTS = {
   H:  { label: 'H',  rgb: '185,192,205', rScale: 1.00 },   // grey
   O:  { label: 'O',  rgb: '232,56,47',   rScale: 1.27 },   // red
   He: { label: 'He', rgb: '127,219,232', rScale: 1.17 },   // pale cyan — noble
-  // Carbon is CPK black, and black needs two things the other elements do not.
+  // CARBON IS YELLOW, and yellow can draw itself.
   //
-  // `ink` is what its SHELL BAND and ELECTRON DOTS are drawn in. The body
-  // colour cannot do that job: black dots on a black atom are not dots. So the
-  // identity colour and the drawing colour come apart here, and only here —
-  // every other element leaves `ink` unset and keeps using `rgb` for both.
+  // It was CPK black, and black needed a pile of machinery no other element
+  // here wants: a filled body to have somewhere to be black at all, a separate
+  // `ink` so its shell and electrons were not black-on-black, and then that ink
+  // split three ways. A light colour needs none of it. Carbon is now an
+  // ordinary element in this table — one colour, used for everything — and the
+  // three ink functions below all fall through to it.
   //
-  // `layer` lifts it above the other atoms in every pass. Carbon is the centre
-  // of everything it is in, so it is always the one with neighbours overlapping
-  // it, and a black atom UNDER a red oxygen is just a darker red. Drawn over the
-  // top, it is a black disc against red, which is what it should look like.
-  C:  { label: 'C',  rgb: '10,10,14', rScale: 1.42,        // CPK black (C 1.70 Å)
-        ink: '205,210,224', eInk: '0,0,0', layer: 1, body: true },
+  // `layer` stays. Carbon is the centre of everything it is in, so it is always
+  // the one with neighbours overlapping it, and the layer sort is what keeps a
+  // C–O reading as a carbon in front of an oxygen rather than a blend of the
+  // two. That was never about the colour being dark.
+  //
+  // `body` is gone, and with it `drawAtomBody` has no element to draw. The
+  // function stays, dormant, because it is the general answer for any element
+  // darker than the background and the next one may want it; its dev slider
+  // does not, because a control that moves nothing is worse than no control.
+  C:  { label: 'C',  rgb: '255,238,0', rScale: 1.42, layer: 1 },   // #ffee00
 };
 // The colour an element's shells and electrons are drawn in, which is its own
 // colour unless it is too dark to see itself by.
@@ -1032,41 +1038,15 @@ function elemInk(el) {
   return e.ink || e.rgb;
 }
 
-// ─── CARBON'S THREE INKS ──────────────────────────────────────────────────────
-// `ink` started as one colour doing three jobs, and carbon is the element that
-// pulls them apart, because it is the only one whose own colour is too dark to
-// draw itself with. The three want different answers:
-//
-//   the SHELL BAND  wants to be dark, so a carbon reads as a black atom with a
-//                   faint ring rather than a bright grey halo with a black
-//                   middle. `carbonShellDark` pulls it towards black; it is a
-//                   slider because it is a judgement made by eye.
-//   the ELECTRONS   want to be TRULY BLACK. They are carbon's electrons and
-//                   carbon is black. Where one lies over a red oxygen or a
-//                   bright bond it reads as a hole punched in it, which is
-//                   exactly what a black dot should look like.
-//   the ICON RING   wants the ORIGINAL light grey and keeps it. An icon is 20
-//                   px across with no scene behind it, and the ring is the only
-//                   thing saying there is an atom there — darkening that is how
-//                   you get a blank circle. Scene rules do not apply at icon
-//                   size, and this is the one place the old comment's warning
-//                   still bites: a black ring on a black disc is not a ring.
-let carbonShellDark = 0.8;     // dev slider: how far C's band is pulled to black
-
-function darkenRGB(col, f) {
-  const k = Math.max(0, 1 - f);
-  return _rgbOf(col).split(',').map(v => Math.round(Number(v) * k)).join(',');
-}
-
-// For the shell BAND. Scoped to elements with a body, which is carbon and only
-// carbon — the ones dark enough to need the split in the first place.
+// The shell BAND and the electron DOTS. Both fall through to `elemInk` for
+// every element in the table today; they are kept as separate names because
+// they are separate questions, and carbon spent a while answering them
+// differently. An element dark enough to need that again sets `ink` for its
+// band and `eInk` for its dots, and nothing else has to change.
 function elemShellInk(el) {
-  const e = ELEMENTS[el] || ELEMENTS[DEFAULT_ELEMENT];
-  const base = e.ink || e.rgb;
-  return (e.body && carbonShellDark > 0) ? darkenRGB(base, carbonShellDark) : base;
+  return elemInk(el);
 }
 
-// For the electron DOTS.
 function elemEInk(el) {
   const e = ELEMENTS[el] || ELEMENTS[DEFAULT_ELEMENT];
   return e.eInk || e.ink || e.rgb;
@@ -1091,7 +1071,14 @@ function elemLayer(el) { return (ELEMENTS[el] && ELEMENTS[el].layer) || 0; }
 // bright part of the lobe comes back up to 26.4 — LIGHTER than the scene, which
 // is the one thing a black atom must not be. 8% of a near-white lobe is enough
 // to undo it. So the default is 1: opaque, black everywhere, and the lobe is
-// drawn around the carbon rather than through it. Dev slider `Carbon opacity`.
+// drawn around the carbon rather than through it.
+//
+// DORMANT. No element sets `body: true` any more — carbon went yellow and a
+// light colour draws itself — so this returns on its first line every time.
+// Kept because it is the general answer for an element darker than the
+// background, and the measurement above is the record of what it costs. Its dev
+// slider went, since a control that moves nothing is worse than no control; it
+// comes back with the first element that needs this again.
 const BODY_CORE = 0.72;
 let bodyAlpha = 1;
 function drawAtomBody(c, x, y, el, vr) {
@@ -5804,10 +5791,6 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     '<div style="font-size:9px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.4;margin-top:8px;">' +
       'Scene</div>' +
     row('devBgLift',  'Scene lift',      0,   60,  1,    bgLift,           '#9fb0ff') +
-    row('devBodyA',   'Carbon opacity',  0.5, 1,   0.02, bodyAlpha,        '#9fb0ff') +
-    '<div style="opacity:0.45;font-size:10px;">1 = the black body covers the ' +
-      'bond field behind it; lower lets the lobe through, at the cost of the ' +
-      'carbon reading lighter than the scene where the lobe is brightest</div>' +
     '<div style="opacity:0.45;font-size:10px;">how far the background sits above ' +
       'the theme’s near-black. 0 is the old floor, on which a CPK-black ' +
       'carbon is a hole rather than a colour</div>' +
@@ -5835,10 +5818,6 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     row('devShHold',  'One Bond centre hold', 0.01, 1, 0.01, bondCentreHold, '#7bffd0') +
     '<div style="opacity:0.45;font-size:10px;">One Bond only \u2014 the shells ' +
       'view seats its bonding electrons outright</div>' +
-    row('devCDark',   'Carbon shell dark',  0, 1, 0.05, carbonShellDark, '#7bffd0') +
-    '<div style="opacity:0.45;font-size:10px;">how far carbon\u2019s outer band is ' +
-      'pulled to black; its electrons are black outright, and the icon ring is ' +
-      'left light so a 20 px icon is not a blank circle</div>' +
     '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
     '<label style="display:flex;align-items:center;gap:7px;margin:9px 0 2px;cursor:pointer;">' +
       '<input type="checkbox" id="devEqui" checked style="margin:0">' +
@@ -5954,14 +5933,11 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   bind('devBBoost',   v => BOND_FIELD_BOOST = v, false, v => v.toFixed(2));
   bind('devBGamma',   v => bondShownGamma = v, false, v => v.toFixed(2));
   bind('devBgLift',   v => { bgLift = v; applySceneBg(); }, false, v => v.toFixed(0));
-  bind('devBodyA',    v => bodyAlpha = v, false, v => v.toFixed(2));
   bind('devLoneArc',  v => { loneArcFrac = v;
          for (const b of world.bodies) buildElectrons(b);
          if (bondTab.on) initBondElectrons(); },
        false, v => Math.round(v * 360) + '\u00b0');
   bind('devShHold',   v => bondCentreHold = v, false, v => v.toFixed(2));
-  bind('devCDark',    v => carbonShellDark = v, false,
-       v => v <= 0 ? 'off' : Math.round(v * 100) + '% to black');
 
   // Equipartition on/off, so both can be compared side by side
   const equi = panel.querySelector('#devEqui');
