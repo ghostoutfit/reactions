@@ -912,8 +912,8 @@ tree with any bonds at all has a leaf, so it is never null.
 `bondLevels` taking the breaking bond's order rather than the molecule's biggest
 matters for the same reason: carbonic acid holds a C=O, but the bond under load
 is the O–H that is going to go, and a single bond has one level wherever it sits.
-Measured on a fresh H₂CO₃: breakable bond `[2,3]`, threshold 1.395
-(= 1.5 × 463/498), one level.
+Measured on a fresh H₂CO₃: breakable bond `[2,3]`, threshold 1.403
+(= 1.5 × 463/495), one level.
 
 #### Shatter or peel
 
@@ -1766,10 +1766,10 @@ order, energy and length:
 ```javascript
 const BOND_TYPES = {
   'H-H': { els: ['H','H'], order: 1, D: 436, lenMult: 1    },
-  'O=O': { els: ['O','O'], order: 2, D: 498, lenMult: 1    },
+  'O=O': { els: ['O','O'], order: 2, D: 495, lenMult: 1    },
   'O-H': { els: ['O','H'], order: 1, D: 463, lenMult: 1    },
   'C-O': { els: ['C','O'], order: 1, D: 358, lenMult: 1    },
-  'C=O': { els: ['C','O'], order: 2, D: 799, lenMult: 0.86 },
+  'C=O': { els: ['C','O'], order: 2, D: 745, lenMult: 0.86 },
 };
 ```
 
@@ -1782,7 +1782,7 @@ between the two entries besides the length.
 **The element-pair tables are deliberately untouched.** Reactions and Sandbox
 model molecules that form and break by collision, and putting carbon into that
 is a far bigger piece of work than adding a row here. Verified after the change:
-`BOND_ENERGY_MAX` 498, `kjPerSim` 0.0026, `bondEnergy(O,O)` 498, the Sandbox
+`BOND_ENERGY_MAX` 495, `kjPerSim` 0.00255, `bondEnergy(O,O)` 495, the Sandbox
 ADD buttons still H₂ and O₂ only.
 
 **`lenMult` is the length, relative to what the pair's `bondLen` gives.** The
@@ -1793,6 +1793,59 @@ are in one list that ratio is the reading: 0.86, so 58.1 px against 50.0.
 The dropdown is **built from `BOND_TYPES` at startup**, not written out in the
 HTML. The list IS the table: a bond cannot be in the menu without an energy, or
 in the table without a way to pick it.
+
+### C=O is 745, not 799, and O=O is 495
+
+Two dissociation energies were revised. Both tables moved together, because a
+bond with two numbers is worse than a bond with a wrong one:
+
+| bond | was | now | why |
+|---|---|---|---|
+| C=O | 799 | **745** | 799 is CO₂'s own C=O. 745 is the general carbonyl, which is what carbonic acid has. |
+| O=O | 498 | **495** | the commonly tabulated value |
+
+**`BOND_ENERGY_MAX` is now derived, not written down.** It was a literal `498`
+with a comment explaining that it must stay 498 — which held only while 498
+happened to be O=O's number, exactly the kind of agreement that quietly stops
+being true. It is now `Math.max(...Object.values(BOND_ENERGY))` = **495**, so it
+cannot drift from the table it is the maximum of. Deriving it from the
+element-pair table rather than from `BOND_TYPES` is also what keeps the C=O out
+of it, which was the original comment's real point.
+
+That re-denominates the Reactions currency by 495/498: `kjPerSim` 0.002561 →
+**0.002546**, a 0.6% shift. It cancels everywhere it matters — `breakThreshold`
+is `breakEnergy × D / BOND_ENERGY_MAX` and `kjPerSim` is
+`BOND_ENERGY_MAX / (breakEnergy × doseUnit())`, so the kJ a given bond is worth
+is unchanged — and what it does move is O=O's threshold, by the same 0.6%,
+which is the point: O=O really is slightly weaker now.
+
+What this changes, measured:
+
+| | was | now |
+|---|---|---|
+| H₂CO₃ at rest | 559 | **613** |
+| CO₂ + H₂O at rest | 476 | **584** |
+| **the reaction** | **−83** | **−29** |
+| CO₂ alone at rest | **−98** | **+10** |
+
+The decomposition is still exothermic, which is right — gas-phase H₂CO₃ → CO₂ +
+H₂O is about −12 kJ/mol — and **−29 is much nearer that than −83 was**. The old
+figure was inflated by giving carbonic acid's carbonyl CO₂'s own bond energy.
+
+**It also lifts CO₂ off the floor, barely.** At 799 a lone CO₂ in the Sandbox
+read **−98 kJ/mol**: its two doubles were worth 1598 and its three atoms only
+carry 1500, so it fell through zero and drew a negative bar. At 745 it reads
+**+10**. That is a reprieve, not a fix — `SB_FREE_ATOM = 500` was chosen when
+nothing bonded harder than 498, and a flat per-atom reference smaller than the
+strongest single bond will go negative again on the next strong bond added.
+Raising it (900 would clear 745 with room) shifts every at-rest reading by
+`400 × atoms` and changes none of the differences, which are the physics.
+
+Regression-checked after the change: four waters in all three runs of the water
+reaction at High, `totalKJ` drift **0** across 90 s, fields ending at the
+arithmetic 2296 (12×500 − 8×463); One Bond reads all five bonds; Sandbox
+H₂CO₃ + O₂ reads 1118 = 4000 − 2882; dev panel opens with its 52 sliders and no
+console errors.
 
 ### Carbon
 
@@ -1887,17 +1940,17 @@ whatever the scene is, on every theme.
 
 Two measured problems arrived with the carbon bonds, both from the same cause:
 **the old list spanned 436–498 kJ/mol, a factor of 1.14, and the new one spans
-358–799, a factor of 2.23.**
+358–745, a factor of 2.08.**
 
 **`BOND_SHOWN_MAX`, not `BOND_ENERGY_MAX`.** One Bond's lobe is normalised
-against the deepest well *in the dropdown* (799), because on that tab
+against the deepest well *in the dropdown* (745), because on that tab
 brightness is the reading and a clipped core throws away the top of the range.
 It is NOT normalised against `BOND_ENERGY_MAX`: that constant is the Reactions
 currency — `kjPerSim()` is defined in terms of it and every main-tab field
-brightness is scaled by it — so moving it to 799 would silently re-denominate a
+brightness is scaled by it — so moving it to 745 would silently re-denominate a
 tab nobody asked to change. The consequence is honest and worth knowing: **the
 three original bonds are dimmer than they were**, because they now share a
-scale with a bond 1.6× deeper than the old top.
+scale with a bond 1.5× deeper than the old top.
 
 **`bondShownGamma` stops the weakest bond vanishing.** At strict proportionality
 a C–O at rest measured `rgb(33,30,40)` against a background of `rgb(5,4,15)` —
@@ -1907,11 +1960,16 @@ on the **Depth contrast** dev slider; 1 restores strict proportion.
 
 | bond | D | mag at γ=1 | mag at γ=0.6 | rest colour at γ=0.6 |
 |---|---|---|---|---|
-| C–O | 358 | 0.448 | 0.618 | rgb(59,56,68) |
-| H–H | 436 | 0.546 | 0.695 | rgb(75,76,88) |
-| O–H | 463 | 0.579 | 0.721 | rgb(81,82,94) |
-| O=O | 498 | 0.623 | 0.753 | rgb(93,85,97) |
-| C=O | 799 | 1.000 | 1.000 | rgb(166,169,180) |
+| C–O | 358 | 0.481 | 0.644 | measured before the 745 |
+| H–H | 436 | 0.585 | 0.725 | measured before the 745 |
+| O–H | 463 | 0.621 | 0.752 | measured before the 745 |
+| O=O | 495 | 0.664 | 0.782 | measured before the 745 |
+| C=O | 745 | 1.000 | 1.000 | measured before the 745 |
+
+(The `mag` columns are re-measured against `BOND_SHOWN_MAX` = 745. The rest
+colours were sampled when the ceiling was 799 and every one of them is now a
+little brighter, by the ratio in the γ=0.6 column; the ordering, which is what
+the table is for, is unchanged.)
 
 The ordering is untouched — a deeper well is always brighter — and the
 strongest bond still lands exactly at the top of the ramp, so nothing clips.
@@ -2027,7 +2085,7 @@ const BOND_ZOOM     = 1.2;   // 20% larger than fitting 3 natural lengths across
 **4.8 rather than 3.2 because that is where the stored energy finally reads as
 the whole bond.** The Morse form gives 93% at 3.2 and **99.3% at 4.8**, so the
 extra half of the range is what turns "nearly" into "that is the bond".
-Measured at full stretch: H–H **433 of 436**, O=O **495 of 498**, O–H **460 of
+Measured at full stretch: H–H **433 of 436**, O=O **492 of 495**, O–H **460 of
 463** — 99% on all three.
 
 **The fit clamp is computed from the MAXIMUM separation, never the current
@@ -2052,8 +2110,10 @@ the reading is an absolute height and what differs between pairs is how far
 | | well depth | at rest | fully apart |
 |---|---|---|---|
 | H–H | 436 | **564** | 1000 |
-| O=O | 498 | **502** | 1000 |
+| O=O | 495 | **505** | 1000 |
 | O–H | 463 | **537** | 1000 |
+| C–O | 358 | **642** | 1000 |
+| C=O | 745 | **255** | 1000 |
 
 The O=O rests lowest because its well is deepest. That comparison is the whole
 point of the scale.
@@ -2460,18 +2520,19 @@ the moves the tab is for:
 
 | scene | reads | = |
 |---|---|---|
-| 2 H₂ + O₂ | 1630 | 6×500 − (436+436+498) |
-| pull one H₂ apart | 2066 | 6×500 − (436+498) |
-| H₂ + O₂ | 1066 | 4×500 − (436+498) |
+| 2 H₂ + O₂ | 1633 | 6×500 − (436+436+495) |
+| pull one H₂ apart | 2069 | 6×500 − (436+495) |
+| H₂ + O₂ | 1069 | 4×500 − (436+495) |
 | pull the O₂ apart | 1564 | 4×500 − 436 |
 | **H₂O + O** | **1074** | **4×500 − 2×463** |
-| **H₂CO₃** | **559** | **6×500 − (799 + 2×358 + 2×463)** |
-| H₂CO₃ + H₂ + O₂ | 1625 | 10×500 − 3375 |
+| **H₂CO₃** | **613** | **6×500 − (745 + 2×358 + 2×463)** |
+| **CO₂** | **10** | **3×500 − 2×745** |
+| **CO₂ + H₂O** | **584** | **6×500 − (2×745 + 2×463)** |
 
 The sandbox's lobes now go through `bondShownMag` as well, the same compressed
 depth scale One Bond uses, because this tab shows the same mixed set of
-strengths: a 799 kJ/mol C=O sits in the scene beside a 358 C–O, and against the
-old `BOND_ENERGY_MAX` of 498 the double would have been a permanently clipped
+strengths: a 745 kJ/mol C=O sits in the scene beside a 358 C–O, and against a
+`BOND_ENERGY_MAX` of 495 the double would have been a permanently clipped
 white blob while the single went nearly dark. The cost is the same one One Bond
 pays — **H₂ and O₂ are a little dimmer than they were.**
 
@@ -2556,7 +2617,7 @@ and only the bare oxygen has a slot. The Lewis structure arrives rather than
 being hard-coded, and it gives a different answer for the two molecules without
 being told about either.
 
-Verified on a hand-built CO₂: `C=O` and `C=O`, D **799** each, both at **50 px**,
+Verified on a hand-built CO₂: `C=O` and `C=O`, D **745** each, both at **50 px**,
 O=C=O at **180.0°**, carbon holding **0** lone pairs. And nothing else moved —
 water still 104.5° with two O–H singles, O₂ still order 2, H₂ still order 1, and
 H₂CO₃ still one double with its carbon's three angles at 125.5 / 125.5 / 109.

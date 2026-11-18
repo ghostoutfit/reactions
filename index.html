@@ -1543,10 +1543,16 @@ setFieldRamp(fieldRamp);
 // slightly above H–H. Break mode will want exactly this table to decide what an
 // impact is strong enough to pull apart.
 // 'C-O' is the SINGLE here. The double lives in BOND_TYPES, which is the only
-// table that can hold both — see there. BOND_ENERGY_MAX stays 498: it is the
-// Reactions currency, and the 799 C=O must not move it.
-const BOND_ENERGY = { 'H-H': 436, 'H-O': 463, 'O-O': 498, 'C-O': 358 };
-const BOND_ENERGY_MAX = 498;
+// table that can hold both — see there.
+//
+// BOND_ENERGY_MAX is the strongest bond IN THIS TABLE, and it is derived rather
+// than written down so the two can never drift apart. It is the Reactions
+// currency — `kjPerSim()` is defined in terms of it — and the C=O must stay out
+// of it: deriving from this table and not from BOND_TYPES is what guarantees
+// that. (It was a literal 498 while that happened to be O=O's number, which is
+// exactly the kind of agreement that quietly stops being true.)
+const BOND_ENERGY = { 'H-H': 436, 'H-O': 463, 'O-O': 495, 'C-O': 358 };
+const BOND_ENERGY_MAX = Math.max(...Object.values(BOND_ENERGY));   // 495, O=O
 
 // What a free atom carries on its own, kJ/mol, so that a pair fully apart reads
 // 1000 and a bonded one reads 1000 - D. One Bond set this scale; the Sandbox and
@@ -1593,10 +1599,10 @@ function bondEnergy(elA, elB) {
 // and that ratio IS the reading when both are in the same list: 0.86.
 const BOND_TYPES = {
   'H-H': { els: ['H', 'H'], order: 1, D: 436, lenMult: 1,    label: 'H – H' },
-  'O=O': { els: ['O', 'O'], order: 2, D: 498, lenMult: 1,    label: 'O = O' },
+  'O=O': { els: ['O', 'O'], order: 2, D: 495, lenMult: 1,    label: 'O = O' },
   'O-H': { els: ['O', 'H'], order: 1, D: 463, lenMult: 1,    label: 'O – H' },
   'C-O': { els: ['C', 'O'], order: 1, D: 358, lenMult: 1,    label: 'C – O' },
-  'C=O': { els: ['C', 'O'], order: 2, D: 799, lenMult: 0.86, label: 'C = O' },
+  'C=O': { els: ['C', 'O'], order: 2, D: 745, lenMult: 0.86, label: 'C = O' },
 };
 const DEFAULT_BOND = 'H-H';
 function bondType(id) { return BOND_TYPES[id] || BOND_TYPES[DEFAULT_BOND]; }
@@ -1607,7 +1613,7 @@ function bondTypesFor(elA, elB) {
   return Object.values(BOND_TYPES).filter(t => t.els.slice().sort().join('') === want);
 }
 // The row for a pair AT A GIVEN ORDER, which is the lookup the element-pair
-// tables cannot do. Used by the Sandbox so a C=O is 799 kJ/mol and short while
+// tables cannot do. Used by the Sandbox so a C=O is 745 kJ/mol and short while
 // the C–O beside it in the same molecule is 358 and long.
 function bondRowFor(elA, elB, order) {
   return bondTypesFor(elA, elB).find(t => t.order === order) || null;
@@ -1632,16 +1638,16 @@ function bondPromotable(elA, elB) {
 // The strongest bond ON OFFER in the One Bond list, which is what that tab's
 // glow is normalised against — deliberately NOT BOND_ENERGY_MAX. That constant
 // is the Reactions currency: `kjPerSim()` is defined in terms of it and every
-// field brightness on the main tab is scaled by it, so moving it to 799 would
+// field brightness on the main tab is scaled by it, so moving it to 745 would
 // silently re-denominate a tab nobody asked me to touch. One Bond must not clip
 // (there, brightness is the reading), so it gets its own ceiling.
 const BOND_SHOWN_MAX = Math.max(...Object.values(BOND_TYPES).map(t => t.D));
 
 // How hard a deep bond outshines a shallow one on the One Bond tab.
 //
-// The old list spanned 436 to 498 — a factor of 1.14, near enough uniform that
+// The old list spanned 436 to 495 — a factor of 1.14, near enough uniform that
 // brightness could be strictly proportional to the well depth and every bond
-// still read. The carbon bonds span 358 to 799, a factor of 2.23, and at
+// still read. The carbon bonds span 358 to 745, a factor of 2.08, and at
 // gamma 1 that puts a C–O at rest at rgb(33,30,40) against a background of
 // rgb(5,4,15): measured, and all but invisible. Selecting a bond and seeing
 // nothing is not a reading, it is a blank screen.
@@ -3504,7 +3510,7 @@ function breakableBond(b) {
 }
 
 // What the bond is worth, in those same units, scaled by its real dissociation
-// energy — so an O=O holds 498/436 as much as an H-H before it goes.
+// energy — so an O=O holds 495/436 as much as an H-H before it goes.
 function bondEnergyFactor(b) {
   if (b.els.length < 2) return 0;
   const bd = breakableBond(b);
@@ -7603,8 +7609,8 @@ function drawSandbox() {
       x1: A[b.i].x, y1: A[b.i].y, x2: A[b.k].x, y2: A[b.k].y,
       // Through bondShownMag, the same compressed depth scale the One Bond tab
       // uses, because this tab now shows the same mixed set of strengths: a
-      // 799 kJ/mol C=O sits in the scene beside a 358 C–O, and against the old
-      // BOND_ENERGY_MAX of 498 the double would have been a permanent clipped
+      // 745 kJ/mol C=O sits in the scene beside a 358 C–O, and against a
+      // BOND_ENERGY_MAX of 495 the double would have been a permanent clipped
       // white blob while the single went nearly dark.
       mag: bondShownMag(b.D)
            * (BOND_FIELD_FLOOR + (1 - BOND_FIELD_FLOOR) * b.work)
