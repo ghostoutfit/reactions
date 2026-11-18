@@ -3167,19 +3167,98 @@ wall, so `setGraphShown` calls `restretchWorld()` — the same re-fit the window
 resize uses. Without it the world keeps its old box and leaves a gap between
 the bottom wall and the bar.
 
-A scrolling 12-second trace of **two** series, full scale = 2× the energy at
-spawn (growing to fit, since switching to High is a 9× jump):
+### The x axis is not time
 
-- **Energy of motion**, red — translational + rotational.
-- **Energy in fields**, purple — what the bonds are holding. Its sawtooth is the
-  mechanism in one picture: sharp rises as collisions deposit, slow falls as the
-  vibration decays.
+It was, and a scrolling time trace was the wrong picture. What the two bars are
+doing is a **reaction**, and a reaction's natural axis is how far along it is —
+reactants on the left, products on the right, with the energy hump in between.
+The sim produces that diagram for free, because `fieldsKJ` really does rise as
+bonds come apart and fall as they go back together.
 
-With the speed band off and bonds unable to break, motion alone is flat and a
-visible step means the collision solver leaked. With collisions converting into
-bonds, the two **trade**, and it is their sum that should hold — verified at 0%
-drift. The band and the vibration decay then both break that sum, deliberately
-and with both counted; see Bond breaking.
+The time trace is **gone**, and with it the energy-conservation check it used to
+serve (a flat line meant the solver did not leak). That check lives on in
+`energySplit()` in the dev diagnostics, which is where measurement belongs.
+
+**Progress is in two halves, with ALL ATOMS FREE pinned at the middle**, because
+that is genuinely the shape of the thing: the recombination gate will not open
+until every molecule has come apart, so the breaking finishes before the joining
+starts.
+
+| | coordinate | counts |
+|---|---|---|
+| left, 0 → 0.5 | `0.5 × free / atoms` | the share of the world's atoms that are loose |
+| right, 0.5 → 1 | `0.5 + 0.5 × bonds / productBonds` | the share of the products' bonds that have formed |
+
+The left half counts **atoms**, not break events, on purpose: a peel frees one,
+a shatter frees several, a double bond takes two hits, and counting atoms gets
+all of that right with no table of how many breaks a molecule is supposed to
+take. The right half counts **bonds** for the same reason — every bond in the
+world after the latch is a product bond, since everything was a free atom a
+moment earlier.
+
+Measured, one water run end to end: 14 landmarks at 0, 0.083, 0.25, 0.333,
+0.417, **0.5** (12 free atoms, `recombLatched` true), 0.563 … 1.0 (4 waters).
+The fields fraction climbs 0.658 → **0.930** at the midpoint and falls to 0.394,
+monotone on both sides — a clean hump whose products sit lower than its
+reactants, which is what exothermic looks like.
+
+### A reaction with no product half yet
+
+`REACTIONS[*].productBonds` is how many bonds the finished products hold.
+Carbonic's is `null` because its product half is **not coded yet**, not because
+it does not have one — carbonic acid will recombine. Until it does, progress
+stops at 0.5: the curve climbs to the peak and ends there, markers and all, with
+the right half of the axis empty under PRODUCTS. That is the honest picture of a
+model that knows how to take the molecule apart and not yet how to rebuild it,
+and the caption under the graph says so. Filling in `productBonds` alongside
+`recombine: true` is all the graph needs to run the second half.
+
+### One sample per step, taken the first time the reaction gets there
+
+Progress moves in steps, so the trace is a short list of landmarks, not a
+stream. Each is recorded **once**, when the reaction first reaches it, and never
+rewritten: the curve is the path the reaction took, and a path does not change
+behind you. Nothing is ever removed, so the drawn curve only grows rightward.
+
+When the reaction runs **backwards** — strong water off, a finished water
+knocked apart — the curve stands and the marker slides back down it. Measured:
+a run reached 1.0 at 14.9 s with 13 landmarks, fell back as far as 0.813 and
+spent 5,484 frames below 1.0, and finished with the same 13 landmarks and a
+curve still reaching 1.0.
+
+`traceAt()` interpolates between landmarks, because a shatter can free three
+atoms at once and the levels it skipped were never visited.
+
+### Stored as bar fractions, not kJ/mol
+
+A landmark holds each bar's **fraction of its own chart**, not its kJ/mol. The
+two are the same picture only while the scale holds still, and it does not: the
+temperature buttons move `totalKJ` for the whole world at once, so a landmark
+recorded at Low and one recorded at High are drawn against different scales, and
+absolute kJ puts a step in the line that is about the thermostat rather than
+about the reaction. A fraction is also what *"follows the bar chart positions"*
+actually means — a point on the line sits at the height of the bar beside it.
+
+A consequence worth knowing: `motionKJ = totalKJ − fieldsKJ` and the chart's
+full scale is `totalKJ` less the two raised zeros, so **the two lines are exact
+mirrors** — verified, they sum to 1.000 at every landmark. That is inherent to
+the accounting, not a tuning choice.
+
+### Drawing
+
+A **Catmull-Rom spline** laid down as beziers, tension 1/6, end segments reusing
+their own endpoint for the missing neighbour. The curve passes through every
+landmark with no corner at any of them, which is the point: the reaction moves
+in steps and the line that shows it should not look like it does.
+
+Labels: `REACTANTS` left, `PRODUCTS` right, `REACTION PROGRESS` centred under
+the axis — and **only that one is centred**. A second centred label below it
+read as a two-line caption rather than as two separate things. So the halfway
+mark is labelled **on the dashed line itself**, drawn last so it sits over the
+curves, placed midway between the two at that point and carrying its own
+backing: the gap between the curves is wide in one run and narrow in the next,
+so a position chosen in advance cannot be relied on. A vertical label up the
+dashed line was tried first and clipped, for the same reason.
 
 ## What is deliberately left standing
 

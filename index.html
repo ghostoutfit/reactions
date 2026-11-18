@@ -2459,16 +2459,26 @@ const composition = { ...COMPOSITION_DEFAULT };
 // is the breaking half only, for now: its atoms go free and stay free, which is
 // what was asked for, and it is also the honest state of the model, since
 // nothing here knows how to put a C back into anything.
+//
+// `productBonds` is how many bonds the finished products hold, and it is what
+// the right half of the reaction-progress graph counts up to — see
+// `reactionProgress`. Carbonic's is null because its product half is NOT CODED
+// YET, not because it does not have one: carbonic acid will recombine. Until it
+// does, the graph is right to stop its curve at the peak, which is exactly the
+// state of the model. Filling this in alongside `recombine: true` is all the
+// graph needs to run the second half.
 const REACTIONS = {
   water: {
     label: 'H₂ + O₂  →  H₂O',
     composition: { H2: 4, O2: 2, He: 0, H2CO3: 0 },
     icon: 'H2', recombine: true,
+    productBonds: 8,            // 4 waters, two O–H each
   },
   carbonic: {
     label: 'H₂CO₃  →  atoms',
     composition: { H2: 0, O2: 0, He: 0, H2CO3: 2 },
     icon: 'H2CO3', recombine: false,
+    productBonds: null,         // the product half is not written yet
   },
 };
 const DEFAULT_REACTION = 'water';
@@ -4793,86 +4803,259 @@ function setRunning(on) {
   logAction(on ? 'Started' : 'Paused');
 }
 
-// ─── Energy trace ─────────────────────────────────────────────────────────────
-// A scrolling record of the world's total kinetic energy. With perfectly elastic
-// collisions the line should stay flat — a visible step means energy leaked.
-const GRAPH_WINDOW  = 12;     // seconds shown across the graph
-const GRAPH_SAMPLES = 480;
-let energyTrace = [];          // [{ t, motion, fields }] — the two buckets
-let energyAtSpawn   = 1;           // energy at spawn, the 100% line
+// ─── Reaction progress, and the trace along it ───────────────────────────────
+// THE X AXIS IS NOT TIME. It was, and a scrolling time trace is the wrong
+// picture for this: what the two bars are doing is a reaction, and a reaction's
+// natural axis is how far along it is. Reactants on the left, products on the
+// right, and the energy hump in between — the diagram every chemistry course
+// draws, which this sim happens to produce for free, because `fieldsKJ` really
+// does rise as bonds come apart and fall as they go back together.
+//
+// Progress is in two halves with ALL ATOMS FREE pinned at the middle, because
+// that is genuinely the shape of the thing: the recombination gate will not open
+// until every molecule has come apart, so the breaking finishes before the
+// joining starts.
+//
+//   LEFT   0 → 0.5   the share of the world's atoms that are loose.
+//   RIGHT  0.5 → 1   the share of the products' bonds that have formed.
+//
+// The left half counts ATOMS rather than break events on purpose: a peel frees
+// one, a shatter frees several, a double bond takes two hits, and counting
+// atoms gets all of that right without a table of how many breaks a molecule
+// is supposed to take. The right half counts bonds for the same reason — every
+// bond in the world after the latch is a product bond, since everything was a
+// free atom a moment before.
+//
+// A reaction with no product half yet, like carbonic acid, simply stops at 0.5.
+// Its curve climbs to the peak and ends there, which is the honest picture of a
+// model that knows how to take the molecule apart and not yet how to rebuild it.
+function reactionProgress() {
+  const bodies = world.bodies;
+  if (!bodies.length) return 0;
+  let atoms = 0, free = 0, bonds = 0;
+  for (const b of bodies) {
+    atoms += b.els.length;
+    bonds += b.bonds.length;
+    if (b.els.length === 1) free++;
+  }
+  if (!atoms) return 0;
+  if (!recombLatched) return 0.5 * (free / atoms);
+  const target = currentReaction().productBonds;
+  return target ? 0.5 + 0.5 * Math.min(1, bonds / target) : 0.5;
+}
+
+// ONE SAMPLE PER STEP, TAKEN THE FIRST TIME THE REACTION GETS THERE.
+//
+// Progress moves in steps — an atom comes loose, a bond forms — so the trace is
+// a short list of landmarks, not a stream. Each is recorded once, when the
+// reaction first reaches it, and never rewritten: the curve is the path the
+// reaction took, and a path does not change behind you. Between the landmarks
+// the line is drawn as a smooth spline, which is what makes a discrete process
+// read as a reaction curve.
+//
+// Nothing is ever removed, so the drawn curve only grows rightward. When the
+// reaction falls back — a water breaks again — the curve stands and the marker
+// slides back down it.
+// The furthest the reaction has been is just the last landmark in the trace,
+// since nothing is ever removed from it — there is no separate high-water mark
+// to keep in step.
+let progressTrace = [];        // [{ p, motion, fields }], sorted by p
+let progressNow   = 0;         // where the reaction is, which can go down
+let energyAtSpawn = 1;         // energy at spawn, the 100% line
 
 function resetEnergyTrace() {
-  energyTrace = [];
+  progressTrace = [];
+  progressNow = 0;
   energyAtSpawn = Math.max(1e-6, energyOfMotion());
-  anchorEnergyTotal();
+  anchorEnergyTotal();         // the bars' scale, which the trace is measured in
+  sampleEnergy();              // the reactants, at x = 0
 }
 
 function sampleEnergy() {
-  energyTrace.push({ t: world.time, motion: energyOfMotion(), fields: shownFieldEnergy() });
-  while (energyTrace.length > GRAPH_SAMPLES) energyTrace.shift();
-  const cutoff = world.time - GRAPH_WINDOW;
-  while (energyTrace.length && energyTrace[0].t < cutoff) energyTrace.shift();
+  const p = reactionProgress();
+  progressNow = p;
+  for (const s of progressTrace) if (Math.abs(s.p - p) < 1e-6) return;
+  // STORED AS THE BAR'S OWN FRACTION OF ITS CHART, not as kJ/mol. The two are
+  // the same picture only while the scale holds still, and it does not: the
+  // temperature buttons move `totalKJ` for the whole world at once, so a
+  // landmark recorded at Low and one recorded at High are drawn against
+  // different scales. Absolute kJ puts a step in the line that is about the
+  // thermostat rather than about the reaction. A fraction of the bar's own
+  // chart is what "follows the bar chart positions" actually means, and it
+  // leaves the two lines summing to 1 at every landmark.
+  const mZero = motionZeroKJ();
+  const full  = Math.max(1, totalKJ - mZero - fieldsZeroKJ);
+  const clamp = (v) => Math.max(0, Math.min(1, v));
+  progressTrace.push({
+    p,
+    motion: clamp((motionKJ() - mZero) / full),
+    fields: clamp((fieldsKJ() - fieldsZeroKJ) / full),
+    mKJ: Math.max(0, motionKJ() - mZero),      // diagnostics only
+    fKJ: Math.max(0, fieldsKJ() - fieldsZeroKJ),
+  });
+  progressTrace.sort((a, b) => a.p - b.p);
+}
+
+// The recorded value at some progress, interpolated between landmarks when a
+// step was jumped over — a shatter can free three atoms at once, so the level
+// between them was never visited and has nothing recorded at it.
+function traceAt(key, p) {
+  const T = progressTrace;
+  if (!T.length) return 0;
+  if (p <= T[0].p) return T[0][key];
+  if (p >= T[T.length - 1].p) return T[T.length - 1][key];
+  for (let i = 0; i < T.length - 1; i++) {
+    if (p >= T[i].p && p <= T[i + 1].p) {
+      const span = T[i + 1].p - T[i].p;
+      const f = span > 1e-9 ? (p - T[i].p) / span : 0;
+      return T[i][key] + f * (T[i + 1][key] - T[i][key]);
+    }
+  }
+  return T[T.length - 1][key];
+}
+
+// A Catmull-Rom spline laid down as beziers: the curve passes through every
+// landmark and has no corner at any of them, which is the whole point —
+// the reaction moves in steps and the line that shows it should not look like
+// it does. Tension is the standard 1/6, and the end segments reuse their own
+// endpoint for the missing neighbour so the curve starts and ends cleanly.
+function splineThrough(ctx, pts) {
+  ctx.moveTo(pts[0].x, pts[0].y);
+  if (pts.length === 2) { ctx.lineTo(pts[1].x, pts[1].y); return; }
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i - 1] || pts[i], p1 = pts[i];
+    const p2 = pts[i + 1], p3 = pts[i + 2] || pts[i + 1];
+    ctx.bezierCurveTo(
+      p1.x + (p2.x - p0.x) / 6, p1.y + (p2.y - p0.y) / 6,
+      p2.x - (p3.x - p1.x) / 6, p2.y - (p3.y - p1.y) / 6,
+      p2.x, p2.y);
+  }
 }
 
 function drawEnergyGraph() {
   const W = graphCanvas.width, H = graphCanvas.height;
-  const PAD = 8, gH = H - PAD * 2;
+  const PADX = 12, TOP = 6, AXIS = H - 34, gH = AXIS - TOP;
   graphCtx.clearRect(0, 0, W, H);
 
   const LIGHT = document.body.classList.contains('screenshot-mode');
   const gridCol = LIGHT ? 'rgba(0,0,0,0.10)' : 'rgba(255,255,255,0.06)';
   const axisCol = LIGHT ? 'rgba(0,0,0,0.55)' : 'rgba(0,200,255,0.35)';
+  const textCol = LIGHT ? 'rgba(0,0,0,0.70)' : 'rgba(150,220,255,0.65)';
+  const dimCol  = LIGHT ? 'rgba(0,0,0,0.42)' : 'rgba(150,220,255,0.38)';
   const motionCol   = LIGHT ? '#000'             : '#ff3a6e';
   // The field series takes the hot end of the lobe ramp, so the line and the
   // thing it measures are the same colour on screen.
   const fieldsCol   = LIGHT ? '#8a3fa8'          : '#c46cff';
   const motionGlow  = LIGHT ? 'rgba(0,0,0,0)'    : 'rgba(255,45,100,0.9)';
 
+  const px = (p) => PADX + p * (W - PADX * 2);
+
   graphCtx.strokeStyle = gridCol;
   graphCtx.lineWidth = 1;
   for (let i = 1; i <= 3; i++) {
-    const y = PAD + gH * (1 - i / 4);
+    const y = TOP + gH * (1 - i / 4);
     graphCtx.beginPath(); graphCtx.moveTo(0, y); graphCtx.lineTo(W, y); graphCtx.stroke();
   }
+
+  // The halfway mark, where every molecule is in pieces and the reaction turns
+  // around. It is the one landmark on this axis worth drawing.
+  graphCtx.save();
+  graphCtx.setLineDash([3, 4]);
+  graphCtx.strokeStyle = dimCol;
+  graphCtx.lineWidth = 1;
+  graphCtx.beginPath();
+  graphCtx.moveTo(px(0.5), TOP); graphCtx.lineTo(px(0.5), AXIS);
+  graphCtx.stroke();
+  graphCtx.restore();
 
   graphCtx.save();
   graphCtx.shadowBlur = LIGHT ? 0 : 6;
   graphCtx.shadowColor = LIGHT ? 'rgba(0,0,0,0)' : 'rgba(0,200,255,0.5)';
   graphCtx.strokeStyle = axisCol;
   graphCtx.lineWidth = 1;
-  graphCtx.beginPath(); graphCtx.moveTo(0, H - PAD); graphCtx.lineTo(W, H - PAD); graphCtx.stroke();
+  graphCtx.beginPath(); graphCtx.moveTo(0, AXIS); graphCtx.lineTo(W, AXIS); graphCtx.stroke();
   graphCtx.restore();
 
-  if (energyTrace.length > 1) {
-    const t1 = world.time, t0 = t1 - GRAPH_WINDOW;
-    // Full scale is twice the starting energy, but grows to fit if the trace
-    // runs higher — switching to High is a 9× jump and must stay on the graph.
-    const peak = energyTrace.reduce((a, pt) => Math.max(a, pt.motion, pt.fields), 0);
-    const full = Math.max(energyAtSpawn * 2, peak * 1.15);
-    const px = (t) => ((t - t0) / GRAPH_WINDOW) * (W - 1);
-    const py = (e) => PAD + gH * (1 - Math.max(0, Math.min(1, e / full)));
-    const stroke = (key, col, glow, lw, blur, alpha) => {
-      graphCtx.save();
-      graphCtx.globalAlpha = alpha;
-      graphCtx.shadowBlur = LIGHT ? 0 : blur;
-      graphCtx.shadowColor = glow;
-      graphCtx.strokeStyle = col;
-      graphCtx.lineWidth = lw;
-      graphCtx.beginPath();
-      energyTrace.forEach((pt, k) => {
-        const x = px(pt.t), y = py(pt[key]);
-        if (k === 0) graphCtx.moveTo(x, y); else graphCtx.lineTo(x, y);
-      });
-      graphCtx.stroke();
-      graphCtx.restore();
-    };
-    // Fields underneath, so the motion line stays the one that reads first.
-    stroke('fields', fieldsCol, fieldsCol, 6, 20, 0.22);
-    stroke('fields', fieldsCol, fieldsCol, 2, 8,  0.75);
-    stroke('motion', motionCol, motionGlow, 8, 28, 0.25);
-    stroke('motion', motionCol, motionGlow, 3, 10, 0.55);
-    stroke('motion', motionCol, motionGlow, 1.5, 0, 1.0);
+  // The axis says what it is. A reaction coordinate with no words on it is just
+  // a squiggle, and the two ends are the whole reason for drawing it this way.
+  // Only ONE label is centred under the axis — the title. A second centred label
+  // below it read as a two-line caption rather than as two separate things, so
+  // the halfway mark is labelled on the line itself, further down.
+  graphCtx.save();
+  graphCtx.fillStyle = textCol;
+  graphCtx.font = '700 9px Lexend, sans-serif';
+  graphCtx.textBaseline = 'middle';
+  graphCtx.textAlign = 'left';
+  graphCtx.fillText('REACTANTS', PADX, AXIS + 12);
+  graphCtx.textAlign = 'right';
+  graphCtx.fillText('PRODUCTS', W - PADX, AXIS + 12);
+  graphCtx.textAlign = 'center';
+  graphCtx.fillStyle = dimCol;
+  graphCtx.font = '700 8px Lexend, sans-serif';
+  graphCtx.fillText('REACTION PROGRESS', W / 2, AXIS + 25);
+  graphCtx.restore();
+
+  if (progressTrace.length < 1) return;
+
+  // The trace is already in bar fractions, so a point on the line sits at the
+  // height the bar beside it stood at when the reaction passed that landmark.
+  const py = (f) => TOP + gH * (1 - Math.max(0, Math.min(1, f)));
+
+  const stroke = (key, col, glow, lw, blur, alpha) => {
+    const pts = progressTrace.map(s => ({ x: px(s.p), y: py(s[key]) }));
+    graphCtx.save();
+    graphCtx.globalAlpha = alpha;
+    graphCtx.shadowBlur = LIGHT ? 0 : blur;
+    graphCtx.shadowColor = glow;
+    graphCtx.strokeStyle = col;
+    graphCtx.lineWidth = lw;
+    graphCtx.lineJoin = 'round';
+    graphCtx.lineCap = 'round';
+    graphCtx.beginPath();
+    if (pts.length === 1) graphCtx.arc(pts[0].x, pts[0].y, lw / 2, 0, Math.PI * 2);
+    else splineThrough(graphCtx, pts);
+    graphCtx.stroke();
+    graphCtx.restore();
+  };
+  // Fields underneath, so the motion line stays the one that reads first.
+  stroke('fields', fieldsCol, fieldsCol, 6, 20, 0.22);
+  stroke('fields', fieldsCol, fieldsCol, 2, 8,  0.75);
+  stroke('motion', motionCol, motionGlow, 8, 28, 0.25);
+  stroke('motion', motionCol, motionGlow, 3, 10, 0.55);
+  stroke('motion', motionCol, motionGlow, 1.5, 0, 1.0);
+
+  // WHERE THE REACTION IS NOW, which is not always the far end of the line. A
+  // water that breaks again walks the marker back down a curve that stays put.
+  const mx = px(progressNow);
+  for (const [key, col, glow] of [['fields', fieldsCol, fieldsCol],
+                                  ['motion', motionCol, motionGlow]]) {
+    const y = py(traceAt(key, progressNow));
+    graphCtx.save();
+    graphCtx.shadowBlur = LIGHT ? 0 : 10;
+    graphCtx.shadowColor = glow;
+    graphCtx.fillStyle = col;
+    graphCtx.beginPath(); graphCtx.arc(mx, y, 3.2, 0, Math.PI * 2); graphCtx.fill();
+    graphCtx.restore();
   }
+
+  // THE HALFWAY MARK, labelled on the line and drawn last so it sits over the
+  // curves rather than under them. It goes midway between the two at that
+  // point, which is the emptiest the plot gets, and carries its own backing so
+  // it stays legible wherever the run happens to put the curves — the gap
+  // between them is wide in one run and narrow in the next, so a position
+  // chosen in advance cannot be relied on.
+  graphCtx.save();
+  graphCtx.font = '700 7px Lexend, sans-serif';
+  graphCtx.textAlign = 'center';
+  graphCtx.textBaseline = 'middle';
+  const label = 'ALL ATOMS FREE';
+  const tw = graphCtx.measureText(label).width;
+  const yMid = (py(traceAt('fields', 0.5)) + py(traceAt('motion', 0.5))) / 2;
+  graphCtx.fillStyle = LIGHT ? 'rgba(255,255,255,0.88)' : 'rgba(9,7,24,0.88)';
+  graphCtx.fillRect(px(0.5) - tw / 2 - 4, yMid - 6, tw + 8, 12);
+  graphCtx.fillStyle = dimCol;
+  graphCtx.fillText(label, px(0.5), yMid);
+  graphCtx.restore();
 }
 
 // ─── Energy bar chart ─────────────────────────────────────────────────────────
@@ -5119,18 +5302,15 @@ function updateEnergyPct() {
   if (fl) fl.textContent = Math.round(shownFieldEnergy() / energyAtSpawn * 100) + '%';
 }
 
-// With the band off the graph is a correctness check — a flat line means the
-// collision solver conserves energy. With the band on it is not: holding the
-// floor adds energy, so the line climbs and then plateaus. Say which it is.
+// What the curve is, in one line under it. The old caption described a trace
+// against TIME, and the caveat it carried — that the speed band makes the line
+// climb and plateau — belonged to that axis, not to this one.
 function updateEnergyNote() {
   const el = document.getElementById('energyPctNote');
   if (!el) return;
-  // Both buckets, and whichever caveat is currently true. Collisions move
-  // energy from motion into the bonds; the vibration decay then drops it out
-  // of the world entirely, which is why the two do not add to a constant.
-  el.textContent = speedBandOn
-    ? 'Motion into the bonds and back out again. Speed band on \u2014 motion drifts up, then levels off'
-    : 'Motion into the bonds and back out again; only breaking a bond spends it for good';
+  el.textContent = currentReaction().productBonds
+    ? 'Energy along the reaction \u2014 each point set the first time the reaction reached it'
+    : 'Energy along the reaction \u2014 this one has no product half modelled yet, so it ends at the peak';
 }
 
 // ─── Controls ─────────────────────────────────────────────────────────────────
@@ -5188,6 +5368,9 @@ function setReaction(id, respawn = true) {
   if (lbl) lbl.textContent = formulaOf(SPECIES[REACTIONS[id].icon].els);
   syncCompositionSliders();
   if (respawn) spawnWorld();
+  // The graph's caption says whether this reaction has a product half, so it
+  // has to be rewritten when the reaction changes, not only at load.
+  updateEnergyNote();
   logAction('Reaction: ' + id);
 }
 
