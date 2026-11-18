@@ -1856,17 +1856,24 @@ in all four places carbon is drawn — the Sandbox scene, the Sandbox ADD button
 thumbnails, the Reactions world and its picker icon, and One Bond's C–O.
 
 
-### The scene had to come off the floor
+### The scene came off the floor, and went back down
 
 Black on a background two values off black is not a colour, it is a hole. The
 themes each carry a near-black `bg` and the canvases cleared to a hardcoded copy
-of theme A's `#05040f` = `rgb(5,4,15)`. The scene now sits a measured `bgLift`
+of theme A's `#05040f` = `rgb(5,4,15)`. The scene was given a measured `bgLift`
 above whatever the theme's base is — **the theme still owns the hue, the lift
 owns how far off the floor it sits** — weighted toward blue the way the base
 colours are, so lifting it does not wash the tint out to grey.
 
-Default 34, giving `rgb(20,18,49)` on theme A. Dev slider **Scene lift**; at 0
-it reproduces `rgb(5,4,15)` exactly, which is the check that nothing else moved.
+It ran at 34, `rgb(20,18,49)` on theme A, for exactly as long as carbon was
+black. **Yellow carbon needs no floor, so `bgLift` is back to 0** and the scene
+is `rgb(5,4,15)` again — the dark the themes actually specify. The mechanism
+stays, on dev slider **Scene lift**, because it is the only way to answer "is
+this element dark enough to disappear?" without rebuilding.
+
+At 0 `panelBg()` returns `rgba(4,3,20,0.88)`, the literal it replaced, which is
+the check that the lift's whole apparatus is genuinely dormant and not just
+quiet.
 
 **The bar chart's panel had to come with it.** It was a fixed
 `rgba(4,3,20,0.88)`, which over the old `(5,4,15)` scene composited to `(4,3,19)`

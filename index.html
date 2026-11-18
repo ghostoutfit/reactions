@@ -1105,14 +1105,17 @@ const rgba = (rgb, a) => `rgba(${rgb},${a})`;
 
 // ── How dark the scene is ───────────────────────────────────────────────────
 // The themes each carry a near-black `bg`, and the canvases used to clear to a
-// hardcoded copy of theme A's. Carbon broke that: it reads as BLACK, and black
-// on a background two values off black is not a colour, it is a hole. So the
-// scene sits a measured amount above whatever the theme's base is — the theme
-// still owns the hue, this owns how far off the floor it sits.
+// hardcoded copy of theme A's. Black carbon broke that: black on a background
+// two values off black is not a colour, it is a hole, so the scene was lifted a
+// measured 34 above the theme's base to give it something to sit on.
 //
-// The lift is weighted toward blue the way the base colours are, so lifting it
-// does not wash the tint out to grey. Dev slider `Scene lift`.
-let bgLift = 34;
+// CARBON IS YELLOW NOW, so nothing in the scene needs the floor raised and the
+// lift is back to 0 — the dark background the themes actually specify. The
+// mechanism stays, on its dev slider, because it is the only way to answer "is
+// this element dark enough to disappear?" without rebuilding. The lift is
+// weighted toward blue the way the base colours are, so raising it does not
+// wash the tint out to grey. Dev slider `Scene lift`.
+let bgLift = 0;
 let themeBg = '#05040f';
 function sceneBgRgb() {
   const [r, g, b] = _rgbOf(themeBg).split(',').map(Number);
