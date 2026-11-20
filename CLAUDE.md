@@ -428,8 +428,8 @@ on/off switch are all dev controls.
 
 ```javascript
 const SPECIES = { H2: { els: ['H','H'] }, O2: { els: ['O','O'] }, He: { els: ['He'] },
-                  H2CO3: { els: ['C','O','O','H','O','H'] } };
-const composition = { H2: 4, O2: 2, He: 0, H2CO3: 0 };   // 0–6 of each, dev sliders
+                  CH4: { els: ['C','H','H','H','H'] } };
+const composition = { H2: 4, O2: 2, He: 0, CH4: 0 };   // 0–6 of each, dev sliders
 const ATOMIC_MASS = { H: 1, O: 16, He: 4, C: 12 };
 ```
 
@@ -447,8 +447,10 @@ is where it is made.
 
 ```javascript
 const REACTIONS = {
-  water:    { composition: { H2: 4, O2: 2, He: 0, H2CO3: 0 }, icon: 'H2',    recombine: true  },
-  carbonic: { composition: { H2: 0, O2: 0, He: 0, H2CO3: 2 }, icon: 'H2CO3', recombine: false },
+  water:      { composition: { H2: 4, O2: 2, He: 0, CH4: 0 }, icon: 'H2',
+                recombine: true, productBonds:  8, products: ['HHO'] },
+  combustion: { composition: { H2: 0, O2: 4, He: 0, CH4: 2 }, icon: 'CH4',
+                recombine: true, productBonds: 12, products: ['HHO', 'COO'] },
 };
 ```
 
@@ -461,49 +463,75 @@ molecule canvas fixes, so changing the selection cannot resize the group or
 shift the temperature buttons beside it. Measured: the pink box is 352×138 and
 `tempGroup` starts at x=319 on **both** reactions.
 
-**`recombine` is part of the reaction, not a global.** Water's two halves —
-breaking, then coming back together — are both the point there. Carbonic acid is
-the breaking half only: its atoms go free and stay free. Without that flag the
-stray H's and O's it leaves behind would start making water, a reaction nobody
-asked that world for. `stepRecombination` needs both the dev toggle and the
-reaction's own flag. Verified: 150 s of carbonic acid at High ends with
-`joins=0`, `recombLatched=false` and twelve free atoms — 2 C, 4 H, 6 O.
+**`recombine` is part of the reaction, not a global.** Both reactions here set
+it true; the flag exists because a reaction's breaking half is what gets written
+first, and until the product half is written its atoms must be allowed to go
+free and stay free rather than start assembling something nobody asked for.
+`stepRecombination` needs both the dev toggle and the reaction's own flag.
 
-### Carbonic acid in the Reactions tab
+**`products` is the other half of the same idea** — see "Strong products". A
+product is named by its SORTED ELEMENT STRING (`HHO`, `COO`), which is the same
+key `joinEls` matches on, so a product cannot be named in a form the join table
+could not actually build.
+
+### Methane in the Reactions tab
 
 Two assumptions held while every species here had at most two atoms: **atoms lie
-in a row**, and **atom k is bonded to atom k-1**. Carbonic acid breaks both. It
-is a tree, not a chain, and it holds a C–O and a C=O at once, which no table
-keyed by the element pair can tell apart (see "A bond TYPE, not an element
-pair"). So:
+in a row**, and **atom k is bonded to atom k-1**. Methane breaks both — it is a
+tree, four hydrogens on one carbon — and CO₂ beside it holds bonds whose ORDER
+no element-pair table can say (see "A bond TYPE, not an element pair"). So:
 
 ```javascript
 const MOLECULE_SHAPES = {
-  COOHOH: { geometry: () => sbCarbonicAcid(),
-            bonds: [[0,1,2],[0,2,1],[2,3,1],[0,4,1],[4,5,1]] },
+  CHHHH: { geometry: /* C at the centre, four H at CH4_ANGLE */,
+           bonds: [[0,1],[0,2],[0,3],[0,4]] },
+  CO:    { geometry: /* the half-built CO2 */, bonds: [[0,1,2]] },
+  OCO:   { geometry: /* straight */,           bonds: [[0,1,2],[1,2,2]] },
 };
 ```
 
-- A species may bring **its own geometry**. The geometry is `sbCarbonicAcid`,
-  the same function the Sandbox builds its molecule from: one Lewis structure,
-  two tabs reading it. Measured in the world: C=O 50.0, C–O 58.1/58.1, O–H
-  49.0/49.0; O=C–O 125.5 twice, (HO)–C–(OH) 109.0, H–O–C 106.8 twice.
+- A species may bring **its own geometry**. Methane's is the shape table's, and
+  the Sandbox's ADD button reads the same entry, so the two tabs cannot draw the
+  same molecule differently. (That dependency used to run the other way, with
+  the world reading a Sandbox builder. The shape table is the better home.)
 - A bond may carry **its own order** as a third entry. Everything that reads a
   bond goes through `bondOrderOf` / `bondEnergyOf`, which fall back to the
   element-pair tables when no order is given, so H₂, O₂ and water are
-  pixel-for-pixel what they were. Electrons measured: C=O four, every single
-  two; lone electrons C 0, each O 4, each H 0. Fields reads **559 kJ/mol per
-  molecule**, the same figure the Sandbox gives.
-- `moleculeIconLayout` now reads `moleculeGeometry` instead of computing a row
-  of bond lengths, so the NEW button draws the shape the molecule actually is.
-  For a diatomic it comes back to the same two numbers it always produced.
-- `drawWorld` draws every atom in the world in **one layer-sorted list**, not
-  per body, and gives each one `drawAtomBody` first. Carbon has to come out
-  above the oxygens around it, and in a six-molecule world those oxygens can
-  belong to a different body than the carbon does. `byLayer` is stable, so every
-  atom that is not carbon stays in the order it was drawn in before. Measured on
-  a carbonic acid in the scene: the carbon disc reads luminance 14–19 all the way
-  round against a background of 21 — black, the same as in the Sandbox.
+  pixel-for-pixel what they were. Methane's four bonds are plain singles and
+  write no order at all; CO₂'s two must write theirs, or the pair table would
+  call them singles.
+
+**Methane is a cross, and that is the honest 2D answer.** A real CH₄ is
+tetrahedral at 109.47°, and that number cannot be drawn on a plane: four equal
+directions from one centre is 90° in 2D and nothing else. `CH4_ANGLE` is π/2,
+and the sim draws the cross rather than a flattened perspective view that would
+make two of the four bonds shorter for no reason the model knows about.
+
+There is **no methane special case in the snap code**. The generic "three or
+more neighbours share the circle evenly" rule already produces exactly this.
+Measured on a built CH₄: bonds at 0°, 90°, 180°, −90°, all four at **52.3 px**,
+C–H **413** each, fields **848 kJ/mol** = 5×500 − 4×413.
+
+#### What combustion is worth
+
+The scene is **2 CH₄ + 4 O₂**, balanced on purpose: one methane wants exactly
+two oxygens, so the composition is 2 and 4 rather than two numbers that happen
+to look reasonable. Spawn it unbalanced and the leftovers stay free at the end,
+which is also true of the real thing.
+
+| | bonds | Σ D | fields |
+|---|---|---|---|
+| 2 CH₄ + 4 O₂ | 8 C–H 413, 4 O=O 495 | 5,284 | **3,716** |
+| 18 free atoms | — | 0 | **9,000** |
+| 2 CO₂ + 4 H₂O | 4 C=O 799, 8 O–H 463 | 6,900 | **2,100** |
+
+**−1,616 kJ/mol, or −808 per methane**, against a real **−802.5** — 0.7% out,
+and the same quality of agreement the water reaction gets (−485 against −484).
+Getting there costs 5,284 to pull everything apart, which is the barrier the
+reaction curve draws as its hump.
+
+That is also the number that decided C=O: at 745 this reads −700, 13% low. See
+"C=O went 799 → 745 → 799".
 
 ### The speed the data means, and the speed you see
 
@@ -870,8 +898,8 @@ so `hidden` simply reports the stored energy as still being in motion. Breaking
 then moves the bars by the whole dissociation energy at the moment it happens,
 instead of part of it leaking across beforehand.
 
-Measured — two H₂CO₃ taken to atoms, which needs 8 breaks and has no
-recombination to confound it, twelve 90 s runs at Med:
+Measured — a combustion world taken towards atoms with recombination off, so
+nothing confounds the count, twelve 90 s runs at Med:
 
 | | mean breaks | first break |
 |---|---|---|
@@ -898,22 +926,25 @@ all three. The secret is kept from the picture, not from the instruments.
 
 #### The bond that would actually let go
 
-With two atoms there was one candidate and this question did not exist. With six
-there are five bonds, and the weakest is **not necessarily one that breaking
-would take an atom off**: carbonic acid's weakest is a C–O at 358, but that
-oxygen is carrying a hydrogen, so pulling it would throw off an OH, not an atom.
+With two atoms there was one candidate and this question did not exist. With a
+tree there can be several, and the weakest is **not necessarily one that
+breaking would take an atom off**: in a molecule whose weakest bond sits in the
+middle, pulling it would throw off a fragment rather than an atom.
 
 `breakableBond(b)` is the weakest bond with a **leaf** on one end — an atom in
-exactly one bond. For carbonic acid that is an O–H at 463. Every number the
-break uses comes from that one bond: `bondEnergyFactor` (and so the threshold),
-`bondLevels`, and what the dissociation costs. A molecule here is a tree, and a
-tree with any bonds at all has a leaf, so it is never null.
+exactly one bond. Every number the break uses comes from that one bond:
+`bondEnergyFactor` (and so the threshold), `bondLevels`, and what the
+dissociation costs. A molecule here is a tree, and a tree with any bonds at all
+has a leaf, so it is never null.
 
-`bondLevels` taking the breaking bond's order rather than the molecule's biggest
-matters for the same reason: carbonic acid holds a C=O, but the bond under load
-is the O–H that is going to go, and a single bond has one level wherever it sits.
-Measured on a fresh H₂CO₃: breakable bond `[2,3]`, threshold 1.403
-(= 1.5 × 463/495), one level.
+Methane is the easy case — all four of its bonds are leaves and they are all the
+same C–H — and the rule is kept for the moment one is not. Measured on a fresh
+CH₄: breakable bond `[0,1]`, D **413**, threshold **1.252** (= 1.5 × 413/495),
+one level.
+
+`bondLevels` takes the breaking bond's order rather than the molecule's biggest,
+for the same reason: a molecule can hold a double and still be losing a single,
+and a single bond has one level wherever it sits.
 
 #### Shatter or peel
 
@@ -929,16 +960,17 @@ before it opens, so peeling a water into H + OH would shut that gate forever.
 That is why the line is drawn at the bond count rather than at the reaction —
 nothing in the water world has three bonds, so nothing there peels.
 
-Six atoms vaporising on one knock says the wrong thing. A collision does not
+Five atoms vaporising on one knock says the wrong thing. A collision does not
 undo a molecule, it takes a piece off it, and the piece coming off one at a time
-is the thing worth watching. Measured, carbonic acid goes:
+is the thing worth watching. Measured in a combustion world at High, methane
+goes:
 
 ```
-H₂CO₃ → H + CHO₃ → O + CHO₂ → H + CO₂ → C + O + O
+CH₄ → H + CH₃ → H + CH₂ → C + H + H
 ```
 
-— the O–H at 463 first, then the C–O at 358 once that oxygen is a leaf, then the
-other O–H, and the last three together when only two bonds are left. Still every
+— one hydrogen, then another, and the last two together once CH₂ is down to two
+bonds and the shatter path takes over below `PEEL_MIN_BONDS`. Still every
 atom free in the end.
 
 The residue is **not rebuilt from any table**; there is no table it could come
@@ -956,10 +988,12 @@ sixteenth of its energy — and the speed band then holds it there for good, sin
 `vTarget` goes down with it. One break, one cooling: fine for a diatomic, which
 has nothing left to break.
 
-Carbonic acid needs four. With the residue slowed too, the second break **never
-came**: both residues sat at 54 px/s with a threshold of 1.08 dose units, a hit
-between them deposited 0.7 into each, and in 117 s of High nothing else broke.
-A molecule that can only ever lose its first atom is not a molecule coming apart.
+A polyatomic needs several. With the residue slowed too, the second break
+**never came**: both residues sat at 54 px/s with a threshold of 1.08 dose
+units, a hit between them deposited 0.7 into each, and in 117 s of High nothing
+else broke. A molecule that can only ever lose its first atom is not a molecule
+coming apart. (Measured on the six-atom molecule that held this slot before
+methane; the rule it produced is what methane now runs under.)
 
 So the dissociation's cost is paid by the piece you watch fly off, and the
 molecule left behind carries on at the speed it was going. The world still cools
@@ -981,13 +1015,19 @@ Low holds for 180 s with nothing breaking at all.
 
 #### What the bars cannot pay for
 
-A carbonic acid world is the first one where **full dissociation costs more than
-the world was anchored with**, and it is worth knowing before the bar chart is
-read in anger. Twelve free atoms are 6,000 kJ/mol of fields; two H₂CO₃ start at
-1,118, so pulling them apart costs 4,882. At High the world spawns with about
-5,203 kJ/mol of motion — a margin of only 22%, because equipartition gives a
-six-atom molecule the same kinetic energy as an H₂ while it has five bonds to
-pay for. The spawn bell can push a particular world under that line.
+Worth checking for any new reaction before the bar chart is read in anger: can
+the world actually afford to come apart? Measured for combustion — 18 atoms, so
+**9,000 kJ/mol** of fields if every one goes free; the reactants sit at
+**3,716**, so full dissociation costs **5,284**. At High the world spawns with
+about **16,734 kJ/mol** of motion, a margin of **217%**, which is comfortable:
+six bodies each draw equipartition's share and the two methanes are only paying
+for four bonds apiece.
+
+It has not always been comfortable. The six-atom molecule that held this slot
+before methane left a margin of 22%, because equipartition gives a six-atom
+molecule the same kinetic energy as an H₂ while it has five bonds to pay for,
+and the spawn bell could push a particular world under the line. A reaction with
+few, large, heavily bonded molecules is the shape to watch for.
 
 The total itself stays exact — measured drift **0** across a full breakup — but
 `motionKJ` is `max(0, total − fields)`, so a world that runs out reads zero
@@ -1794,58 +1834,55 @@ The dropdown is **built from `BOND_TYPES` at startup**, not written out in the
 HTML. The list IS the table: a bond cannot be in the menu without an energy, or
 in the table without a way to pick it.
 
-### C=O is 745, not 799, and O=O is 495
+### C=O went 799 → 745 → 799, and O=O is 495
 
-Two dissociation energies were revised. Both tables moved together, because a
-bond with two numbers is worse than a bond with a wrong one:
+Three revisions, and the round trip is the useful part of the record.
 
 | bond | was | now | why |
 |---|---|---|---|
-| C=O | 799 | **745** | 799 is CO₂'s own C=O. 745 is the general carbonyl, which is what carbonic acid has. |
 | O=O | 498 | **495** | the commonly tabulated value |
+| C–H | — | **413** | new, for methane |
+| C=O | 799 → 745 | **799** | see below |
 
-**`BOND_ENERGY_MAX` is now derived, not written down.** It was a literal `498`
-with a comment explaining that it must stay 498 — which held only while 498
-happened to be O=O's number, exactly the kind of agreement that quietly stops
-being true. It is now `Math.max(...Object.values(BOND_ENERGY))` = **495**, so it
-cannot drift from the table it is the maximum of. Deriving it from the
-element-pair table rather than from `BOND_TYPES` is also what keeps the C=O out
-of it, which was the original comment's real point.
+**C=O has one row and two right answers.** 799 is CO₂'s own C=O; 745 is the
+general carbonyl. It was moved to 745 while carbonic acid — which has a carbonyl
+— was the molecule that used it. Carbonic acid is gone and CO₂ is now the only
+thing here with a C=O, so the row carries CO₂'s number again. The measurement
+that settles it is methane's combustion:
 
-That re-denominates the Reactions currency by 495/498: `kjPerSim` 0.002561 →
+| C=O | CH₄ + 2 O₂ → CO₂ + 2 H₂O | against real −802.5 |
+|---|---|---|
+| 745 | −700 | 13% low |
+| **799** | **−808** | **0.7% high** |
+
+If a carbonyl ever comes back it needs **its own row**, not this one — exactly
+the way C–O and C=O already share an element pair and do not share a row.
+
+**`BOND_ENERGY_MAX` is derived, not written down.** It was a literal `498` with
+a comment explaining that it must stay 498 — which held only while 498 happened
+to be O=O's number, exactly the kind of agreement that quietly stops being true.
+It is now `Math.max(...Object.values(BOND_ENERGY))` = **495**, so it cannot
+drift from the table it is the maximum of. Deriving it from the element-pair
+table rather than from `BOND_TYPES` is also what keeps the C=O out of it, which
+was the original comment's real point — and it is why adding C–H at 413 moved
+nothing.
+
+That re-denominated the Reactions currency by 495/498: `kjPerSim` 0.002561 →
 **0.002546**, a 0.6% shift. It cancels everywhere it matters — `breakThreshold`
 is `breakEnergy × D / BOND_ENERGY_MAX` and `kjPerSim` is
 `BOND_ENERGY_MAX / (breakEnergy × doseUnit())`, so the kJ a given bond is worth
 is unchanged — and what it does move is O=O's threshold, by the same 0.6%,
 which is the point: O=O really is slightly weaker now.
 
-What this changes, measured:
-
-| | was | now |
-|---|---|---|
-| H₂CO₃ at rest | 559 | **613** |
-| CO₂ + H₂O at rest | 476 | **584** |
-| **the reaction** | **−83** | **−29** |
-| CO₂ alone at rest | **−98** | **+10** |
-
-The decomposition is still exothermic, which is right — gas-phase H₂CO₃ → CO₂ +
-H₂O is about −12 kJ/mol — and **−29 is much nearer that than −83 was**. The old
-figure was inflated by giving carbonic acid's carbonyl CO₂'s own bond energy.
-
-**It also lifts CO₂ off the floor, barely.** At 799 a lone CO₂ in the Sandbox
-read **−98 kJ/mol**: its two doubles were worth 1598 and its three atoms only
-carry 1500, so it fell through zero and drew a negative bar. At 745 it reads
-**+10**. That is a reprieve, not a fix — `SB_FREE_ATOM = 500` was chosen when
-nothing bonded harder than 498, and a flat per-atom reference smaller than the
-strongest single bond will go negative again on the next strong bond added.
-Raising it (900 would clear 745 with room) shifts every at-rest reading by
-`400 × atoms` and changes none of the differences, which are the physics.
-
-Regression-checked after the change: four waters in all three runs of the water
-reaction at High, `totalKJ` drift **0** across 90 s, fields ending at the
-arithmetic 2296 (12×500 − 8×463); One Bond reads all five bonds; Sandbox
-H₂CO₃ + O₂ reads 1118 = 4000 − 2882; dev panel opens with its 52 sliders and no
-console errors.
+**The open problem: `SB_FREE_ATOM = 500` is too low for carbon.** A lone CO₂ in
+the Sandbox reads **−98 kJ/mol** — its two doubles are worth 1,598 and its three
+atoms only carry 1,500, so it falls through zero and the bar cannot be drawn at
+all. 500 was chosen when nothing bonded harder than 498, and **a flat per-atom
+reference smaller than the strongest bond will always go negative on something.**
+Raising it to 900 (clearing C=O's 799 with room) would shift every at-rest
+reading by `400 × atoms` and change none of the differences, which are the
+physics — but it also moves One Bond's `SEPARATED_TOTAL` from 1000 to 1800,
+which is a visible change to a tab that is otherwise untouched. Not done.
 
 ### Carbon
 
@@ -2525,9 +2562,9 @@ the moves the tab is for:
 | H₂ + O₂ | 1069 | 4×500 − (436+495) |
 | pull the O₂ apart | 1564 | 4×500 − 436 |
 | **H₂O + O** | **1074** | **4×500 − 2×463** |
-| **H₂CO₃** | **613** | **6×500 − (745 + 2×358 + 2×463)** |
-| **CO₂** | **10** | **3×500 − 2×745** |
-| **CO₂ + H₂O** | **584** | **6×500 − (2×745 + 2×463)** |
+| **CH₄** | **848** | **5×500 − 4×413** |
+| **4 CH₄** | **3392** | **20×500 − 16×413** |
+| **CO₂** | **−98** | **3×500 − 2×799** — see "the open problem" |
 
 The sandbox's lobes now go through `bondShownMag` as well, the same compressed
 depth scale One Bond uses, because this tab shows the same mixed set of
@@ -2555,32 +2592,30 @@ nothing. Ranked by distance, a crushed H–H outranked a perfect O–H and stole
 atom — dropping a third H beside a finished water **pulled one of its bonds
 apart**. Ranked by energy released, the water survives.
 
-### Carbonic acid, and the double bond that is not in any table
+### CO₂, and the double bond that is not in any table
 
-H₂CO₃ is the first molecule here that needs **two different bonds between the
-same two elements**: one C=O and two C–O on the same carbon. No element-pair
-table can say which is which, and `BOND_TYPES` cannot either — it holds both
-rows, but nothing in it says which row a particular bond in the scene should
-take.
+Carbon needs **two different bonds between the same two elements**: a C=O and a
+C–O are the same pair. No element-pair table can say which is which, and
+`BOND_TYPES` cannot either — it holds both rows, but nothing in it says which
+row a particular bond in the scene should take.
 
 So the order is not looked up. **It falls out of what the atoms have left
 over.** `sbRebuildBonds` lays the singles down as it always did, and then
 `sbPromoteBonds` walks them: any promotable bond whose two atoms *both* still
-have a free slot becomes a double. On a carbonic acid that is exactly one bond —
-carbon has used 3 of 4, the two hydroxyl oxygens are full (a carbon and a
-hydrogen each), and only the bare oxygen still has a slot, so the C=O lands
-there and nowhere else. Every atom ends up with a full shell. **That is the
-Lewis structure, arrived at rather than hard-coded.**
+have a free slot becomes a double. On a CO₂ that is both bonds — carbon has used
+2 of 4 and each oxygen 1 of 2 — and every atom ends full. On a methane it is
+none of them: carbon is already full at four singles and a hydrogen has nothing
+to give. **That is the Lewis structure, arrived at rather than hard-coded**, and
+one rule gives both answers without being told about either molecule.
 
 A pair is promotable only when `BOND_TYPES` holds both a single and a double for
 it, which today means C–O alone. O=O has no single in the table, so it is still
-made a double up front by `BOND_ORDER` and this pass never touches it; H₂ and
-water come through untouched for the same reason.
+made a double up front by `BOND_ORDER` and this pass never touches it; H₂, water
+and methane come through untouched for the same reason.
 
-Because it is a rule and not a template, **it survives being taken apart.**
-Measured: pull one H off an H₂CO₃ and the remainder re-promotes a *different*
-C–O, giving `C0=O2 C0–O1 C0–O4` — carbon still at 4 of 4. Put the H back and it
-is H₂CO₃ again with exactly one double.
+Because it is a rule and not a template, **it survives being taken apart.** Pull
+an H off a methane and the CH₃ left behind re-bonds under the same rule; bring an
+oxygen up to it and the promotion decides the order from what is free.
 
 ### Geometry
 
@@ -2611,73 +2646,64 @@ about what is left. Any lone pair → bent; none → 180°.
 the thing most likely to need fixing and did not. `sbPromoteBonds` places the
 singles first and then promotes any bond whose two atoms both still have a slot:
 on a CO₂ the carbon has used 2 of 4 and each oxygen 1 of 2, so *both* bonds
-promote and every atom ends full. On an H₂CO₃ the same rule promotes exactly one
-— the two hydroxyl oxygens are already full with a carbon and a hydrogen each,
-and only the bare oxygen has a slot. The Lewis structure arrives rather than
-being hard-coded, and it gives a different answer for the two molecules without
-being told about either.
+promote and every atom ends full. On a **methane** the same rule promotes none
+of them — carbon is already full at four singles, and a hydrogen has nothing to
+give. The Lewis structure arrives rather than being hard-coded, and it gives a
+different answer for the two molecules without being told about either.
 
-Verified on a hand-built CO₂: `C=O` and `C=O`, D **745** each, both at **50 px**,
-O=C=O at **180.0°**, carbon holding **0** lone pairs. And nothing else moved —
-water still 104.5° with two O–H singles, O₂ still order 2, H₂ still order 1, and
-H₂CO₃ still one double with its carbon's three angles at 125.5 / 125.5 / 109.
+Verified on a built CO₂: `C=O` and `C=O`, D **799** each, both at **50 px**,
+O=C=O at **180.0°**, carbon holding **0** lone pairs. On a built CH₄: four
+`C–H` at **413**, all at **52.3 px**, at 0 / 90 / 180 / −90°. And nothing else
+moved — water still 104.5° with two O–H singles, O₂ still order 2, H₂ still
+order 1.
 
 The world has the same molecule in `MOLECULE_SHAPES.OCO`, and it has to say
 *both* things explicitly: a three-atom molecule with no shape of its own gets
 water's bend, and `moleculeBonds` would leave the two C–O orders to the
-element-pair table, which says single — the same table that could not tell
-carbonic acid's C=O from its two C–O. Verified: 180.0°, both orders 2, both
+element-pair table, which says single. Verified: 180.0°, both orders 2, both
 50 px.
 
-**Not yet done, and flagged:** a CO₂ that appears in the *Reactions* tab by
-peeling an H₂CO₃ down is assembled from live coordinates, not from this table,
-so it keeps the ~125.5° it had inside its parent. Straightening it means
-re-snapping a peeled residue to its table shape when one exists, which is a
-visible jump at the break and a decision of its own.
+A CO₂ built by **recombination** does come from this table — `joinBodies` makes
+the product from `moleculeGeometry`, so it is straight and double-bonded the
+moment it forms. A fragment left behind by a *peel* still is not: a peeled
+residue is assembled from the coordinates its atoms already had, which is what
+keeps the scene still at the instant a bond goes. Nothing in combustion peels
+down to a CO₂ — methane peels to CH₃, CH₂, C — so the case does not arise
+today, but it is the same decision if it ever does.
 
-**Carbonic acid's angles come off the Lewis structure and VSEPR.** The carbon is
-sp² with no lone pair of its own, so its three oxygens are trigonal planar — but
-not at a flat 120° each. The double bond takes more room than the two singles,
-which opens both O=C–O to **125.5°** and closes the (HO)–C–(OH) between them to
-**109°**. Those three are the whole circle, which is the check that they belong
-together: 125.5 + 125.5 + 109 = 360. Each hydroxyl's hydrogen then sits at
-**106.8°** off its oxygen's O→C direction.
+**Methane's angle is π/2, and that is a decision, not an approximation.** A real
+CH₄ is tetrahedral at 109.47°, and that number cannot be drawn on a plane: four
+equal directions from one centre is 90° in 2D and nothing else. The sim draws
+the honest cross rather than a flattened perspective view, which would make two
+of the four bonds shorter than the other two for no reason the model knows.
 
 ```javascript
-const H2CO3_OCO   = 125.5 * Math.PI / 180;   // O=C–O, both of them
-const H2CO3_HOCOH = 109.0 * Math.PI / 180;   // (HO)–C–(OH), what is left
-const H2CO3_HOC   = 106.8 * Math.PI / 180;   // H–O–C at each hydroxyl
+const CH4_ANGLE = Math.PI / 2;
 ```
 
-Two things the snap had to learn:
+It is **referenced by the shape table and by nothing in the snap code**: the
+generic "three or more neighbours share the circle evenly" rule already produces
+exactly this. Measured on a built CH₄: bonds at 0°, 90°, 180°, −90°, all four at
+**52.3 px**, four C–H at **413**, fields **848** = 5×500 − 4×413.
 
-**A trigonal centre keeps its double pointing where it points.** The double bond
-takes the reference direction and the two singles open `H2CO3_OCO` either side,
-so a snap never spins the molecule.
+Lone electrons, which is the Lewis diagram itself: **C 0, every H 0** on
+methane; **C 0, every O 4** on CO₂. The renderer derives these from
+`VALENCE − shared`, so giving carbon a valence of 4 and the C=O an order of 2
+was the whole of it.
 
-**A second shell.** Carbonic acid is the first molecule here deeper than a
-centre and its neighbours — each hydroxyl oxygen carries a hydrogen one bond
-further out, and those used to be "left where they are rather than guessed at",
-which on a six-atom molecule means they never find their angle at all. Each is
-now placed off its oxygen's O→C direction and **turned to the outside**, the
-side that oxygen already sits on, so the two hydroxyls open away from one
-another. Bending toward the centre instead would fold both hydrogens into the
-middle of the molecule.
+**A second shell, kept for the molecules you can drag together.** Nothing the
+ADD buttons place reaches deeper than a centre and its neighbours — methane,
+CO₂, water and the diatomics are all one shell — but the tab lets you drag any
+atoms into contact, so a molecule that does reach it is one drag away and would
+otherwise leave its outer atoms wherever they lay. Each is placed off its
+neighbour's direction back to the centre and **turned to the outside**, the side
+that neighbour already sits on, so branches open away from one another rather
+than folding into the middle.
 
-Measured on a spawned H₂CO₃, after the relax pass has had its say:
-
-| | target | measured |
-|---|---|---|
-| O=C–O (×2) | 125.5° | 125.5°, 125.5° |
-| (HO)–C–(OH) | 109° | 109.0° |
-| H–O–C (×2) | 106.8° | 106.8°, 106.8° |
-| C=O | 50.0 px | 50.0 |
-| C–O (×2) | 58.1 px | 58.1 |
-| O–H (×2) | 49.0 px | 49.0 |
-
-Lone electrons, which is the Lewis diagram itself: **C 0, every O 4 (two pairs),
-every H 0.** The renderer already derived these from `VALENCE − shared`, so
-giving carbon a valence of 4 and the C=O an order of 2 was the whole of it.
+(A fourth case lived here too — a trigonal centre with one double bond, at
+125.5/125.5/109 — and it existed for one molecule's carbon and nothing else. It
+went with the molecule. Methane's carbon has four neighbours and no double, so
+it falls through to the even share.)
 
 ### What the ADD buttons place
 
@@ -2688,28 +2714,30 @@ picture), and a six-atom molecule fits none of them. One list drives all three
 now, so the button's picture is necessarily the thing the button places.
 
 That also generalised two things that had the pair baked in: the room scan
-insets the legal band by the shape's **own reach on each side** (carbonic acid
-hangs further below its carbon than above it), and the thumbnail **fits** the
+insets the legal band by the shape's **own reach on each side** (a molecule
+that reaches further one way than the other), and the thumbnail **fits** the
 shape rather than assuming a horizontal pair. A diatomic still comes out at
 exactly the old size, because at that size the old 0.8 shrink is what binds.
 
 The thumbnail runs the scene's real bonding rules on the shape in isolation, so
-the picture shows the orders the button will actually place — the C=O in the
-H₂CO₃ button is a C=O for the same reason it is one in the scene.
+the picture shows the orders the button will actually place — the two C=O in the
+CO₂ button are doubles for the same reason they are in the scene, and methane's
+four are singles.
 
 Deleting now compares **formulas** against what the ADD buttons make, rather
-than asking for "two atoms, the same element". That is what lets a carbonic acid
-be deleted too, and it still refuses a lone atom and anything the scene built
-for itself.
+than asking for "two atoms, the same element". That is what lets the
+polyatomics be deleted too, and it still refuses a lone atom and anything the
+scene built for itself.
 
-`formulaOf` has a special case for it: Hill ordering gives CH₂O₃, which is
-correct and which nobody writes. It is H₂CO₃ everywhere it is taught, so it is
-H₂CO₃ here — the same reason OH is not written HO.
+`formulaOf` keeps one special case, for **OH**: everyone writes it that way and
+strict Hill ordering would make it HO. Methane and carbon dioxide need none —
+Hill gives CH₄ and CO₂, which is what they are called. (The case for H₂CO₃ went
+with the molecule.)
 
-Only **3** carbonic acids fit a 1033-wide canvas before the button greys out,
-against 45 H₂, because the molecule is large and the three-radii clearance is
-generous. The H₂ and O₂ buttons stay live when the H₂CO₃ one greys: the scan is
-per species, and smaller molecules still fit.
+Only **4** methanes fit a 926-wide canvas before the button greys out, against
+45 H₂, because the molecule is large and the three-radii clearance is generous.
+The H₂ and O₂ buttons stay live when the CH₄ and CO₂ ones grey: the scan is per
+species, and smaller molecules still fit.
 
 ### Atoms cannot be squashed
 
@@ -2894,26 +2922,101 @@ where its geometry already is, so the click test cannot drift from what is drawn
 
 ## Recombination — the other half of the reaction
 
-Once the scene has come apart, the atoms find each other again and make
-**water**, which is the reaction this whole sim is pointed at: 2 H₂ + O₂ → 2 H₂O.
-Verified end to end — a default scene run through breaking and then
-recombination finished as **4 H₂O and nothing else**.
+Once the scene has come apart, the atoms find each other again and make the
+reaction's products. Verified end to end, 10 runs each at High:
+
+| reaction | reaches its products | first complete |
+|---|---|---|
+| 2 H₂ + O₂ → 2 H₂O | **10/10** | 5.8–19.3 s |
+| CH₄ + 2 O₂ → CO₂ + 2 H₂O | **10/10** | 7.7–32.3 s |
 
 **It only opens once every original molecule has come apart**, and the condition
 is `world.bodies.every(b => b.els.length === 1)`, latched the first frame it is
 true. The latch is the whole trick: forming the first OH makes the condition
-false again, and the gate must not slam behind it.
+false again, and the gate must not slam behind it. (Combustion latches at
+1.8–13.7 s from an 18-atom scene.)
 
-Only the two steps towards water pull on each other:
+**The whole reaction is one table of steps**, `JOIN_STEPS`, keyed by the sorted
+elements of the two bodies meeting:
 
 ```
-H + O -> OH        OH + H -> H2O
+H + O  -> OH        OH + H -> H2O
+C + O  -> CO        CO + O -> CO2
 ```
 
-Not H + H, not O + O — hydrogen and oxygen going back to H₂ and O₂ is the
-reaction running backwards and there is nothing to watch in it. The bonding site
-is the oxygen where there is one (in an OH it still has a slot free), otherwise
-the atom itself.
+Each product has an intermediate, and **CO is the half-built CO₂ exactly as OH
+is the half-built water**. The product's atom order on the right is what
+`moleculeShape` is keyed by, so `COO` must come back as O,C,O to find
+`MOLECULE_SHAPES.OCO`.
+
+**What is not in the table matters as much as what is.** No `HH`, so free
+hydrogens never make an H₂ again; no `OO`, so the oxygen the reaction is
+spending cannot go back into an O₂; no `CH`, so a stray H cannot start
+rebuilding the methane the world has just taken apart. The products are the only
+things that can be built, which is what makes the reaction run forwards.
+
+### The bonding site is read off the valence
+
+`recombSite` used to be "find the O, else atom 0", which was right for every
+join water needs — a free H joins at its only atom, an OH at its oxygen — and
+**wrong the moment a CO wants another oxygen**, because the O is exactly the
+atom with no room left.
+
+So the site is now **the atom with a free slot**: its valence less the bond
+orders already on it, against `VALENCE_SLOTS` (H 1, O 2, C 4 — a different
+question from `VALENCE`, which is outer-shell electrons, six for oxygen). That
+gives the same answer it always gave for H, O and OH, and the right one for CO.
+
+This is also why `MOLECULE_SHAPES.CO` writes its single bond as a **double**:
+that leaves the carbon with two slots free and the oxygen with none, so the site
+falls out without being named. A real CO is a triple; this is an intermediate
+that lives for a few frames, and what it has to get right is which end is open.
+
+### Oxygen is the thing there is not enough of
+
+Combustion is the first reaction here where **two products compete for the same
+atom**, and a purely local rule deadlocks on it. Burning two methanes gives 2 C,
+8 H and 8 O, which has to come out as 2 CO₂ and 4 H₂O — four oxygens to the
+carbons, four to the waters. Nothing stops the first eight meetings all being an
+H and an O: that makes eight OH, uses every hydrogen and every oxygen in the
+world, and leaves two carbons with nothing to bond to and eight hydroxyls that
+can never finish. **Measured before the fix, and it is not a rare case** — it is
+what happens, because there are four times as many H's and O's as C's.
+
+So the oxygen a carbon still needs is **reserved**: a free O may not start an OH
+while the carbons are short (`oxygenReservedForCarbon`). It is a local rule for
+a global shortage, and it is also the physics it stands in for — a C=O is 799
+and an O–H is 463, so an oxygen with a carbon available really does have
+somewhere better to be. Nothing else is scheduled; every other meeting is still
+whoever happens to collide. The `continue` skips the **pull** as well as the
+capture, so a reserved oxygen does not even drift towards a hydrogen.
+
+An oxygen-starved spawn simply reserves everything, the carbons take what there
+is, and the leftover hydrogens stay free — which is what an oxygen-starved burn
+actually does.
+
+### Two numbers the carbon joins exposed
+
+Both were latent bugs that water could not reveal, because water's only bond is
+the one the element-pair table gets right.
+
+**What a join releases.** It was `bondEnergy(siteA.el, siteB.el)` — the
+element-pair table — which cannot say whether a C–O is the 358 single or the 799
+double and always answers 358. A join building a C=O would have released less
+than half what it owed while `fieldsKJ` counted the full 799: the bars and the
+motion disagreeing by 441 kJ/mol per bond. It is now `joinReleaseKJ`, the
+product's bonds less the two reactants' — the same difference the bar chart
+sees, exact by construction, no table. For an O–H the two agree exactly, so
+water's numbers do not move.
+
+**The capture gate read drawn speeds.** `keRel <= bondSim` refuses a capture too
+violent for the bond to hold, and the velocities it used are the **drawn** ones,
+which `massVisual` inflates for heavy bodies: a CO and an O arrive at **3.25×**
+the energy they actually have. Measured with the boost left in, carbon stalled
+at CO — 2 CO + 2 free O still sitting there after 240 s, having been inside
+capture range for **4,458 frames** and as close as **41 px** against a snap
+threshold of **83**. Dividing by `displayBoost(a) × displayBoost(b)` is the same
+correction the collision dose already makes, for the same reason.
 
 ### Distances are in contact widths, not bond lengths
 
@@ -3149,18 +3252,32 @@ All three are in the dev panel under Recombination:
 bond energy would be one ordinary collision from coming apart again, and the
 reaction would never reach water.
 
-### Strong water
+### Strong products
 
 A toggle in the Reactions tab's pink box, **on by default** (see Temperature for
-why it ships on alongside Low). With it on, a water molecule is the
+why it ships on alongside Low). With it on, a finished product molecule is the
 end of the line: **it cannot break, and it cannot take energy into its fields
 either**, so a hit on one is perfectly elastic and bounces away with everything
 it arrived with. Same button shell as the temp buttons, so nothing in that box
 shifts when it turns on.
 
+**It is the reaction's products, not water.** The rule was written when water
+was the only product any reaction here had, and `isWater` was the whole of it.
+Combustion has two, and protecting one and not the other is not a modelling
+choice, it is a leftover. Measured before the change: a finished 2 CO₂ + 4 H₂O
+world held together only **68%** of the time at High (10 runs, 57–84%), because
+the CO₂ kept being knocked back to CO + O while the waters beside it were
+untouchable. After: **100%** in all 10 runs, and water's own figures do not
+move.
+
+So each reaction names its `products`, and `isProduct` reads that list. The key
+is the **sorted element string** — `HHO`, `COO` — which is the same key
+`joinEls` matches on, so a product cannot be named in a form the join table
+could not build. The button's label changed with the rule: **STRONG PRODUCTS**.
+
 Those two halves are **one rule, not two**, and the implementation is one line:
-water is left out of the collision's `storers` count in exactly the way a free
-atom already is.
+a product is left out of the collision's `storers` count in exactly the way a
+free atom already is.
 
 - A bond only ever breaks because its field filled past the threshold, so a
   molecule that stores nothing can never break. The break half comes free.
@@ -3401,14 +3518,16 @@ reactants, which is what exothermic looks like.
 
 ### A reaction with no product half yet
 
-`REACTIONS[*].productBonds` is how many bonds the finished products hold.
-Carbonic's is `null` because its product half is **not coded yet**, not because
-it does not have one — carbonic acid will recombine. Until it does, progress
-stops at 0.5: the curve climbs to the peak and ends there, markers and all, with
-the right half of the axis empty under PRODUCTS. That is the honest picture of a
-model that knows how to take the molecule apart and not yet how to rebuild it,
-and the caption under the graph says so. Filling in `productBonds` alongside
-`recombine: true` is all the graph needs to run the second half.
+`REACTIONS[*].productBonds` is how many bonds the finished products hold — 8 for
+water, 12 for combustion. Set it `null` and progress stops at 0.5: the curve
+climbs to the peak and ends there, markers and all, with the right half of the
+axis empty under PRODUCTS, and the caption under the graph says so.
+
+**Both reactions here have a product half now**, so nothing uses the null case
+today. It is kept because writing the breaking half first is how a reaction gets
+added: `recombine: false` and `productBonds: null` is a complete, honest,
+shippable state for a reaction whose second half is not written, and filling in
+those two fields is all the graph needs to run it.
 
 ### One sample per step, taken the first time the reaction gets there
 

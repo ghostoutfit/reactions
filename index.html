@@ -805,7 +805,7 @@
              and it cannot take energy into its fields, so every hit on it is
              perfectly elastic. One button, same shell as the temp buttons, so
              nothing in this box shifts when it turns on. -->
-        <button id="strongWaterBtn" class="awheel-item active" style="align-self:stretch;">STRONG WATER</button>
+        <button id="strongWaterBtn" class="awheel-item active" style="align-self:stretch;">STRONG PRODUCTS</button>
         <div id="speciesCounters" style="display:flex;gap:5px;justify-content:center;">
           <div style="flex:1;background:rgba(255,255,255,0.05);border-radius:6px;padding:3px 5px;text-align:center;font-size:11px;color:var(--text-dim);line-height:1.5;white-space:nowrap;">
             <span id="sp1Count" style="font-size:9px;letter-spacing:0.05em;opacity:0.6;">&times;2&nbsp;</span><span id="sp1Formula" style="color:var(--accent1);font-weight:700">H&#8322;</span>
@@ -892,8 +892,11 @@
         <button id="sbAddO2" class="btn sb-add" title="Add an O2">
           <canvas class="sb-thumb"></canvas><span>O&#8322;</span>
         </button>
-        <button id="sbAddH2CO3" class="btn sb-add" title="Add an H2CO3">
-          <canvas class="sb-thumb"></canvas><span>H&#8322;CO&#8323;</span>
+        <button id="sbAddCH4" class="btn sb-add" title="Add a CH4">
+          <canvas class="sb-thumb"></canvas><span>CH&#8324;</span>
+        </button>
+        <button id="sbAddCO2" class="btn sb-add" title="Add a CO2">
+          <canvas class="sb-thumb"></canvas><span>CO&#8322;</span>
         </button>
       </div>
       <div style="display:flex;flex-direction:column;gap:5px;justify-content:center;padding:8px 0;min-width:120px;">
@@ -1551,7 +1554,7 @@ setFieldRamp(fieldRamp);
 // of it: deriving from this table and not from BOND_TYPES is what guarantees
 // that. (It was a literal 498 while that happened to be O=O's number, which is
 // exactly the kind of agreement that quietly stops being true.)
-const BOND_ENERGY = { 'H-H': 436, 'H-O': 463, 'O-O': 495, 'C-O': 358 };
+const BOND_ENERGY = { 'H-H': 436, 'H-O': 463, 'O-O': 495, 'C-O': 358, 'C-H': 413 };
 const BOND_ENERGY_MAX = Math.max(...Object.values(BOND_ENERGY));   // 495, O=O
 
 // What a free atom carries on its own, kJ/mol, so that a pair fully apart reads
@@ -1564,17 +1567,14 @@ const SB_FREE_ATOM = 500;
 // bent triatomic use it, so there is one angle, not two.
 const H2O_ANGLE = 104.5 * Math.PI / 180;
 
-// Carbonic acid, from the Lewis structure and VSEPR. The carbon is sp2 with no
-// lone pair of its own, so its three oxygens are trigonal planar — but NOT at a
-// flat 120 each: the double bond takes more room than the two singles, which
-// opens both O=C–O angles to 125.5 and closes the (HO)–C–(OH) between them to
-// 109. Those three are the whole circle (125.5 + 125.5 + 109 = 360), which is
-// the check that they belong together. Each hydroxyl's H then hangs off its
-// oxygen at 106.8, near enough water's own bend, and turned away from the rest
-// of the molecule so the two do not fold inward at each other.
-const H2CO3_OCO   = 125.5 * Math.PI / 180;   // O=C–O, both of them
-const H2CO3_HOCOH = 109.0 * Math.PI / 180;   // (HO)–C–(OH), what is left
-const H2CO3_HOC   = 106.8 * Math.PI / 180;   // H–O–C at each hydroxyl
+// Methane's bond angle, flattened. A real CH4 is tetrahedral at 109.47 and
+// that number cannot be drawn on a plane: four directions from one centre, all
+// equal, is 90 in 2D and nothing else. So the sim draws the honest 2D answer —
+// a cross — rather than a squashed perspective view that would have two bonds
+// looking shorter than the other two for no reason the model knows about.
+// (The generic ">= 3 neighbours share the circle evenly" rule in sbSnapMolecule
+// already produces exactly this, so there is no methane special case anywhere.)
+const CH4_ANGLE = Math.PI / 2;
 function bondEnergy(elA, elB) {
   return BOND_ENERGY[[elA, elB].sort().join('-')] || 400;
 }
@@ -1593,6 +1593,12 @@ function bondEnergy(elA, elB) {
 // molecules that form and break by collision, and adding an element there is a
 // much bigger piece of work than adding a row here.
 //
+// C=O IS 799, WHICH IS CO2'S OWN. It was briefly 745, the general carbonyl,
+// while carbonic acid was the molecule that had one. Carbonic acid is gone and
+// CO2 is the only thing here with a C=O, so the table carries CO2's number:
+// methane's combustion reads -808 against a real -802.5 at 799, and -700 at
+// 745. If a carbonyl ever comes back it needs its own row, not this one.
+//
 // `lenMult` multiplies the length `bondLen` gives for the pair. The three
 // original types sit at 1 so they are pixel-for-pixel what they were. A double
 // bond is genuinely shorter than its single — C–O is 1.43 Å and C=O is 1.23 —
@@ -1602,7 +1608,8 @@ const BOND_TYPES = {
   'O=O': { els: ['O', 'O'], order: 2, D: 495, lenMult: 1,    label: 'O = O' },
   'O-H': { els: ['O', 'H'], order: 1, D: 463, lenMult: 1,    label: 'O – H' },
   'C-O': { els: ['C', 'O'], order: 1, D: 358, lenMult: 1,    label: 'C – O' },
-  'C=O': { els: ['C', 'O'], order: 2, D: 745, lenMult: 0.86, label: 'C = O' },
+  'C=O': { els: ['C', 'O'], order: 2, D: 799, lenMult: 0.86, label: 'C = O' },
+  'C-H': { els: ['C', 'H'], order: 1, D: 413, lenMult: 1,    label: 'C – H' },
 };
 const DEFAULT_BOND = 'H-H';
 function bondType(id) { return BOND_TYPES[id] || BOND_TYPES[DEFAULT_BOND]; }
@@ -2076,6 +2083,13 @@ function drawNucleus(dc, px, py, scale = 1, alpha = 1) {
 // its two electrons stay lone. That is the non-bonding case the renderer has to
 // handle, and the reason He is here at all.
 const VALENCE   = { H: 1, O: 6, He: 2, C: 4 };          // outer-shell electrons
+
+// HOW MANY BONDS AN ATOM CAN HOLD, which is a different question from how many
+// outer-shell electrons it has: oxygen has six of those and makes two bonds.
+// The Sandbox has always known this (it was three inline ternaries in
+// `sbValence`) and recombination now needs the same answer to decide which end
+// of a CO is still open, so it is one table both read.
+const VALENCE_SLOTS = { H: 1, O: 2, He: 0, C: 4 };
 const BOND_ORDER = { 'H-H': 1, 'H-O': 1, 'O-O': 2 };    // 2 = double bond
 function bondOrder(elA, elB) {
   return BOND_ORDER[[elA, elB].sort().join('-')] || 1;
@@ -2477,9 +2491,9 @@ const SPECIES = {
   H2:    { els: ['H', 'H'] },
   O2:    { els: ['O', 'O'] },
   He:    { els: ['He'] },        // monatomic: no bond, two lone electrons
-  H2CO3: { els: ['C', 'O', 'O', 'H', 'O', 'H'] },   // shape in MOLECULE_SHAPES
+  CH4:   { els: ['C', 'H', 'H', 'H', 'H'] },   // shape in MOLECULE_SHAPES
 };
-const COMPOSITION_DEFAULT = { H2: 4, O2: 2, He: 0, H2CO3: 0 };  // 2:1 — water's ratio
+const COMPOSITION_DEFAULT = { H2: 4, O2: 2, He: 0, CH4: 0 };  // 2:1 — water's ratio
 const COMPOSITION_MAX = 6;
 const composition = { ...COMPOSITION_DEFAULT };
 
@@ -2490,31 +2504,33 @@ const composition = { ...COMPOSITION_DEFAULT };
 // setting three numbers in the right order. The picker in the red box sets the
 // whole composition, and the NEW button shows what it will spawn.
 //
-// `recombine` is part of the reaction, not a global. Water's two halves —
-// breaking, then coming back together — are both the point there. Carbonic acid
-// is the breaking half only, for now: its atoms go free and stay free, which is
-// what was asked for, and it is also the honest state of the model, since
-// nothing here knows how to put a C back into anything.
+// `recombine` is part of the reaction, not a global: a reaction that only comes
+// apart sets it false and its atoms go free and stay free.
 //
 // `productBonds` is how many bonds the finished products hold, and it is what
 // the right half of the reaction-progress graph counts up to — see
-// `reactionProgress`. Carbonic's is null because its product half is NOT CODED
-// YET, not because it does not have one: carbonic acid will recombine. Until it
-// does, the graph is right to stop its curve at the peak, which is exactly the
-// state of the model. Filling this in alongside `recombine: true` is all the
-// graph needs to run the second half.
+// `reactionProgress`. A reaction whose product half is not written sets it null
+// and the graph stops its curve at the peak, which is then the honest picture
+// of the model rather than a missing feature.
+//
+// COMBUSTION IS BALANCED, and the composition is where that is said: one CH4
+// wants exactly two O2, so the entry is 2 and 4 rather than any two numbers
+// that happen to look reasonable. Spawn it unbalanced and the leftovers simply
+// stay free at the end, which is also true of the real thing.
 const REACTIONS = {
   water: {
     label: 'H₂ + O₂  →  H₂O',
-    composition: { H2: 4, O2: 2, He: 0, H2CO3: 0 },
+    composition: { H2: 4, O2: 2, He: 0, CH4: 0 },
     icon: 'H2', recombine: true,
     productBonds: 8,            // 4 waters, two O–H each
+    products: ['HHO'],
   },
-  carbonic: {
-    label: 'H₂CO₃  →  atoms',
-    composition: { H2: 0, O2: 0, He: 0, H2CO3: 2 },
-    icon: 'H2CO3', recombine: false,
-    productBonds: null,         // the product half is not written yet
+  combustion: {
+    label: 'CH₄ + O₂  →  CO₂ + H₂O',
+    composition: { H2: 0, O2: 4, He: 0, CH4: 2 },
+    icon: 'CH4', recombine: true,
+    productBonds: 12,           // 2 CO2 at two bonds, 4 waters at two
+    products: ['HHO', 'COO'],
   },
 };
 const DEFAULT_REACTION = 'water';
@@ -2589,36 +2605,52 @@ let nextBodyId = 0;
 //
 // Two assumptions held while every species here had at most two atoms with one
 // bond between them: atoms lie in a line, and atom k is bonded to atom k-1.
-// Carbonic acid breaks both. It is a tree, not a chain — three oxygens on one
-// carbon, two of them carrying a hydrogen — and it holds a C–O and a C=O at
-// once, which no table keyed by the element pair can tell apart (see BOND_TYPES).
+// Methane breaks both. It is a tree, not a chain — four hydrogens on one
+// carbon, none of them bonded to each other — and CO2 beside it holds bonds
+// whose ORDER no table keyed by the element pair can tell apart (see
+// BOND_TYPES: C–O and C=O are the same two elements).
 //
 // So a species may bring its own geometry and its own bond list, and a bond may
 // carry its ORDER as a third entry. Everything that reads a bond goes through
 // `bondOrderOf` / `bondEnergyOf`, which fall back to the element-pair tables
 // when no order is given — so H2, O2 and water are pixel-for-pixel unchanged.
-//
-// The geometry is `sbCarbonicAcid`, the same function the Sandbox builds its
-// molecule from: one Lewis structure, two tabs reading it.
 const MOLECULE_SHAPES = {
-  COOHOH: {
-    geometry: () => sbCarbonicAcid(),
-    //  0 C, 1 O (the double, straight up), 2 O + 3 H, 4 O + 5 H
-    bonds: [[0, 1, 2], [0, 2, 1], [2, 3, 1], [0, 4, 1], [4, 5, 1]],
+  // METHANE IS A CROSS. Four bonds from one centre at CH4_ANGLE, which is the
+  // only angle four equal directions can have on a plane; see CH4_ANGLE for why
+  // the sim draws that rather than a flattened 109.47. Every bond is a plain
+  // single, so no order is written and the element-pair table supplies it.
+  CHHHH: {
+    geometry: () => {
+      const r = bondLen('C', 'H');
+      return [{ el: 'C', lx: 0, ly: 0 }].concat([0, 1, 2, 3].map(k => ({
+        el: 'H',
+        lx: Math.cos(k * CH4_ANGLE) * r,
+        ly: Math.sin(k * CH4_ANGLE) * r,
+      })));
+    },
+    bonds: [[0, 1], [0, 2], [0, 3], [0, 4]],
+  },
+  // CARBON MONOXIDE, which exists here only as the half-built CO2 that
+  // recombination passes through — the way OH is the half-built water. Its one
+  // bond is written as a DOUBLE so that the carbon ends with two slots free and
+  // the oxygen with none, which is what makes `recombSite` pick the carbon
+  // without being told to. (A real CO is a triple; this is an intermediate that
+  // lives for a few frames, and what it has to get right is which end is open.)
+  CO: {
+    geometry: () => {
+      const r = bondLenFor('C', 'O', 2);
+      return [{ el: 'C', lx: -r / 2, ly: 0 },
+              { el: 'O', lx:  r / 2, ly: 0 }];
+    },
+    bonds: [[0, 1, 2]],
   },
   // CARBON DIOXIDE IS STRAIGHT, AND BOTH ITS BONDS ARE DOUBLE.
   //
   // Neither falls out of the generic path. A three-atom molecule with no shape
   // of its own gets water's bend, and `moleculeBonds` would leave the two C–O
-  // orders to the element-pair table, which says single — the same table that
-  // could not tell carbonic acid's C=O from its two C–O. Both have to be said
+  // orders to the element-pair table, which says single. Both have to be said
   // here. With them said, the carbon has spent all four of its electrons and
   // has no lone pairs to bend anything with, which is exactly why it is linear.
-  //
-  // In H2CO3 only the oxygen with no hydrogen on it carries the double; the two
-  // hydroxyl oxygens are each full with a carbon and a hydrogen. Take both
-  // hydrogens off and those oxygens have a slot free again, and the molecule
-  // that is left is this one.
   OCO: {
     geometry: () => {
       const r = bondLenFor('C', 'O', 2);
@@ -3110,7 +3142,7 @@ function stepWorld(dt) {
     // and a slow exponential tail reads as a bond that is still holding
     // something. It goes out linearly instead, inside a fixed window, so
     // `strongFlareSec` is literally how long the pink can last.
-    if (strongWater && isWater(b)) {
+    if (strongWater && isProduct(b)) {
       b.flare = Math.max(0, b.flare - dt / Math.max(0.05, strongFlareSec));
     } else if (b.flare > 1e-4) b.flare *= Math.exp(-dt / FLARE_TAU);
     else b.flare = 0;
@@ -3488,11 +3520,12 @@ function bondDegrees(b) {
 // THE BOND THAT WOULD ACTUALLY LET GO: the weakest bond with a free end.
 //
 // With two atoms there was only ever one candidate and this question did not
-// exist. With six there are five bonds, and the weakest of them is not
-// necessarily one that breaking would take an atom off — carbonic acid's
-// weakest is a C–O at 358, but that oxygen is carrying a hydrogen, so pulling
-// that bond would throw off an OH, not an atom. The weakest bond with a LEAF on
-// one end is the O–H at 463, and that is the one that goes.
+// exist. With a tree there can be several, and the weakest of them is not
+// necessarily one that breaking would take an atom off: in a molecule whose
+// weakest bond sits in the middle, pulling it would throw off a fragment rather
+// than an atom. The weakest bond with a LEAF on one end is the one that goes.
+// Methane is the easy case — every one of its four bonds is a leaf — and the
+// rule is here for the moment one is not.
 //
 // Every number the break uses comes from this one bond: the threshold it has to
 // clear, how many hits it can stack, and what the dissociation costs. A tree
@@ -3570,10 +3603,11 @@ function returnFieldEnergy(b, amount) {
 // it an O=O was simply a stronger single bond — harder to break and otherwise
 // identical. With it, it has somewhere to put a second knock.
 //
-// It is the BREAKING bond's order, not the molecule's biggest. Carbonic acid
-// holds a C=O, but the bond under load is the O–H that is going to go, and a
-// single bond has one level wherever it sits. Taking the maximum would hand the
-// O–H the C=O's second level, which belongs to a bond that is not breaking.
+// It is the BREAKING bond's order, not the molecule's biggest. A molecule can
+// hold a double and still be losing a single — the bond under load is the one
+// that is going to go, and a single bond has one level wherever it sits. Taking
+// the maximum would hand that single the double's second level, which belongs
+// to a bond that is not breaking.
 function bondLevels(b) {
   const bd = breakableBond(b);
   return bd ? bondOrderOf(b, bd) : 1;
@@ -3607,17 +3641,27 @@ function bondLevels(b) {
 // place. Nothing is deleted and the bar chart's total still holds.
 // On by default: a water that has formed stays formed, which is the reading the
 // Reactions tab wants — the reaction runs one way and the product accumulates.
+// IT IS THE REACTION'S PRODUCTS, not water. The rule was written when water was
+// the only product any reaction here had, and `isWater` was the whole of it.
+// Combustion has two, and protecting one of them and not the other is not a
+// modelling choice, it is a leftover: measured, a finished 2 CO2 + 4 H2O world
+// held together only 68% of the time at High, because the CO2 kept being
+// knocked back to CO + O while the waters beside it were untouchable.
+//
+// So each reaction names its products and the rule reads that list. Water's
+// list is one entry and its behaviour is bit-for-bit what it was.
 let strongWater = true;
-let strongFlareSec = 0.5;          // how long a strong water may stay pink
-function isWater(b) {
-  if (b.els.length !== 3) return false;
-  let h = 0, o = 0;
-  for (const el of b.els) { if (el === 'H') h++; else if (el === 'O') o++; }
-  return h === 2 && o === 1;
+let strongFlareSec = 0.5;          // how long a strong product may stay pink
+// Sorted element string, the same key `joinEls` matches on, so a product cannot
+// be named here in a form the join table could not produce.
+function speciesKey(els) { return els.slice().sort().join(''); }
+function isProduct(b) {
+  const list = currentReaction().products;
+  return !!list && list.includes(speciesKey(b.els));
 }
 // Whether this body has a bond that can hold collision energy at all.
 function canStoreVib(b) {
-  return b.els.length > 1 && !(strongWater && isWater(b));
+  return b.els.length > 1 && !(strongWater && isProduct(b));
 }
 
 // ─── HOW A BOND HOLDS WHAT IT IS GIVEN ───────────────────────────────────────
@@ -3804,9 +3848,10 @@ function payExactBreakCost(b, made) {
 // A molecule with three or more PEELS: one bond lets go, one atom leaves, and
 // what is left is still a molecule. Six atoms vaporising on one knock says the
 // wrong thing — a collision does not undo a molecule, it takes a piece off it —
-// and the piece coming off one at a time is the thing worth watching. Carbonic
-// acid goes H, then O, then H, then the last three together, which is still
-// every atom free in the end.
+// and the piece coming off one at a time is the thing worth watching. A
+// methane goes H, then H, then the last two together once CH2 is down to two
+// bonds and the shatter takes over — which is still every atom free in the end.
+// Measured in a combustion world at High: CH4 -> CH3 -> CH2 -> C.
 const PEEL_MIN_BONDS = 3;
 
 // Peel: the leaf atom on the breakable bond leaves, and the rest stays whole.
@@ -3823,7 +3868,7 @@ const PEEL_MIN_BONDS = 3;
 // the one place this departs from the shatter. `breakSlow` cuts a fragment to a
 // quarter of its speed — a sixteenth of its energy — and the speed band then
 // holds it there for good, since `vTarget` goes down with it. One break, one
-// cooling: fine for a diatomic, which has nothing left to break. Carbonic acid
+// cooling: fine for a diatomic, which has nothing left to break. A methane
 // needs four, and measured with the residue slowed too the second never came:
 // both residues sat at 54 px/s with a threshold of 1.08 dose units, a hit
 // between them deposited 0.7 into each, and in 117 s of High nothing else broke.
@@ -4018,17 +4063,112 @@ let joinVibCap  = 0.4;        // x break threshold: the glow a new bond may hold
 
 // Which atom of a body is the one that would do the bonding: the oxygen if it
 // has one (it has a slot free, being in an OH), otherwise its only atom.
+// WHICH ATOM THE NEXT BOND LANDS ON, read off the valence rather than named.
+//
+// This used to be "find the O, else atom 0", which was right for every join
+// water needs — a free H joins at its only atom, an OH joins at its oxygen —
+// and wrong the moment a CO wants another oxygen, because the O is exactly the
+// atom that has no room left. So the site is now THE ATOM WITH A FREE SLOT:
+// its valence less the bond orders already on it. That gives the same answer it
+// always gave for H, O and OH, and the right one for CO.
+//
+// Ties go to the lowest index, which never arises in practice: every
+// intermediate here (H, O, C, OH, CO) has exactly one open atom.
 function recombSite(b) {
-  const o = b.atoms.findIndex(at => at.el === 'O');
-  return o >= 0 ? o : 0;
+  const used = b.atoms.map(() => 0);
+  for (const bd of b.bonds) {
+    const o = bondOrderOf(b, bd);
+    used[bd[0]] += o; used[bd[1]] += o;
+  }
+  const free = b.atoms.findIndex((at, i) => used[i] < (VALENCE_SLOTS[at.el] || 0));
+  return free >= 0 ? free : 0;
 }
 
 // What a and b would make together, or null if they would make nothing.
+//
+// THE WHOLE REACTION IS THIS TABLE. Each entry is the sorted elements of the
+// two bodies on the left and the product's atom order on the right, and the
+// product's order is what `moleculeShape` is keyed by — so 'COO' must come back
+// as O,C,O to find `MOLECULE_SHAPES.OCO`, not as C,O,O.
+//
+// Combustion goes through two intermediates, one per product, and they are the
+// reason this is a table of steps rather than of reactions: CO is the half-built
+// CO2 exactly as OH is the half-built water. Two atoms meet, then a third joins
+// what they made.
+//
+// What is NOT here matters as much as what is. There is no 'HH', so free
+// hydrogens never make an H2 again; no 'OO', so the oxygen the reaction is
+// spending cannot go back into an O2; no 'CH', so a stray H cannot start
+// rebuilding the methane the world has just taken apart. The products are the
+// only things that can be built, which is what makes the reaction run forwards.
+const JOIN_STEPS = {
+  HO:  ['O', 'H'],            // -> OH, the half-built water
+  HHO: ['H', 'O', 'H'],       // -> H2O
+  CO:  ['C', 'O'],            // -> CO, the half-built carbon dioxide
+  COO: ['O', 'C', 'O'],       // -> CO2
+};
 function joinEls(a, b) {
   const n = [...a.els, ...b.els].sort().join('');
-  if (n === 'HO')  return ['O', 'H'];
-  if (n === 'HHO') return ['H', 'O', 'H'];
-  return null;
+  return JOIN_STEPS[n] ? JOIN_STEPS[n].slice() : null;
+}
+
+// WHAT A JOIN IS WORTH, kJ/mol: the bonds the product holds less the bonds the
+// two pieces brought. Exact for every step by construction, and the same number
+// `fieldsKJ` will see a frame later — which is the point, because the two used
+// to be allowed to differ.
+//
+// It replaces `bondEnergy(siteA.el, siteB.el)`, a lookup in the element-pair
+// table, which answers 358 for any C and O and so priced a forming C=O at less
+// than half the 799 the bar chart was about to count. For an O–H the two agree
+// exactly, so water's numbers do not move.
+function elsBondEnergyKJ(els) {
+  return moleculeBonds(els).reduce((t, bd) => {
+    const x = els[bd[0]], y = els[bd[1]];
+    return t + (bd[2] ? bondDFor(x, y, bd[2]) : bondEnergy(x, y));
+  }, 0);
+}
+function bodyBondEnergyKJ(b) {
+  return b.bonds.reduce((t, bd) => t + bondEnergyOf(b, bd), 0);
+}
+function joinReleaseKJ(a, b, els) {
+  return elsBondEnergyKJ(els) - bodyBondEnergyKJ(a) - bodyBondEnergyKJ(b);
+}
+
+// ─── Oxygen is the thing there is not enough of ──────────────────────────────
+//
+// Combustion is the first reaction here where two products compete for the same
+// atom, and a purely local rule deadlocks on it. Burning two methanes gives
+// 2 C, 8 H and 8 O, which has to come out as 2 CO2 and 4 H2O — four oxygens to
+// the carbons, four to the waters. But nothing stops the first eight meetings
+// all being an H and an O: that makes eight OH, uses every hydrogen and every
+// oxygen in the world, and leaves two carbons with nothing left to bond to and
+// eight hydroxyls that can never finish. The run stops dead at 8 OH + 2 C.
+// (Measured before this rule existed, and it is not a rare case — it is what
+// happens, because there are four times as many H's and O's as C's.)
+//
+// So the oxygen a carbon still needs is RESERVED. A free O may not start an OH
+// while the carbons in the world are still short, which is a local rule for a
+// global shortage — and it is also the physics it stands in for: a C=O is 799
+// and an O–H is 463, so the oxygen that has a carbon available really does have
+// somewhere better to be. Nothing else is scheduled; every other meeting is
+// still whoever happens to collide.
+//
+// A carbon-starved spawn (more C than the O can feed) simply reserves
+// everything, the carbons take what oxygen there is, and the leftover hydrogens
+// stay free — which is what an oxygen-starved burn actually does.
+function oxygenReservedForCarbon() {
+  let need = 0;
+  for (const b of world.bodies) {
+    if (!b.els.includes('C')) continue;
+    need += 2 - b.els.filter(e => e === 'O').length;   // CO2 takes two
+  }
+  return Math.max(0, need);
+}
+// The H + O -> OH step specifically: the only join that spends a free oxygen on
+// something other than a carbon. OH + H -> H2O spends no oxygen, so a water
+// that has already started always finishes.
+function startsAnOH(a, b) {
+  return [...a.els, ...b.els].sort().join('') === 'HO';
 }
 
 function siteWorldPos(b, i) {
@@ -4252,8 +4392,7 @@ function joinBodies(a, b, els) {
     startForm(nb, fit.q);
   }
 
-  const released = bondEnergy(a.atoms[recombSite(a)].el, b.atoms[recombSite(b)].el)
-                 / kjPerSim();
+  const released = joinReleaseKJ(a, b, nb.els) / kjPerSim();
   const keCom = 0.5 * M * (cvx * cvx + cvy * cvy);
   // A bond that is already there keeps what it was holding. Nothing used to put
   // vibration into an OH, so dropping it here cost nothing and nobody noticed;
@@ -4330,10 +4469,10 @@ let recombLatched = false;    // every original molecule has come apart
 const pullEnter = new Map();
 
 function stepRecombination(dt) {
-  // Both have to say yes: the dev toggle, and the reaction itself. Carbonic acid
-  // runs the breaking half only, so its atoms go free and stay free — without
-  // this gate the stray H's and O's left over from it would start making water,
-  // which is a reaction nobody asked that world for.
+  // Both have to say yes: the dev toggle, and the reaction itself. A reaction
+  // that runs the breaking half only sets `recombine: false` and its atoms go
+  // free and stay free — without this gate the strays left over from it would
+  // start building products nobody asked that world for.
   if (!recombineOn || !currentReaction().recombine) return;
   if (!recombLatched) {
     if (!world.bodies.length || !world.bodies.every(b => b.els.length === 1)) return;
@@ -4345,11 +4484,18 @@ function stepRecombination(dt) {
   for (const b of B) { b.pullNear = false; b.pullWork = 0; }
   const joins = [];
   const seen = new Set();
+  const reserved = oxygenReservedForCarbon();
+  let freeO = B.reduce((n, b) => n + (b.els.length === 1 && b.els[0] === 'O' ? 1 : 0), 0);
 
   for (let i = 0; i < B.length; i++) {
     for (let k = i + 1; k < B.length; k++) {
       const els = joinEls(B[i], B[k]);
       if (!els) continue;
+      // OXYGEN GOES WHERE IT RELEASES MOST. See oxygenReservedForCarbon: a free
+      // O that the carbons still need is not available to start an OH, and is
+      // not even attracted to a hydrogen, because `continue` here skips the
+      // pull as well as the capture.
+      if (startsAnOH(B[i], B[k]) && freeO <= reserved) continue;
       const si = recombSite(B[i]), sk = recombSite(B[k]);
       const [x1, y1] = siteWorldPos(B[i], si);
       const [x2, y2] = siteWorldPos(B[k], sk);
@@ -4390,11 +4536,31 @@ function stepRecombination(dt) {
         // Capture only if the bond could actually hold them. Two atoms crashing
         // together faster than the bond is worth do not stick in the real world
         // either — they need somewhere to put the excess, and there is nowhere.
+        // In TRUE speeds, not drawn ones — the same correction the collision
+        // dose makes, and for the same reason. The velocities here are the
+        // drawn ones, and `massVisual` draws a heavy body faster than it is: a
+        // CO and an O come in at 3.25x the energy they actually have, and the
+        // test below then refuses a capture the physics allows. Measured: with
+        // the boost left in, carbon stalled at CO — 2 CO + 2 free O still
+        // sitting there after 240 s, having been inside capture range for 4458
+        // frames and as close as 41 px with a snap threshold of 83.
         const mu = (B[i].mass * B[k].mass) / (B[i].mass + B[k].mass);
         const rvx = B[k].vx - B[i].vx, rvy = B[k].vy - B[i].vy;
-        const keRel = 0.5 * mu * (rvx * rvx + rvy * rvy);
-        const bondSim = bondEnergy(B[i].atoms[si].el, B[k].atoms[sk].el) / kjPerSim();
-        if (keRel <= bondSim) { joins.push([B[i], B[k], els]); continue; }
+        const keRel = 0.5 * mu * (rvx * rvx + rvy * rvy)
+                    / (displayBoost(B[i]) * displayBoost(B[k]));
+        // The same figure the join will release, not the element-pair table's
+        // guess at it: a C=O that is worth 799 must be allowed to capture a
+        // pair carrying up to 799, or carbon would need a gentler approach than
+        // the bond it is making can account for.
+        const bondSim = joinReleaseKJ(B[i], B[k], els) / kjPerSim();
+        if (keRel <= bondSim) {
+          // Spend the oxygen against this frame's count too, not just against
+          // the next frame's recount: two hydroxyls captured in the same frame
+          // would otherwise both be measured against the same free O.
+          if (startsAnOH(B[i], B[k])) freeO--;
+          joins.push([B[i], B[k], els]);
+          continue;
+        }
       }
 
       // Otherwise pull, equal and opposite, a constant force inside the range.
@@ -4560,10 +4726,6 @@ function formulaOf(els) {
   // The hydroxyl radical is written OH by everyone, though strict Hill ordering
   // would make it HO. Water stays H2O, which Hill gets right.
   if (els.length === 2 && count.H === 1 && count.O === 1) return 'OH';
-  // Hill ordering would make carbonic acid CH2O3, which is correct and which
-  // nobody writes. It is H2CO3 everywhere it is taught, so it is H2CO3 here.
-  if (count.C === 1 && count.H === 2 && count.O === 3 && els.length === 6)
-    return 'H' + sub(2) + 'CO' + sub(3);
   const rank = (e) => e === 'C' ? 0 : e === 'H' ? 1 : 2;
   return Object.keys(count)
     .sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))
@@ -4977,9 +5139,11 @@ function setRunning(on) {
 // bond in the world after the latch is a product bond, since everything was a
 // free atom a moment before.
 //
-// A reaction with no product half yet, like carbonic acid, simply stops at 0.5.
-// Its curve climbs to the peak and ends there, which is the honest picture of a
-// model that knows how to take the molecule apart and not yet how to rebuild it.
+// A reaction with no product half simply stops at 0.5. Its curve climbs to the
+// peak and ends there, which is the honest picture of a model that knows how to
+// take the molecule apart and not yet how to rebuild it. Both reactions here
+// have a product half; the case is kept because writing the breaking half first
+// is how a reaction gets added.
 function reactionProgress() {
   const bodies = world.bodies;
   if (!bodies.length) return 0;
@@ -5596,12 +5760,12 @@ document.getElementById('strongWaterBtn').addEventListener('click', function () 
   // change, which is the same contract returnFieldEnergy keeps everywhere else.
   if (strongWater) {
     for (const b of world.bodies) {
-      if (!isWater(b) || !(b.vib > 0)) continue;
+      if (!isProduct(b) || !(b.vib > 0)) continue;
       returnFieldEnergy(b, b.vib * doseUnit());
       b.vib = 0; b.vibN = 0;
     }
   }
-  logAction('Strong water ' + (strongWater ? 'on' : 'off'));
+  logAction('Strong products ' + (strongWater ? 'on' : 'off'));
 });
 
 function setViewModeActive(targetBtn) {
@@ -5683,8 +5847,8 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     row('devH2', 'H\u2082 molecules', 0, COMPOSITION_MAX, 1, COMPOSITION_DEFAULT.H2, '#b9c0cd') +
     row('devO2', 'O\u2082 molecules', 0, COMPOSITION_MAX, 1, COMPOSITION_DEFAULT.O2, '#e8382f') +
     row('devHe', 'He atoms',       0, COMPOSITION_MAX, 1, COMPOSITION_DEFAULT.He, '#7fdbe8') +
-    row('devH2CO3', 'H₂CO₃ molecules', 0, COMPOSITION_MAX, 1,
-        COMPOSITION_DEFAULT.H2CO3, '#c9cedb') +
+    row('devCH4', 'CH₄ molecules', 0, COMPOSITION_MAX, 1,
+        COMPOSITION_DEFAULT.CH4, '#c9cedb') +
     row('devConv', 'Collision \u2192 bond', 0, 0.9, 0.05, fieldConvert, '#c46cff') +
     '<div id="devConvNote" style="opacity:0.45;font-size:10px;"></div>' +
     row('devDrag', 'Loaded bond slows it', 0, 0.9, 0.05, vibDrag, '#c46cff') +
@@ -5858,7 +6022,7 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   bind('devH2',    v => composition.H2 = v, true);
   bind('devO2',    v => composition.O2 = v, true);
   bind('devHe',    v => composition.He = v, true);
-  bind('devH2CO3', v => composition.H2CO3 = v, true);
+  bind('devCH4', v => composition.CH4 = v, true);
   bind('devConv', v => {
     fieldConvert = v;
     const n = panel.querySelector('#devConvNote');
@@ -7302,7 +7466,7 @@ function sbPinned() {
 // bonds: H takes one, O two — so an O already holding two H ignores a third,
 // and an O=O, being a double bond, uses up both of each oxygen's slots the way
 // it really does. The sandbox only ever makes real species.
-function sbValence(el) { return el === 'H' ? 1 : el === 'O' ? 2 : el === 'C' ? 4 : 0; }
+function sbValence(el) { return VALENCE_SLOTS[el] || 0; }
 
 // Which pairs are actually bonded. Nearest first, each taken only while both
 // atoms have a slot free, so a crowd resolves into real molecules rather than
@@ -7343,17 +7507,17 @@ function sbRebuildBonds() {
 }
 
 // PROMOTION. The skeleton above is built from element pairs, which cannot say
-// whether a given C–O is the single or the double — and carbonic acid needs one
-// of each kind on the same carbon. So the order is not read off a table; it
-// FALLS OUT of what the atoms have left over.
+// whether a given C–O is the single or the double. So the order is not read off
+// a table; it FALLS OUT of what the atoms have left over.
 //
 // Once the singles are placed, any promotable bond whose two atoms both still
-// have a free slot becomes a double. On an H2CO3 that is exactly one bond:
-// carbon has used 3 of 4, the two hydroxyl oxygens are full (carbon and a
-// hydrogen each), and only the bare oxygen still has a slot — so the C=O lands
-// on it and nowhere else, and every atom ends up with a full shell. That is the
-// Lewis structure, arrived at rather than hard-coded, which also means it
-// survives having an H pulled off: the remains re-bond under the same rule.
+// have a free slot becomes a double. On a CO2 that is both bonds: carbon has
+// used 2 of 4 and each oxygen 1 of 2, so both promote and every atom ends full.
+// On a methane it is none of them — carbon is already full at four singles and
+// a hydrogen has nothing to give — so CH4 comes out of this pass untouched.
+// That is the Lewis structure, arrived at rather than hard-coded, which also
+// means it survives having an H pulled off: the remains re-bond under the same
+// rule, and a CH3 with an O brought up to it becomes what it should.
 //
 // Nothing else in the sim is promotable (see bondPromotable), so H2, O2 and
 // water come out of this pass untouched.
@@ -7440,18 +7604,14 @@ function sbSnapMolecule(mol) {
     wrapAngle(angOf(p) - base) - wrapAngle(angOf(q) - base));
 
   // Where each neighbour belongs, as an offset from `base`.
+  //
+  // (There was a fourth case here, a trigonal centre with one double bond at
+  // 125.5/125.5/109. It existed for carbonic acid's carbon and for nothing
+  // else, and it went with the molecule. Methane's carbon has four neighbours
+  // and no double, so it falls through to the even share below, which is
+  // exactly the cross it should be.)
   let offs;
-  const di = order.find(i => (ord.get(c + ',' + i) || 1) === 2);
-  if (order.length === 3 && di !== undefined) {
-    // A trigonal centre with one double bond — carbonic acid's carbon. The
-    // double takes the reference direction and keeps pointing where it already
-    // points, so a snap never spins the molecule; the two singles open
-    // H2CO3_OCO either side of it, which leaves them H2CO3_HOCOH apart.
-    base = angOf(di);
-    const rest = order.filter(i => i !== di)
-                      .sort((p, q) => wrapAngle(angOf(p) - base) - wrapAngle(angOf(q) - base));
-    offs = new Map([[di, 0], [rest[0], -H2CO3_OCO], [rest[1], H2CO3_OCO]]);
-  } else {
+  {
     // TWO NEIGHBOURS: BENT OR STRAIGHT, and the atom's own electrons decide.
     //
     // Water's oxygen keeps two lone pairs after its two bonds, and those pairs
@@ -7480,15 +7640,16 @@ function sbSnapMolecule(mol) {
     A[i].y = A[c].y + Math.sin(ang) * r;
   }
 
-  // THE SECOND SHELL. Carbonic acid is the first molecule here that is more
-  // than a centre and its neighbours: each hydroxyl oxygen carries a hydrogen
-  // of its own, one bond further out. This used to be left where it lay, which
-  // on a six-atom molecule means the hydrogens never find their angle at all.
+  // THE SECOND SHELL: a neighbour that carries neighbours of its own, one bond
+  // further out. Nothing the ADD buttons build reaches this far — methane,
+  // CO2, water and the diatomics are all a centre and its neighbours — but the
+  // tab lets you drag any atoms together, so a molecule that does reach it is
+  // one drag away and would otherwise leave those outer atoms wherever they lay.
   //
-  // Each is placed off its oxygen's O→C direction and turned to the OUTSIDE —
-  // the side that oxygen already sits on — so the two hydroxyls open away from
-  // one another instead of folding their hydrogens into the middle of the
-  // molecule, which is what a bend toward the centre would do.
+  // Each is placed off its neighbour's direction back to the centre and turned
+  // to the OUTSIDE — the side that neighbour already sits on — so branches open
+  // away from one another instead of folding into the middle of the molecule,
+  // which is what a bend toward the centre would do.
   for (const i of order) {
     const sub = mol.adj[i].filter(j => j !== c);
     if (!sub.length) continue;
@@ -7496,7 +7657,7 @@ function sbSnapMolecule(mol) {
     const rel = wrapAngle(angOf(i) - base);
     const s = rel < 0 ? -1 : 1;
     sub.forEach((j, k) => {
-      const bend = (A[i].el === 'O' && A[j].el === 'H') ? H2CO3_HOC : H2O_ANGLE;
+      const bend = H2O_ANGLE;
       const fan = sub.length > 1 ? (k - (sub.length - 1) / 2) * 0.6 : 0;
       const r = bondLenFor(A[i].el, A[j].el, ord.get(i + ',' + j) || 1);
       A[j].x = A[i].x + Math.cos(toC + s * bend + fan) * r;
@@ -7664,10 +7825,10 @@ function drawSandbox() {
   ctx.font = '600 13px Inter, system-ui, sans-serif';
   ctx.textAlign = 'center';
   // The label goes below its atom, unless the rest of the molecule is below it —
-  // then it goes above. Carbonic acid's carbonyl oxygen sits directly over the
-  // carbon, and a label always-below put its O inside the carbon's nucleus,
-  // where it simply could not be read. A diatomic's two atoms are level, so the
-  // test ties and they keep the label they always had.
+  // then it goes above. Methane's top hydrogen sits directly over the carbon,
+  // and a label always-below put its H inside the carbon's nucleus, where it
+  // simply could not be read. A diatomic's two atoms are level, so the test
+  // ties and they keep the label they always had.
   const midY = new Array(A.length).fill(null);
   for (const m of sbMolecules()) {
     if (m.idx.length < 2) continue;
@@ -7747,7 +7908,7 @@ function sbDrawValenceElectrons(c, A, bonds) {
 // drift apart. An O2 at rest is 131 px wide including both halos, so the
 // thumbnail is drawn 1:1 into a box that size and shown at half, which gives it
 // the crispness of a 2x asset for free.
-// Carbonic acid is far wider and taller than an O2, so the thumbnail FITS the
+// Methane is far wider and taller than an O2, so the thumbnail FITS the
 // shape rather than assuming it is a horizontal pair: the scale is whatever
 // makes the molecule and its halos sit inside the box with a margin. A diatomic
 // comes out at the same size it always did, because at that size it is the fit
@@ -7773,8 +7934,8 @@ function sbThumb(cv, shape) {
   // would simply lose its lobe — centring the shape here rather than in the
   // transform is what keeps every atom inside the buffer.
   //
-  // Centre the shape's BOX, not its origin: carbonic acid hangs further below
-  // its carbon than above it, and centring on the carbon crops the hydroxyls.
+  // Centre the shape's BOX, not its origin: a molecule that reaches further one
+  // way than the other gets cropped if you centre on its central atom.
   const cx = SB_THUMB_W / 2 + (L - R) / 2, cy = SB_THUMB_H / 2 + (T - B) / 2;
   c.setTransform(k, 0, 0, k, (1 - k) * SB_THUMB_W / 2, (1 - k) * SB_THUMB_H / 2);
 
@@ -7842,8 +8003,8 @@ function sbClearance(x, y, el) {
 // all piling into the same corner of the scan order.
 // Where a whole SHAPE can go, or null if nowhere can. The legal band for the
 // origin is the scene inset by the shape's own reach on each side, so a lopsided
-// molecule — carbonic acid hangs further below its carbon than above it — gets
-// the room it actually needs rather than a square guess.
+// molecule — one that reaches further one way than the other — gets the room it
+// actually needs rather than a square guess.
 function sbRoomFor(shape) {
   if (!shape || !shape.length) return null;
   let L = 0, R = 0, T = 0, B = 0;
@@ -7880,43 +8041,30 @@ function sbRoomFor(shape) {
 // A species is a SHAPE, not a pair of elements: a list of atoms at offsets from
 // the molecule's own origin. The diatomics were two atoms laid out horizontally
 // in three different places (the spawn, the room scan, the button picture), and
-// a six-atom carbonic acid does not fit any of them. One list drives all three
+// a five-atom methane does not fit any of them. One list drives all three
 // now, so the button's picture is necessarily the thing the button places.
 function sbDiatomic(a, b) {
   const r0 = bondLen(a, b);
   return [{ el: a, lx: -r0 / 2, ly: 0 }, { el: b, lx: r0 / 2, ly: 0 }];
 }
 
-// Carbonic acid, built straight off the Lewis diagram: a trigonal carbon with
-// the double-bonded oxygen pointing up and the two hydroxyls splayed below, each
-// carrying its hydrogen turned outward. The C=O is drawn SHORTER than the two
-// C–O (lenMult 0.86, from 1.23 A against 1.43), which together with the wider
-// angle either side of it is what makes the double bond legible as a double
-// bond in the scene rather than something you have to count dots to find.
-function sbCarbonicAcid() {
-  const rCO1 = bondLenFor('C', 'O', 1);
-  const rCO2 = bondLenFor('C', 'O', 2);
-  const rOH  = bondLen('O', 'H');
-  const up   = -Math.PI / 2;                 // canvas y grows downward
-  const out  = [{ el: 'C', lx: 0, ly: 0 },
-                { el: 'O', lx: Math.cos(up) * rCO2, ly: Math.sin(up) * rCO2 }];
-  for (const s of [1, -1]) {
-    const a  = up + s * H2CO3_OCO;
-    const ox = Math.cos(a) * rCO1, oy = Math.sin(a) * rCO1;
-    // The H sits H2CO3_HOC off the O→C direction, turned to the OUTSIDE — the
-    // same turn on each side, mirrored, so the two hydroxyls open away from one
-    // another instead of folding their hydrogens into the middle.
-    const h  = Math.atan2(-oy, -ox) + s * H2CO3_HOC;
-    out.push({ el: 'O', lx: ox, ly: oy });
-    out.push({ el: 'H', lx: ox + Math.cos(h) * rOH, ly: oy + Math.sin(h) * rOH });
-  }
-  return out;
-}
+// The two carbon molecules, both taken straight from MOLECULE_SHAPES so the
+// Sandbox and the world cannot draw the same molecule differently. The geometry
+// used to live here and be read by the world; it now lives in the shape table
+// and is read by this tab, which is the better direction — a molecule's shape
+// belongs with the other molecules' shapes, and a tab just asks for one.
+function sbMethane()       { return MOLECULE_SHAPES.CHHHH.geometry(); }
+function sbCarbonDioxide() { return MOLECULE_SHAPES.OCO.geometry(); }
 
+// METHANE HAS NO OXYGEN, so with it as the only carbon source there would be no
+// way to build a C–O on this tab at all. CO2 is the other half of combustion
+// and it puts both carbon-oxygen bonds back within reach, which is why the list
+// is these four: the reactants and the products, one button each.
 const SB_ADDABLE = [
-  ['sbAddH2',    'H2',    () => sbDiatomic('H', 'H')],
-  ['sbAddO2',    'O2',    () => sbDiatomic('O', 'O')],
-  ['sbAddH2CO3', 'H2CO3', sbCarbonicAcid],
+  ['sbAddH2',  'H2',  () => sbDiatomic('H', 'H')],
+  ['sbAddO2',  'O2',  () => sbDiatomic('O', 'O')],
+  ['sbAddCH4', 'CH4', sbMethane],
+  ['sbAddCO2', 'CO2', sbCarbonDioxide],
 ];
 function sbShapeOf(key) {
   const row = SB_ADDABLE.find(r => r[1] === key);
@@ -7980,8 +8128,8 @@ function sbSelAtoms() {
 // Deletable: a whole molecule, two atoms, both the same element, bonded to each
 // other. That is exactly an untouched H2 or O2 — what the ADD buttons make.
 // Deletable: a whole molecule whose formula is one an ADD button makes — an
-// untouched H2, O2 or H2CO3. Comparing formulas rather than "two atoms, same
-// element" is what lets carbonic acid be deleted too, and it still refuses a
+// untouched H2, O2, CH4 or CO2. Comparing formulas rather than "two atoms, same
+// element" is what lets the polyatomics be deleted too, and it still refuses a
 // lone atom and anything the scene built for itself.
 function sbSelDeletable(idx) {
   if (!sandbox.sel || sandbox.sel.kind !== 'mol' || !idx || idx.length < 2) return false;
