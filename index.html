@@ -1546,7 +1546,7 @@ const BOND_FIELD_SQUEEZE = 0.85;
 // carried by HUE rather than brightness, which is the right division of labour:
 // saturation climbs 11 -> 126 -> 146 from 1x to 2x to 3x while brightness
 // barely moves.
-let BOND_FIELD_FLOOR = 0.70;
+let BOND_FIELD_FLOOR = 0.855;   // = 1/(BOND_FIELD_GAIN x BOND_FIELD_BOOST); see bondShownGamma
 
 // One Bond's own colour stages. The main tab's cold stage is a blue-white,
 // which is right there — a resting bond in a world of them should still read as
@@ -1718,7 +1718,20 @@ const BOND_SHOWN_MAX = Math.max(...Object.values(BOND_TYPES).map(t => t.D));
 // always brighter — and the strongest bond in the list still lands exactly at
 // the top of the ramp, so nothing clips. What changes is how far the bottom of
 // the range falls. Dev slider `Depth contrast`; 1 restores strict proportion.
-let bondShownGamma = 0.6;
+// Solved rather than dialled. Two conditions pin both numbers exactly:
+//
+//   the weakest bond at rest draws at the brightness REACTIONS gives it,
+//     which is D / BOND_ENERGY_MAX with no flare — 358/495 = 0.723
+//   the strongest bond at rest lands exactly on 1.0, the top of the ramp,
+//     so nothing clips and the full range is used
+//
+// Those give BOND_FIELD_FLOOR = 1/(GAIN x BOOST) = 0.855 and this gamma. The
+// weakest was drawing at 0.506 before, against Reactions' 0.723 for the same
+// bond: selecting C-O gave a noticeably fainter lobe than meeting one in the
+// world, which is the wrong way round for the tab whose whole job is to show
+// you a bond up close. Measured after: 358 -> 0.723, 436 -> 0.783, 495 ->
+// 0.824, 799 -> 1.000. Still monotone, so a deeper well is still brighter.
+let bondShownGamma = 0.404;
 function bondShownMag(D) { return Math.pow(D / BOND_SHOWN_MAX, bondShownGamma); }
 
 const FIELD_SCALE = { 'hi-res': 0.30, 'detailed': 0.20, 'simple': 0.12 };
@@ -3049,10 +3062,11 @@ function trueMotionEnergy() {
 // every molecule is rescaled by the per-frame ratio, so you watch the whole
 // world accelerate. 3× the speed is 9× the kinetic energy, which the energy
 // graph shows honestly.
+const TEMP_LOW  = 1;        // the coldest setting, and the bar axis's zero
 const TEMP_HIGH = 3;        // High runs at 3× Low
 const TEMP_MED  = 2;        // Medium between them. Energy goes as speed squared,
                             // so Low/Med/High is 1x / 4x / 9x the kinetic energy.
-const TEMP_LEVELS = { low: 1, med: TEMP_MED, high: TEMP_HIGH };
+const TEMP_LEVELS = { low: TEMP_LOW, med: TEMP_MED, high: TEMP_HIGH };
 const TEMP_TAU  = 0.26;     // seconds — exponential approach, quick then settling
 // Starts LOW, with strong water on. At Low nothing breaks — that is the
 // measured, deliberate design of the threshold, not a shortfall — so the world
@@ -3225,6 +3239,8 @@ function turnToward(b, target, max) {
 
 function stepWorld(dt) {
   updateReactantEase();        // see breakEaseMax — one scan, not one per hit
+  stepSpeedPreferences(dt);    // see speedWander — a distribution, not one speed
+  dedriftWorld(dt);            // see driftDamp — a gas, not a shoal
   // Move, spin, wrap
   for (const b of world.bodies) {
     b.x += b.vx * dt;
@@ -3553,9 +3569,137 @@ function collidePair(A, B) {
       A.x -= push * nx / A.mass;  A.y -= push * ny / A.mass;
       B.x += push * nx / B.mass;  B.y += push * ny / B.mass;
 
+      scatterPair(A, B);
       settlePairSpeeds(A, B);
       return;   // one contact per pair per frame keeps the response stable
     }
+  }
+}
+
+// ─── A COLLISION IS NOT AS DETERMINED AS THIS ONE IS ─────────────────────────
+// Two rigid bodies in a plane, hit by a hard-sphere impulse along the contact
+// normal, come out of a collision with an outcome fixed entirely by how they
+// went in. Do that a few thousand times with molecules the band is already
+// holding to one speed and the population organises itself: measured on a
+// finished water world, the mean unit velocity had a magnitude of 0.70, where
+// fourteen independently aimed molecules would sit near 1/sqrt(14) = 0.27.
+// That is a flock, and it is why the products looked like they were moving
+// about mechanically together rather than as a gas.
+//
+// The missing ingredient is real. A molecule here is a disc in a plane; the
+// thing it stands for is a shape in three dimensions, and every collision it
+// has deflects it out of the plane we are drawing. Flattening that away does
+// not just lose a direction, it loses the DECORRELATION — in 2D the same two
+// shapes meeting at the same angle always leave the same way.
+//
+// So each contact rotates the pair's relative velocity by a small random
+// angle. It is put back exactly where the lost degree of freedom would have
+// taken it, and it costs nothing at all:
+//
+//   momentum  sum m*v = M*vcom + R(sum m*(v - vcom)) = M*vcom + R(0) = M*vcom
+//   energy    KE = 1/2 M|vcom|^2 + sum 1/2 m|v - vcom|^2, and |R(u)| = |u|
+//
+// A rotation about the pair's own centre of mass leaves both sums untouched —
+// not approximately, identically — so this cannot appear in the audit however
+// hard it is turned up. It is the one way to add randomness here that the
+// energy books cannot notice.
+let collisionScatter = 0.35;        // radians, 1 sigma, on each contact
+
+function scatterPair(A, B) {
+  if (collisionScatter <= 0) return;
+  const M = A.mass + B.mass;
+  const cvx = (A.mass * A.vx + B.mass * B.vx) / M;
+  const cvy = (A.mass * A.vy + B.mass * B.vy) / M;
+  const th = truncNormal() * collisionScatter;
+  const c = Math.cos(th), sn = Math.sin(th);
+  for (const b of [A, B]) {
+    const ux = b.vx - cvx, uy = b.vy - cvy;
+    b.vx = cvx + ux * c - uy * sn;
+    b.vy = cvy + ux * sn + uy * c;
+  }
+}
+
+// ─── THE WHOLE GAS DRIFTING AS ONE ───────────────────────────────────────────
+// Chasing the swarm turned up something simpler than flocking. Measured on a
+// finished water world, the mean unit velocity had magnitude 0.70 against the
+// 0.27 fourteen independent molecules would give — and the NET MOMENTUM, as a
+// share of the summed |momentum|, was 0.69. The two track each other across
+// every setting tried. So the products were not aligning with each other; the
+// entire gas was drifting bodily across the box, and that is what reads as a
+// shoal, because a shoal is exactly a population with a common velocity.
+//
+// Where it comes from: collisions conserve momentum exactly, so whatever net
+// momentum the spawn happens to hand out stays. The walls flip it rather than
+// remove it, and the speed band scales velocities without touching direction,
+// so nothing in here ever damped it out. A real gas in a box that is sitting
+// still has no net momentum, and neither should this one.
+//
+// So the drift is damped towards zero, and its energy is handed straight back
+// as speed. The subtraction removes 1/2 M |vcom|^2; the rescale that follows
+// puts exactly that much back into the molecules' own motion, which is where
+// it should have been. Energy is conserved to the arithmetic, direction is
+// untouched by the rescale, and what is left is the thermal motion without the
+// bulk slide.
+let driftDamp = 1.5;                // per second; 0 leaves the drift alone
+
+function dedriftWorld(dt) {
+  if (driftDamp <= 0 || world.bodies.length < 2) return;
+  let M = 0, px = 0, py = 0, E0 = 0;
+  for (const b of world.bodies) {
+    M += b.mass; px += b.mass * b.vx; py += b.mass * b.vy;
+    E0 += 0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy);
+  }
+  if (M <= 0 || E0 <= 1e-9) return;
+  const k = Math.min(1, driftDamp * dt);
+  const cvx = px / M * k, cvy = py / M * k;
+  if (Math.hypot(cvx, cvy) < 1e-9) return;
+  let E1 = 0;
+  for (const b of world.bodies) {
+    b.vx -= cvx; b.vy -= cvy;
+    E1 += 0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy);
+  }
+  if (E1 <= 1e-9) return;
+  const sc = Math.sqrt(E0 / E1);
+  for (const b of world.bodies) { b.vx *= sc; b.vy *= sc; }
+}
+
+// ─── EVERY MOLECULE ITS OWN PREFERRED SPEED ──────────────────────────────────
+// `spawnWorld` spreads the speeds it launches with — `spreadSpeed`, +/-
+// SPEED_SIGMA — and then hands the band the UNSPREAD nominal as `vTarget`, so
+// the band spends the next few seconds undoing exactly the variety the spawn
+// went to the trouble of creating. Measured on a finished water world: the
+// spread of `vTarget` across fourteen waters was **0**, every one of them 624,
+// and eight of the fourteen had piled up within 50 px/s of the band's lower
+// knee at 468. One speed, shared by everything, which is the other half of why
+// they moved like a shoal.
+//
+// A real gas does not have one speed, it has a distribution, and an individual
+// molecule does not keep its place in that distribution — it is fast for a
+// while and then slow. So each body's target wanders: pulled back towards its
+// species' nominal, kicked every frame, which is an Ornstein-Uhlenbeck walk
+// with a stationary spread of `SPEED_SIGMA * speedWander` and a crossing time
+// of VTARGET_TAU.
+//
+// This one DOES touch the energy books, unlike the scatter above, because the
+// band enforces whatever target it is given. It is close to neutral across the
+// population — the targets it raises and lowers are drawn from one distribution
+// about the same mean — but it is not exactly neutral, and `energyCreated` is
+// the number to watch when changing it.
+let speedWander = 1;                // x SPEED_SIGMA; 0 = one shared target
+const VTARGET_TAU = 3.0;            // seconds to wander across the distribution
+
+function stepSpeedPreferences(dt) {
+  if (!speedBandOn || speedWander <= 0) return;
+  // exactBreakCost pins each fragment's target to the speed it actually left
+  // with, on purpose, so that nothing gets topped up out of nowhere. Wandering
+  // the targets would walk straight back into what that mode exists to avoid.
+  if (exactBreakCost) return;
+  const k = Math.min(1, dt / VTARGET_TAU);
+  const sd = SPEED_SIGMA * speedWander;
+  for (const b of world.bodies) {
+    const nom = speciesSpeed(b.els);
+    b.vTarget += (nom - b.vTarget) * k + nom * sd * Math.sqrt(2 * k) * truncNormal();
+    b.vTarget = Math.max(nom * 0.3, Math.min(nom * 1.9, b.vTarget));
   }
 }
 
@@ -4963,15 +5107,59 @@ function motionKJ() { return Math.max(0, totalKJ - fieldsKJ()); }
 // and the two bars start level instead of six to one, which is the ratio being
 // asked for. The sum of the two is still a constant, because what is taken off
 // is a constant.
-let barZeroAt   = 0.96;   // of the all-bonds-broken motion
+let barZeroAt   = 0;      // of the motion the world holds at the COLDEST setting
 let fieldsZeroKJ = 0;     // kJ/mol taken off the field bar; it reads big already
 
 function worldAtomCount() {
   return world.bodies.reduce((a, b) => a + b.els.length, 0);
 }
-function motionZeroKJ() {
-  return barZeroAt * Math.max(0, totalKJ - SB_FREE_ATOM * worldAtomCount());
+
+// ─── ONE AXIS FOR EVERY SPEED ────────────────────────────────────────────────
+// The chart used to take its full scale from `totalKJ`, and `totalKJ` is
+// re-anchored whenever the temperature changes. So the axis moved with the
+// thing it was measuring: motion filled about the same share of the chart at
+// Low as at High, because at High the chart was bigger. The one fact the panel
+// most needs to carry — High is FASTER — was the one thing it could not show,
+// and the bars jumped under you as the axis rescaled.
+//
+// Both ends are now anchored once, at spawn, and left alone:
+//
+//   the top     the energy this world would hold AT HIGH — the hottest it can
+//               get — so Low and Med sit visibly short of the top and the bars
+//               grow as you heat it. Within a run motion and fields still trade
+//               one for one, so an exothermic reaction is the motion bar
+//               growing into the room the fields bar gives up.
+//   the zero    a fraction of the motion at LOW, and that fraction ships at 0.
+//               The raised zero existed to magnify a small change on an axis
+//               that was only ever as tall as the current temperature; with
+//               the top now anchored at High there is already room above Low
+//               to show the change in, and raising the zero on top of that
+//               only squeezes Low towards nothing. Measured with it at 0.85,
+//               Low read 2% of the chart; at 0 it reads 10%, which is what
+//               "just above zero" should look like. The slider is still there
+//               (ACTIVE / "Motion zero at") and it is now a fraction of LOW's
+//               motion rather than of the all-bonds-broken motion, so 1 would
+//               put the displayed zero exactly at Low.
+//
+// Neither depends on `tempCurrent`, so changing the temperature now moves the
+// BARS and never the axis. Both depend on the composition, which they must —
+// twenty-one molecules hold seven times what three do.
+let barFullKJ   = 1;      // top of the axis, anchored at spawn
+let barMotionZeroKJ = 0;  // displayed zero for the motion bar, anchored at spawn
+
+function motionAtTemp(T) {
+  const now = Math.max(0, totalKJ - fieldsKJ());
+  const k = T / Math.max(0.01, tempCurrent);
+  return now * k * k;                     // energy goes as speed squared
 }
+
+function anchorBarScale() {
+  const fieldsNow = fieldsKJ();
+  barFullKJ = Math.max(1, fieldsNow + motionAtTemp(TEMP_HIGH));
+  barMotionZeroKJ = Math.max(0, barZeroAt * motionAtTemp(TEMP_LOW));
+}
+
+function motionZeroKJ() { return barMotionZeroKJ; }
 
 // ─── Formula readout ──────────────────────────────────────────────────────────
 const SUBS = '\u2080\u2081\u2082\u2083\u2084\u2085\u2086\u2087\u2088\u2089';
@@ -5453,7 +5641,8 @@ function resetEnergyTrace() {
   progressTrace = [];
   progressNow = 0;
   energyAtSpawn = Math.max(1e-6, energyOfMotion());
-  anchorEnergyTotal();         // the bars' scale, which the trace is measured in
+  anchorEnergyTotal();         // the run's constant total
+  anchorBarScale();            // and the axis, which the temperature must not move
   sampleEnergy();              // the reactants, at x = 0
 }
 
@@ -5467,10 +5656,14 @@ function sampleEnergy() {
   // landmark recorded at Low and one recorded at High are drawn against
   // different scales. Absolute kJ puts a step in the line that is about the
   // thermostat rather than about the reaction. A fraction of the bar's own
-  // chart is what "follows the bar chart positions" actually means, and it
-  // leaves the two lines summing to 1 at every landmark.
+  // chart is what "follows the bar chart positions" actually means.
+  //
+  // The two lines no longer sum to 1, and that is the fixed axis showing
+  // through: at Low the pair fills a fraction of the chart and the rest is the
+  // room the heat has not taken. The MEASURED pair still sums to the run's
+  // total; it is the drawn one that has somewhere left to go.
   const mZero = motionZeroKJ();
-  const full  = Math.max(1, totalKJ - mZero - fieldsZeroKJ);
+  const full  = Math.max(1, barFullKJ - mZero - fieldsZeroKJ);
   const clamp = (v) => Math.max(0, Math.min(1, v));
   progressTrace.push({
     p,
@@ -5848,9 +6041,11 @@ function barChartSpec() {
         color: MOTION_COLOR, glow: MOTION_GLOW },
       fieldsBar(noData ? 0 : Math.max(0, fieldsKJ() - fieldsZeroKJ)),
     ],
-    // Full scale is what the two bars add up to, which is the run's total less
-    // the two zeros — all three being constants, the pair always fills the chart.
-    max: Math.max(1, totalKJ - mZero - fieldsZeroKJ),
+    // Full scale is anchored at spawn from the hottest this world can get, NOT
+    // from the temperature it is at — see anchorBarScale. So the two bars no
+    // longer fill the chart between them at Low or Med, and that gap is the
+    // point: it is the room the heat has left to take.
+    max: Math.max(1, barFullKJ - mZero - fieldsZeroKJ),
     title: noData ? 'No molecules' : 'Total ' + fmtKJ(totalKJ - mZero - fieldsZeroKJ),
     // Say that the zero is raised, in fusion's own voice for its "not to scale"
     // line. A distorted axis that does not admit it is a lie; one that does is a
@@ -6289,6 +6484,14 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     '<div style="opacity:0.45;font-size:10px;">a join\u2019s own flash, held at ' +
       'full for the first 45% and then fading. A collision\u2019s flare is a ' +
       'tenth of this and was never meant to carry the moment a bond forms</div>' +
+    row('devScatter', 'Collision scatter', 0, 1.2, 0.05, collisionScatter, '#ffd84d') +
+    row('devWander',  'Speed wander',      0, 2,   0.05, speedWander,      '#ffd84d') +
+    row('devDrift',   'Drift damping',     0, 6,   0.1,  driftDamp,        '#ffd84d') +
+    '<div style="opacity:0.45;font-size:10px;">what stops the products moving ' +
+      'as one shoal. SCATTER turns each collision\u2019s relative velocity a ' +
+      'random few degrees \u2014 the third dimension this sim does not have \u2014 and ' +
+      'is exactly momentum- and energy-neutral. WANDER gives every molecule its ' +
+      'own preferred speed, drifting, instead of one shared by all of them</div>' +
     row('devBreakEase', 'Last reactants go easier', 1, 8, 0.25, breakEaseMax, '#ffd84d') +
     '<div style="opacity:0.45;font-size:10px;">divides a REACTANT\u2019s break ' +
       'threshold as its own kind runs out \u2014 1\u00d7 at full population, this much ' +
@@ -6493,14 +6696,20 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   strongCb.addEventListener('change', () => setStrongProducts(strongCb.checked));
   bind('devJoinFlash', v => joinFlashSec = v, false,
        v => v > 0 ? v.toFixed(1) + ' s' : 'off');
+  bind('devScatter', v => collisionScatter = v, false,
+       v => v > 0 ? '\u00b1' + Math.round(v * 57.3) + '\u00b0' : 'off');
+  bind('devDrift', v => driftDamp = v, false,
+       v => v > 0 ? v.toFixed(1) + '/s' : 'off');
+  bind('devWander', v => speedWander = v, false,
+       v => v > 0 ? '\u00b1' + Math.round(SPEED_SIGMA * v * 100) + '% of nominal' : 'one speed');
   bind('devBreakEase', v => breakEaseMax = v, false,
        v => v > 1 ? '\u00f7' + v.toFixed(2) + ' by the last' : 'off');
   bind('devBreakH', v => breakEnergy = v, false, v => v.toFixed(2));
   bind('devColFull', v => colourFull = v, false, v => Math.round(v * 100) + '% of cap');
   bind('devVibTau', v => VIB_TAU     = v, false, v => v.toFixed(1) + ' s');
   bind('devVibGlow', v => VIB_GLOW   = v, false, v => v.toFixed(2));
-  bind('devBarZero', v => barZeroAt  = v, false,
-       v => Math.round(v * 100) + '% of the broken floor');
+  bind('devBarZero', v => { barZeroAt = v; anchorBarScale(); }, false,
+       v => v > 0 ? Math.round(v * 100) + '% of Low\u2019s motion' : 'true zero');
   bind('devFieldsZero', v => fieldsZeroKJ = v, false, v => Math.round(v) + ' kJ/mol');
   bind('devGFStart', v => { graphFieldsStart = v; drawEnergyGraph(); }, false,
        v => (v > 0 ? '+' : '') + Math.round(v * 100) + '% of chart');

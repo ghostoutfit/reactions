@@ -3834,6 +3834,109 @@ Dormant, kept because the next round of work wants it. None of it is live:
 - **`world.bodies[].id`** is stable per body — the handle for selecting one
   molecule and charting it alone.
 
+### The products were not flocking, the whole gas was drifting
+
+The products moved about together, mechanically, like a shoal. Measuring it
+turned up something simpler than flocking. On a finished water world the mean
+unit velocity had magnitude **0.70**, against the **0.27** that fourteen
+independently aimed molecules would give — but the **net momentum**, as a share
+of the summed |momentum|, was **0.69**. The two track each other across every
+setting tried. Nothing was aligning with anything; the entire gas was sliding
+bodily across the box, which is what a shoal is.
+
+A second measurement found the other half. The spread of `vTarget` across those
+fourteen waters was **0** — every one of them 624. `spawnWorld` spreads the
+speeds it launches with and then hands the band the *unspread* nominal, so the
+band spent the next few seconds undoing exactly the variety the spawn created.
+Eight of the fourteen had piled up within 50 px/s of the band's lower knee.
+
+Three fixes, all in ACTIVE:
+
+**Collision scatter** rotates each contact's relative velocity by a small
+random angle. A molecule here is a disc in a plane; the thing it stands for is
+a shape in three dimensions, and every collision deflects it out of the plane
+we draw — flattening that away loses not just a direction but the
+*decorrelation*, because in 2D the same two shapes meeting the same way always
+leave the same way. It is **exactly free**: a rotation about the pair's own
+centre of mass leaves both sums identically untouched —
+
+```
+momentum  Σmv = M·vcom + R(Σm(v − vcom)) = M·vcom + R(0) = M·vcom
+energy    KE  = ½M|vcom|² + Σ½m|v − vcom|²,  and |R(u)| = |u|
+```
+
+so it cannot appear in the audit however far it is turned up.
+
+**Speed wander** gives each body its own preferred speed, pulled back towards
+its species' nominal and kicked every frame — an Ornstein–Uhlenbeck walk, so a
+molecule is fast for a while and then slow, as one in a real gas is. This one
+*does* touch the books, since the band enforces whatever target it is given;
+measured, `energyCreated` went 2,153% → 2,037% of spawn, so if anything it
+helps.
+
+**Drift damping** pulls the net momentum towards zero and hands its energy
+straight back as speed: the subtraction removes ½M|vcom|², the rescale that
+follows puts exactly that much back into the molecules' own motion. A gas in a
+box that is sitting still has no net momentum, and collisions conserve it
+exactly while walls only flip it, so nothing here ever removed it.
+
+Measured over 4 runs each:
+
+| | alignment | net drift | speed CV |
+|---|---|---|---|
+| all three off | 0.431 | 0.439 | 0.149 |
+| **as shipped** | **0.334** | **0.334** | **0.170** |
+| random floor | 0.267 | 0.267 | — |
+
+Essentially at the floor: with fourteen molecules, |Σp|/Σ|p| for independent
+directions is itself 1/√14, so 0.267 is as low as this can honestly go.
+`totalKJ` drift stays exactly 0 throughout.
+
+**More scatter is not better.** At 0.8 rad a single run came back at 0.734 —
+worse than off. Single runs of this metric are very noisy at n=14, which is
+why the table above is averaged; but there is no reason to push past 0.35.
+
+### One axis for every speed
+
+The bar chart took its full scale from `totalKJ`, and `totalKJ` is re-anchored
+whenever the temperature changes — so the axis moved with the thing it was
+measuring. Motion filled about the same share of the chart at Low as at High,
+because at High the chart was bigger, and the one fact the panel most needs to
+carry (High is *faster*) was the one thing it could not show.
+
+Both ends are now anchored once, at spawn, from constants that do not include
+`tempCurrent`: the top is what this world would hold **at High**, and the zero
+is a fraction of the motion **at Low**. Measured, one world across the three
+settings — axis fixed at 70,847 at every one, motion **2% → 32% → 84%**, and
+returning to Low gives 2% again.
+
+The displayed zero now ships at **0**. The raised zero existed to magnify a
+small change on an axis only as tall as the current temperature; with the top
+anchored at High there is already room above Low to show the change in, and
+raising the zero on top of that only squeezes Low towards nothing — at 0.85 it
+read 2% of the chart, at 0 it reads 10%. The slider remains, and is now a
+fraction of *Low's* motion rather than of the all-bonds-broken motion.
+
+### One Bond's weakest bond was dimmer than the world's
+
+Selecting C–O gave a fainter lobe than meeting one in the Reactions tab, which
+is the wrong way round for the tab whose job is to show you a bond up close.
+Measured: One Bond drew it at **0.506** where Reactions draws the same bond at
+**0.723**.
+
+Both constants are now solved rather than dialled, from two conditions:
+
+- the weakest bond at rest draws at Reactions' own brightness, `D /
+  BOND_ENERGY_MAX` with no flare — 358/495 = 0.723
+- the strongest bond at rest lands exactly on 1.0, so nothing clips and the
+  full range is used
+
+which give `BOND_FIELD_FLOOR = 1/(GAIN × BOOST) = 0.855` and `bondShownGamma =
+0.404`. After: 358 → **0.723**, 436 → 0.783, 495 → 0.824, 799 → **1.000**.
+Still monotone, so a deeper well is still brighter; the stronger bonds sit
+below their Reactions values on purpose, because Reactions is allowed to clip
+and this tab is not.
+
 ### The last few reactants go easier
 
 A reaction that is nearly done drags. The last intact O₂ has twenty-odd free
@@ -4001,6 +4104,8 @@ gold above a gold rule, holding the handful still being turned:
 | Bond storage | whether hits stack at all, and whether the colour says so |
 | New bond stays pink | the join flash, below |
 | Last reactants go easier | the kinetic nudge, below |
+| Collision scatter, Speed wander, Drift damping | what stops the gas moving as one shoal |
+| Motion zero at | the bar axis's displayed zero |
 | Strong products | ships ON; here only so it can be compared |
 | Bond capacity, Vibration hold | together, whether the scene comes apart |
 
