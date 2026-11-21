@@ -914,7 +914,7 @@ That is the entire separation between Low and High, and it is why no
 #### Bond storage: three ways, on one dev control
 
 The stack above is a modelling **choice**, and the other two choices are worth
-being able to see beside it. Dev panel, under Bond breaking, as `vibMode`:
+being able to see beside it. Dev panel, in **ACTIVE**, as `vibMode`:
 
 | setting | stacks? | colour ramp | bar chart | breaks on |
 |---|---|---|---|---|
@@ -3764,6 +3764,64 @@ Dormant, kept because the next round of work wants it. None of it is live:
 - **`formulaOf`** does full Hill ordering, so it already prints H₂O correctly.
 - **`world.bodies[].id`** is stable per body — the handle for selecting one
   molecule and charting it alone.
+
+## The dev panel's ACTIVE group
+
+The panel is over a thousand pixels tall and most of it is tuning that was
+settled once and should stay settled. **ACTIVE** is the band at the top, in
+gold above a gold rule, holding the handful still being turned:
+
+| control | why it is here |
+|---|---|
+| View zoom | the camera — see **The camera** |
+| H₂ / O₂ / He / CH₄ molecules | density, which is the clock on the whole run |
+| Shell drift, Drift speed | the only motion in the default view |
+| Bond storage | whether hits stack at all, and whether the colour says so |
+| New bond stays pink | the join flash, below |
+| Bond capacity, Vibration hold | together, whether the scene comes apart |
+
+**Each of these lives there and nowhere else.** The rows were *moved* out of
+their old sections, not copied into a second place: a slider duplicated into
+two groups is two controls on one variable that drift out of step the moment
+one of them moves, and the stale one is then a lie about the state of the sim —
+the same reason `syncCompositionSliders` exists.
+
+`shellWobbleAmp` and `shellWobbleHz` were plain constants before this and had
+no control at all, which was the wrong way round. With the ring spin off and
+the sim paused they are the entire difference between a picture and a thing
+that is alive, and nothing else in the panel can be judged without watching
+them for a few seconds.
+
+### A bond being made has to be seen being made
+
+Forming a bond is the moment the Reactions tab is about, and it was reported by
+the same `flare` a collision uses: set to 1 at the join, then straight into an
+exponential with `FLARE_TAU` of 0.3 s. Measured on a real join, `load` ran
+**1.00, 0.95, 0.89, 0.85** — past full pink in about four frames, a blink. The
+camera pulling back made it worse: half a second of pink on a bond half the
+size on screen is easy to look away from.
+
+So a join has its own flash, and unlike a collision's it **holds** before it
+fades:
+
+```javascript
+let joinFlashSec = 1.2;          // how long a new bond stays lit, in all
+const JOIN_FLASH_HOLD = 0.45;    // the fraction of that spent at FULL pink
+nb.flash = joinFlashSec;         // set in joinBodies, counted down in stepWorld
+b.flare = Math.max(b.flare, Math.min(1, t / (1 - JOIN_FLASH_HOLD)));
+```
+
+Applied **over the top** of the ordinary decay with a `max`, so nothing has to
+know which kind of body it is on — a product, an OH halfway to being water, a
+molecule that is also being hit: each takes whichever is brighter this frame.
+
+Measured on a formed OH: `load` holds at **1.00 for 0.54 s**, then fades to
+nothing over the next 0.6 s. Sampling the drawn canvas at the bond's midpoint
+gives **rgb(253, 94, 205)** mid-flash against **rgb(207, 221, 250)** at rest.
+
+**It is purely cosmetic.** `flare` only ever scales brightness and picks a
+colour; no energy is read from it, so lengthening it cannot move a number in
+the bars. Confirmed anyway: `totalKJ` drift is still exactly 0 over a full run.
 
 ## Known gaps
 

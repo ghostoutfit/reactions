@@ -2841,6 +2841,7 @@ function assembleBody(geo, bonds, x, y, heading, speed, spin, nominal = speed) {
     // so the list arrives as given.
     bonds,
     flare: 0,                // collision brightness, decays towards 0
+    flash: 0,                // seconds left of a JOIN's pink — see joinFlashSec
     vib: 0,                  // energy held in the bond; past breakThreshold it lets go
     vibN: 0,                 // collisions' worth currently stacked, up to bondLevels
     sag: 0,                  // share of its motion just given to the bond; fades
@@ -3190,6 +3191,15 @@ function stepWorld(dt) {
       b.flare = Math.max(0, b.flare - dt / Math.max(0.05, strongFlareSec));
     } else if (b.flare > 1e-4) b.flare *= Math.exp(-dt / FLARE_TAU);
     else b.flare = 0;
+    // A JOIN'S OWN FLASH, over the top of whatever the decay above left. Held
+    // at full for the first part of the window, then linear to nothing — see
+    // joinFlashSec. The max means a bond that is hit while it is still lit
+    // keeps the brighter of the two rather than one cancelling the other.
+    if (b.flash > 0) {
+      b.flash = Math.max(0, b.flash - dt);
+      const t = b.flash / Math.max(1e-6, joinFlashSec);
+      b.flare = Math.max(b.flare, Math.min(1, t / (1 - JOIN_FLASH_HOLD)));
+    }
     // A bond that is left alone cools back down. Without this every molecule
     // breaks eventually, however cold the world is, and Low stops being safe.
     if (b.sag > 1e-4) b.sag *= Math.exp(-dt / SAG_TAU); else b.sag = 0;
@@ -3696,6 +3706,30 @@ function bondLevels(b) {
 // list is one entry and its behaviour is bit-for-bit what it was.
 let strongWater = true;
 let strongFlareSec = 0.5;          // how long a strong product may stay pink
+
+// ─── A BOND BEING MADE HAS TO BE SEEN BEING MADE ─────────────────────────────
+// Forming a bond is the moment the whole Reactions tab is about, and it was
+// being reported by the same `flare` a collision uses: set to 1 at the join and
+// then straight into an exponential with FLARE_TAU of 0.3 s, so the bond was
+// past full pink within about four frames. Measured on a real join, `load` ran
+// 1.00, 0.95, 0.89, 0.85 — a blink. The camera pulling back made it worse, as a
+// half-second pink on a bond half the size on screen is easy to look away from.
+//
+// So a join gets its own flash, and unlike a collision's it HOLDS before it
+// fades. `flash` counts down in seconds; the first `JOIN_FLASH_HOLD` of it is
+// pinned at full pink and the rest ramps off linearly, which is what makes it
+// read as "that bond just formed" rather than "something happened there".
+//
+// It is applied over the top of the ordinary decay rather than instead of it,
+// with a max, so nothing has to know which kind of body it is on: a product, an
+// OH halfway to being water, a molecule that is also being hit — all of them
+// take whichever is brighter this frame.
+//
+// Purely cosmetic. `flare` only ever scales brightness and picks a colour; no
+// energy is read from it, so lengthening it cannot move a single number in the
+// bars.
+let joinFlashSec = 1.2;            // how long a new bond stays lit, in all
+const JOIN_FLASH_HOLD = 0.45;      // the fraction of that spent at FULL pink
 // Sorted element string, the same key `joinEls` matches on, so a product cannot
 // be named here in a form the join table could not produce.
 function speciesKey(els) { return els.slice().sort().join(''); }
@@ -4529,6 +4563,7 @@ function joinBodies(a, b, els) {
   }
 
   nb.flare = Math.max(a.flare, b.flare, 1);     // it lights up as it forms
+  nb.flash = joinFlashSec;                      // ...and STAYS lit, long enough to see
 
   world.bodies.splice(Math.max(ia, ib), 1);
   world.bodies.splice(Math.min(ia, ib), 1, nb);
@@ -5047,9 +5082,16 @@ const shellSpin = 0;      // rad/s round the ring — none
 //
 // Driven by its own accumulator, advanced every frame whether or not the sim is
 // running, because an atom does not stop being an atom when you press pause.
+//
+// Both numbers are dev sliders, in the ACTIVE group at the top of the panel,
+// because this is the ONLY motion in the default view of the default tab: with
+// the ring spin off and the sim paused, these two are the difference between a
+// picture and a thing that is alive. Nothing else in the panel can be judged
+// without watching them for a few seconds, which is exactly what a slider is
+// for and exactly what a constant buried here was not.
 let shellWobble = 0;
-const SHELL_WOBBLE_AMP = 0.075;   // x the shell radius
-const SHELL_WOBBLE_HZ  = 0.62;
+let shellWobbleAmp = 0.075;   // x the shell radius
+let shellWobbleHz  = 0.62;
 
 // The Reactions shells view pulls its bonding electrons towards the middle of
 // the bond by `bondCentreHold`, the same number the One Bond tab holds its
@@ -5063,9 +5105,9 @@ let shellPhase = 0;       // kept so the draw path needs no special case
 // deliberately not a round ratio, so a pair never settles into lockstep, and
 // `seed` keeps every electron on its own schedule.
 function shellWobbleAt(seed, r) {
-  const a = SHELL_WOBBLE_AMP * r;
-  return [a * Math.sin(shellWobble * SHELL_WOBBLE_HZ + seed),
-          a * Math.cos(shellWobble * SHELL_WOBBLE_HZ * 1.37 + seed * 2.3)];
+  const a = shellWobbleAmp * r;
+  return [a * Math.sin(shellWobble * shellWobbleHz + seed),
+          a * Math.cos(shellWobble * shellWobbleHz * 1.37 + seed * 2.3)];
 }
 
 function drawAtomShells(c, p) {
@@ -5941,11 +5983,54 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
 
   panel.innerHTML =
     '<div style="font-size:9px;letter-spacing:0.08em;text-transform:uppercase;opacity:0.5;">Dev</div>' +
-    row('devH2', 'H\u2082 molecules', 0, COMPOSITION_MAX, 1, COMPOSITION_DEFAULT.H2, '#b9c0cd') +
-    row('devO2', 'O\u2082 molecules', 0, COMPOSITION_MAX, 1, COMPOSITION_DEFAULT.O2, '#e8382f') +
-    row('devHe', 'He atoms',       0, COMPOSITION_MAX, 1, COMPOSITION_DEFAULT.He, '#7fdbe8') +
+    // ── ACTIVE ────────────────────────────────────────────
+    // THE WORKING SET, not a favourites list. The panel is over a thousand
+    // pixels tall and most of it is tuning that was settled once and should
+    // stay settled; these are the few still being turned, and burying them
+    // among fifty that are not is what made the panel tiring to use.
+    //
+    // Each of these lives HERE AND NOWHERE ELSE. A slider duplicated into two
+    // groups is two controls on one variable that drift out of step the moment
+    // one of them moves, and the stale one is then a lie about the state of
+    // the sim — the same reason `syncCompositionSliders` exists.
+    '<div style="font-size:9px;letter-spacing:0.08em;text-transform:uppercase;' +
+      'color:#ffd84d;font-weight:700;margin-top:10px;">Active</div>' +
+    '<div style="opacity:0.45;font-size:10px;margin-bottom:2px;">still being ' +
+      'turned. Below the line is settled tuning.</div>' +
+    row('devSceneZoom', 'View zoom', 0.25, 1, 0.05, sceneZoom, '#ffd84d') +
+    '<div style="opacity:0.45;font-size:10px;">this tab only; no atom, speed or ' +
+      'threshold changes. 0.5 is 4× the area, so it wants ~4× the molecules ' +
+      'to keep the pace</div>' +
+    row('devH2', 'H\u2082 molecules', 0, COMPOSITION_MAX, 1, COMPOSITION_DEFAULT.H2, '#ffd84d') +
+    row('devO2', 'O\u2082 molecules', 0, COMPOSITION_MAX, 1, COMPOSITION_DEFAULT.O2, '#ffd84d') +
+    row('devHe', 'He atoms',       0, COMPOSITION_MAX, 1, COMPOSITION_DEFAULT.He, '#ffd84d') +
     row('devCH4', 'CH₄ molecules', 0, COMPOSITION_MAX, 1,
-        COMPOSITION_DEFAULT.CH4, '#c9cedb') +
+        COMPOSITION_DEFAULT.CH4, '#ffd84d') +
+    row('devShWobA',  'Shell drift', 0, 0.3, 0.005, shellWobbleAmp, '#ffd84d') +
+    row('devShWobHz', 'Drift speed', 0, 3,   0.02,  shellWobbleHz,  '#ffd84d') +
+    '<div style="opacity:0.45;font-size:10px;">the only motion in the shells ' +
+      'view — each electron drifting about its seat, not lapping the ring. ' +
+      'At 0 a paused scene looks switched off rather than held</div>' +
+    '<label style="display:flex;justify-content:space-between;align-items:center;margin:9px 0 3px;">' +
+      '<span>Bond storage</span>' +
+      '<select id="devVibMode" style="background:#141822;color:#cfe3ff;border:1px solid #2a3344;' +
+        'border-radius:4px;font:inherit;font-size:11px;padding:1px 3px;max-width:118px;">' +
+        Object.keys(VIB_MODES).map(k =>
+          '<option value="' + k + '"' + (k === vibMode ? ' selected' : '') + '>' +
+          VIB_MODES[k] + '</option>').join('') +
+      '</select>' +
+    '</label>' +
+    '<div id="devVibModeNote" style="opacity:0.45;font-size:10px;"></div>' +
+    row('devJoinFlash', 'New bond stays pink', 0, 3, 0.1, joinFlashSec, '#ffd84d') +
+    '<div style="opacity:0.45;font-size:10px;">a join\u2019s own flash, held at ' +
+      'full for the first 45% and then fading. A collision\u2019s flare is a ' +
+      'tenth of this and was never meant to carry the moment a bond forms</div>' +
+    row('devBreakH', 'Bond capacity',  0.5, 12, 0.25, breakEnergy, '#ffd84d') +
+    row('devVibTau', 'Vibration hold', 0.3, 8,  0.1,  VIB_TAU,     '#ffd84d') +
+    '<div style="opacity:0.45;font-size:10px;">how many hits a bond takes and ' +
+      'how long it holds the heat — between them, whether the scene comes ' +
+      'apart at all</div>' +
+    '<div style="height:1px;background:rgba(255,216,77,0.4);margin:13px 0 2px;"></div>' +
     row('devConv', 'Collision \u2192 bond', 0, 0.9, 0.05, fieldConvert, '#c46cff') +
     '<div id="devConvNote" style="opacity:0.45;font-size:10px;"></div>' +
     row('devDrag', 'Loaded bond slows it', 0, 0.9, 0.05, vibDrag, '#c46cff') +
@@ -5993,19 +6078,7 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
       '<span>Hard hits break bonds</span>' +
     '</label>' +
     '<div id="devBreakNote" style="opacity:0.45;font-size:10px;margin-left:21px;"></div>' +
-    '<label style="display:flex;justify-content:space-between;align-items:center;margin:9px 0 3px;">' +
-      '<span>Bond storage</span>' +
-      '<select id="devVibMode" style="background:#141822;color:#cfe3ff;border:1px solid #2a3344;' +
-        'border-radius:4px;font:inherit;font-size:11px;padding:1px 3px;max-width:118px;">' +
-        Object.keys(VIB_MODES).map(k =>
-          '<option value="' + k + '"' + (k === vibMode ? ' selected' : '') + '>' +
-          VIB_MODES[k] + '</option>').join('') +
-      '</select>' +
-    '</label>' +
-    '<div id="devVibModeNote" style="opacity:0.45;font-size:10px;"></div>' +
-    row('devBreakH', 'Bond capacity',  0.5, 12, 0.25, breakEnergy,  '#ffc24a') +
     row('devColFull','Full pink at',    0.3, 1.2, 0.05, colourFull,   '#ffc24a') +
-    row('devVibTau', 'Vibration hold',  0.3, 8, 0.1,  VIB_TAU,      '#ffc24a') +
     row('devVibGlow','Heat glow',       0,   1, 0.05, VIB_GLOW,     '#ffc24a') +
     row('devBreakSlow','Fragments slow to', 0.2, 1.2, 0.05, breakSlow,  '#ffc24a') +
     row('devBreakK', 'Fragment kick',   0,   1, 0.02, breakKick,    '#ffc24a') +
@@ -6060,10 +6133,6 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
     '<div style="font-size:9px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.4;margin-top:8px;">' +
       'Scene</div>' +
-    row('devSceneZoom', 'View zoom',     0.25, 1,  0.05, sceneZoom,        '#9fb0ff') +
-    '<div style="opacity:0.45;font-size:10px;">the camera, on this tab only. ' +
-      'Below 1 the box is bigger than the screen band and everything in it is ' +
-      'drawn smaller — no atom, speed or threshold changes</div>' +
     row('devBgLift',  'Scene lift',      0,   60,  1,    bgLift,           '#9fb0ff') +
     '<div style="opacity:0.45;font-size:10px;">how far the background sits above ' +
       'the theme’s near-black. 0 is the old floor, on which a CPK-black ' +
@@ -6141,6 +6210,12 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   bind('devERad',   v => eRadial     = v, false, v => v.toFixed(2));
   bind('devETilt',  v => eTilt       = v, false, v => v.toFixed(2));
   bind('devCircR',  v => bondCircleR = v, false, v => v.toFixed(2) + '\u00d7');
+  bind('devShWobA', v => shellWobbleAmp = v, false,
+       v => v > 0 ? Math.round(v * 100) + '% of the shell' : 'still');
+  bind('devShWobHz', v => shellWobbleHz = v, false,
+       v => v > 0 ? v.toFixed(2) + '×' : 'frozen');
+  bind('devJoinFlash', v => joinFlashSec = v, false,
+       v => v > 0 ? v.toFixed(1) + ' s' : 'off');
   bind('devBreakH', v => breakEnergy = v, false, v => v.toFixed(2));
   bind('devColFull', v => colourFull = v, false, v => Math.round(v * 100) + '% of cap');
   bind('devVibTau', v => VIB_TAU     = v, false, v => v.toFixed(1) + ' s');
