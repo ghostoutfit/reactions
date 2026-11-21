@@ -429,13 +429,51 @@ on/off switch are all dev controls.
 ```javascript
 const SPECIES = { H2: { els: ['H','H'] }, O2: { els: ['O','O'] }, He: { els: ['He'] },
                   CH4: { els: ['C','H','H','H','H'] } };
-const composition = { H2: 8, O2: 4, He: 0, CH4: 0 };   // 0–12 of each, dev sliders
+let reactantAmount = 4;                                // the AMOUNT slider, 1-8
+const composition = { H2: 8, O2: 4, He: 0, CH4: 0 };   // = the unit x the amount
 const ATOMIC_MASS = { H: 1, O: 16, He: 4, C: 12 };
 ```
 
 `spawnWorld()` builds a queue from `composition`, shuffles it so a crowded world
 does not cram one species into the gaps the other left, then places each at a
 random position, heading and spin — retrying up to 400 times for a clear spot.
+
+### How much to spawn: the AMOUNT slider
+
+```javascript
+water:      { composition: { H2: 2, O2: 1 }, bondsPerUnit: 4 }   // ONE unit
+combustion: { composition: { O2: 2, CH4: 1 }, bondsPerUnit: 6 }  // ONE unit
+let reactantAmount = 4;                 // toolbar slider, 1-8; 4 is the old world
+```
+
+`REACTIONS[*].composition` holds **one unit of the balanced equation** and the
+slider says how many to spawn. That is the only way a single control can add
+reactants without ever unbalancing them: 2:1 taken four times is still 2:1.
+Leftovers at the end of a run should be a fact about the chemistry, never an
+artefact of where a slider happened to stop.
+
+It sits in the MOLECULES box, in the slot STRONG PRODUCTS used to have. The
+measured invariant holds: the pink box stays **369×138** and `tempGroup` stays
+at **x=336** on both reactions and at both ends of the slider, so nothing in
+that box moves while it is dragged. (The figure recorded here used to be
+352×319; that was stale before this change — checked against the previous
+commit, which also measures 369×336.)
+
+**8 is there for a reason.** `sceneZoom` 0.5 gave the box four times the area,
+and ×8 is twice today's counts — the setting that restores the pre-zoom
+density. See **The camera**.
+
+`productBondTarget()` derives the progress graph's target from `bondsPerUnit ×
+reactantAmount` rather than a total written down beside the composition,
+because two numbers that have to agree eventually do not.
+
+### Strong products is always on
+
+The toolbar button is gone and the switch is a dev checkbox, shipped checked.
+It was measured at **100% hold** on both reactions against **68%** without it,
+so it is not a thing to be choosing between during a lesson — it is the
+behaviour. The switch survives only so the two can be compared side by side,
+which is where this repo puts every other alternative it keeps.
 
 ### The camera, on the Reactions tab only
 
@@ -498,10 +536,10 @@ is where it is made.
 
 ```javascript
 const REACTIONS = {
-  water:      { composition: { H2: 8, O2: 4, He: 0, CH4: 0 }, icon: 'H2',
-                recombine: true, productBonds: 16, products: ['HHO'] },
-  combustion: { composition: { H2: 0, O2: 8, He: 0, CH4: 4 }, icon: 'CH4',
-                recombine: true, productBonds: 24, products: ['HHO', 'COO'] },
+  water:      { composition: { H2: 2, O2: 1, He: 0, CH4: 0 }, icon: 'H2',
+                recombine: true, bondsPerUnit: 4, products: ['HHO'] },
+  combustion: { composition: { H2: 0, O2: 2, He: 0, CH4: 1 }, icon: 'CH4',
+                recombine: true, bondsPerUnit: 6, products: ['HHO', 'COO'] },
 };
 ```
 
@@ -511,8 +549,9 @@ next NEW will spawn. The NEW button under the picker draws the reaction's own
 molecule and carries its formula, so the two read as one control: choose the
 reaction, press NEW. Both stretch to the button's width, which the 96 px
 molecule canvas fixes, so changing the selection cannot resize the group or
-shift the temperature buttons beside it. Measured: the pink box is 352×138 and
-`tempGroup` starts at x=319 on **both** reactions.
+shift the temperature buttons beside it. Measured: the pink box is 369×138 and
+`tempGroup` starts at x=336 on **both** reactions, at either end of the AMOUNT
+slider, and the figure held across replacing the STRONG PRODUCTS button with it.
 
 **`recombine` is part of the reaction, not a global.** Both reactions here set
 it true; the flag exists because a reaction's breaking half is what gets written
@@ -3167,7 +3206,34 @@ the closing-speed fix above was the only lever that could have worked.
 
 After that, the one thing left that moves these times is **the density of the
 box**, which is a question about how many molecules are in it and not about
-recombination at all.
+recombination at all — the AMOUNT slider, not this one.
+
+#### The reach is still worth having at 3.0, for a different reason
+
+None of the above says the reach should stay small, only that it is not a rate
+lever, and `recombRange` is now **3.0** with a slider at the top of ACTIVE.
+What a wider reach buys is that **the pull can be seen at all**: at 1.6 a pair
+was already touching by the time anything acted on them, so the attraction was
+real and invisible. At 3.0 there is about a whole atom of clear space between
+them when it starts, which is enough to watch two atoms steer into each other,
+and `recombAlign` begins turning each open slot towards its partner earlier, so
+the pair arrives already shaped like the molecule it is about to be.
+
+Measured across 1.6, 3, 5 and 8 on a water run at High:
+
+| reach | completion | `totalKJ` drift | mean \|spin\| | held facing a partner |
+|---|---|---|---|---|
+| 1.6 | 35.3 s | 0 | 4.81 | 0.1% |
+| 3.0 | 47.3 s | 0 | 5.36 | 0.7% |
+| 5.0 | 19.8 s | 0 | 4.66 | 1.1% |
+| 8.0 | 63.8 s | 0 | 4.12 | 1.6% |
+
+The completion column is the spread of the reaction, not of the reach — which
+is the point of the section above. The other three columns are the ones worth
+reading: **drift is exactly 0 at every setting**, so the wider well stays
+conservative however far it is pushed, and the tumble survives — the worry that
+a big reach would leave every molecule locked facing a partner instead of
+spinning does not happen, because even at 8× the box is far too sparse for it.
 
 ### The pull comes out as spin, a glow, and speed
 
@@ -3624,7 +3690,7 @@ starts.
 | | coordinate | counts |
 |---|---|---|
 | left, 0 → 0.5 | `0.5 × free / atoms` | the share of the world's atoms that are loose |
-| right, 0.5 → 1 | `0.5 + 0.5 × bonds / productBonds` | the share of the products' bonds that have formed |
+| right, 0.5 → 1 | `0.5 + 0.5 × bonds / productBondTarget()` | the share of the products' bonds that have formed |
 
 The left half counts **atoms**, not break events, on purpose: a peel frees one,
 a shatter frees several, a double bond takes two hits, and counting atoms gets
@@ -3642,14 +3708,15 @@ reactants, which is what exothermic looks like.
 
 ### A reaction with no product half yet
 
-`REACTIONS[*].productBonds` is how many bonds the finished products hold — 16
-for water, 24 for combustion. Set it `null` and progress stops at 0.5: the curve
+`REACTIONS[*].bondsPerUnit` is how many bonds ONE unit of the finished products
+holds — 4 for water, 6 for combustion — and `productBondTarget()` multiplies it
+by `reactantAmount`. Leave `bondsPerUnit` out and progress stops at 0.5: the curve
 climbs to the peak and ends there, markers and all, with the right half of the
 axis empty under PRODUCTS, and the caption under the graph says so.
 
 **Both reactions here have a product half now**, so nothing uses the null case
 today. It is kept because writing the breaking half first is how a reaction gets
-added: `recombine: false` and `productBonds: null` is a complete, honest,
+added: `recombine: false` and no `bondsPerUnit` is a complete, honest,
 shippable state for a reaction whose second half is not written, and filling in
 those two fields is all the graph needs to run it.
 
@@ -3765,6 +3832,45 @@ Dormant, kept because the next round of work wants it. None of it is live:
 - **`world.bodies[].id`** is stable per body — the handle for selecting one
   molecule and charting it alone.
 
+### The graph has a before and an after
+
+The reaction occupies the **middle 60%** of the axis and the outer 20% at each
+end is a flat shelf — the reactants sitting there before anything happens, the
+products sitting there after it is over. Without them the line started and
+stopped against the frame, which reads as a graph that has been cropped rather
+than a reaction that has a before and an after. The far shelf runs out from the
+**last landmark reached**, so it tracks the reaction as it goes rather than
+promising an ending the run has not got to.
+
+### Two dials that move the graph and nothing else
+
+```javascript
+drawn(i) = measured(i) + graphFieldsStart + p(i) * graphFieldsDelta
+```
+
+`graphFieldsStart` and `graphFieldsDelta` move the **fields line on the
+reaction-coordinate graph** and nothing else: the bar chart, the readouts and
+every number in the audit go on reporting the measured truth. Verified — with
+the dials at +18% and −35% the drawn line moves and the fields bar is still
+4,593 kJ/mol. This is the teaching diagram, and a diagram is allowed to be
+drawn to make its point legible.
+
+**They are an offset and a tilt, not a pair of endpoints**, and that is the
+design rather than a shortcut. Endpoints would have to be hit by rescaling the
+measured curve between them, which means dividing by how far it happens to have
+moved so far — a number near zero early in a run and changing as the run goes
+on, so the line would stretch and squash under its own data while you were
+trying to set it. An offset and a tilt are only ever added: the hump keeps its
+exact measured shape and what you set is where the two ends sit.
+
+Both are fractions of the chart's height, the units the trace is already stored
+in, and **both default to 0** so an untouched sim draws exactly what it drew
+before they existed. A dial whose default is not a no-op is a silent change to
+every screenshot ever taken.
+
+One consequence worth knowing: off zero, the motion and fields lines no longer
+sum to 1. The measured pair still does, and the bars still show it.
+
 ## The dev panel's ACTIVE group
 
 The panel is over a thousand pixels tall and most of it is tuning that was
@@ -3773,11 +3879,13 @@ gold above a gold rule, holding the handful still being turned:
 
 | control | why it is here |
 |---|---|
+| Attractive reach | how far out the pull acts — visible, not faster |
 | View zoom | the camera — see **The camera** |
 | H₂ / O₂ / He / CH₄ molecules | density, which is the clock on the whole run |
 | Shell drift, Drift speed | the only motion in the default view |
 | Bond storage | whether hits stack at all, and whether the colour says so |
 | New bond stays pink | the join flash, below |
+| Strong products | ships ON; here only so it can be compared |
 | Bond capacity, Vibration hold | together, whether the scene comes apart |
 
 **Each of these lives there and nowhere else.** The rows were *moved* out of

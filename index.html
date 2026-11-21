@@ -801,11 +801,20 @@
             <button class="awheel-item temp-btn" data-temp="high" style="flex:1 1 0;min-width:0;">HIGH</button>
           </div>
         </div>
-        <!-- Strong water: once a water has formed it is inert. It cannot break
-             and it cannot take energy into its fields, so every hit on it is
-             perfectly elastic. One button, same shell as the temp buttons, so
-             nothing in this box shifts when it turns on. -->
-        <button id="strongWaterBtn" class="awheel-item active" style="align-self:stretch;">STRONG PRODUCTS</button>
+        <!-- How much to spawn, as whole units of the balanced equation, so the
+             reaction can never come out unbalanced however far this is pushed.
+             It sits in the slot STRONG PRODUCTS used to have, and is the same
+             height, so nothing in this box shifts; strong products is now
+             always on and its switch moved to the dev panel. The readout is
+             fixed-width and the label never changes length, so dragging the
+             slider cannot resize the group. -->
+        <div id="amountGroup" style="display:flex;flex-direction:column;gap:2px;align-items:stretch;width:100%;min-width:0;">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;">
+            <span style="font-size:9px;letter-spacing:0.07em;text-transform:uppercase;opacity:0.5;">Amount</span>
+            <span id="amountVal" style="font-size:10px;font-weight:700;color:var(--accent1);min-width:18px;text-align:right;">&times;4</span>
+          </div>
+          <input type="range" id="amountSlider" min="1" max="8" step="1" value="4" style="width:100%;min-width:0;">
+        </div>
         <div id="speciesCounters" style="display:flex;gap:5px;justify-content:center;">
           <div style="flex:1;background:rgba(255,255,255,0.05);border-radius:6px;padding:3px 5px;text-align:center;font-size:11px;color:var(--text-dim);line-height:1.5;white-space:nowrap;">
             <span id="sp1Count" style="font-size:9px;letter-spacing:0.05em;opacity:0.6;">&times;2&nbsp;</span><span id="sp1Formula" style="color:var(--accent1);font-weight:700">H&#8322;</span>
@@ -2530,13 +2539,27 @@ const SPECIES = {
   He:    { els: ['He'] },        // monatomic: no bond, two lone electrons
   CH4:   { els: ['C', 'H', 'H', 'H', 'H'] },   // shape in MOLECULE_SHAPES
 };
-// TWO OF EVERYTHING, because the camera pulled back. `sceneZoom` at 0.5 gives
-// the box four times the area; at the old counts a reaction would have been six
-// molecules rattling around a field. These are still the balanced ratios — 2:1
-// for water, 1:2 for combustion — just taken twice, which is what a doubled
-// coefficient on both sides of an equation always is.
-const COMPOSITION_DEFAULT = { H2: 8, O2: 4, He: 0, CH4: 0 };  // 2:1 — water's ratio
-const COMPOSITION_MAX = 12;
+// HOW MANY, AS A MULTIPLE OF THE BALANCED EQUATION.
+//
+// `REACTIONS[*].composition` now holds ONE unit of the reaction — 2 H2 to 1 O2,
+// 1 CH4 to 2 O2 — and `reactantAmount` says how many of those units to spawn.
+// That is the only way a single toolbar control can add reactants without ever
+// unbalancing them: 2:1 taken four times is still 2:1, and leftovers at the end
+// of a run would otherwise be an artefact of the slider rather than of the
+// chemistry.
+//
+// The amount is 4 by default, which is exactly what the tab spawned before this
+// existed, and reaches 8 — the figure that restores the pre-zoom DENSITY, since
+// `sceneZoom` 0.5 gave the box four times the area. See `productBondTarget`:
+// the progress graph's target is derived from the amount rather than written
+// down beside it, because two numbers that have to agree eventually do not.
+let reactantAmount = 4;
+const REACTANT_AMOUNT_MAX = 8;
+// The per-species dev dials still exist underneath, and they can make a world
+// the amount slider never would — an unbalanced one, on purpose. Their ceiling
+// is the most any balanced world needs: 8 units of water is 16 H2.
+const COMPOSITION_MAX = REACTANT_AMOUNT_MAX * 2;
+const COMPOSITION_DEFAULT = { H2: 2 * 4, O2: 1 * 4, He: 0, CH4: 0 };
 const composition = { ...COMPOSITION_DEFAULT };
 
 // ─── Reactions ────────────────────────────────────────────────────────────────
@@ -2549,11 +2572,15 @@ const composition = { ...COMPOSITION_DEFAULT };
 // `recombine` is part of the reaction, not a global: a reaction that only comes
 // apart sets it false and its atoms go free and stay free.
 //
-// `productBonds` is how many bonds the finished products hold, and it is what
-// the right half of the reaction-progress graph counts up to — see
-// `reactionProgress`. A reaction whose product half is not written sets it null
-// and the graph stops its curve at the peak, which is then the honest picture
-// of the model rather than a missing feature.
+// `bondsPerUnit` is how many bonds ONE unit of the finished products holds,
+// and `productBondTarget()` multiplies it by `reactantAmount` to get what the
+// right half of the reaction-progress graph counts up to — see
+// `reactionProgress`. It is per unit rather than a total so that it cannot fall
+// out of step with the amount slider: a reaction that spawns twice as much
+// makes twice as many bonds, and saying that once is safer than writing the
+// product down twice. A reaction whose product half is not written leaves
+// `bondsPerUnit` out, and the graph stops its curve at the peak, which is then
+// the honest picture of the model rather than a missing feature.
 //
 // COMBUSTION IS BALANCED, and the composition is where that is said: one CH4
 // wants exactly two O2, so the entry is 4 and 8 rather than any two numbers
@@ -2562,22 +2589,39 @@ const composition = { ...COMPOSITION_DEFAULT };
 const REACTIONS = {
   water: {
     label: 'H₂ + O₂  →  H₂O',
-    composition: { H2: 8, O2: 4, He: 0, CH4: 0 },
+    composition: { H2: 2, O2: 1, He: 0, CH4: 0 },   // ONE unit; x reactantAmount
     icon: 'H2', recombine: true,
-    productBonds: 16,           // 8 waters, two O–H each
+    bondsPerUnit: 4,            // 2 waters, two O–H each
     products: ['HHO'],
   },
   combustion: {
     label: 'CH₄ + O₂  →  CO₂ + H₂O',
-    composition: { H2: 0, O2: 8, He: 0, CH4: 4 },
+    composition: { H2: 0, O2: 2, He: 0, CH4: 1 },   // ONE unit; x reactantAmount
     icon: 'CH4', recombine: true,
-    productBonds: 24,           // 4 CO2 at two bonds, 8 waters at two
+    bondsPerUnit: 6,            // 1 CO2 at two bonds, 2 waters at two
     products: ['HHO', 'COO'],
   },
 };
 const DEFAULT_REACTION = 'water';
 let reaction = DEFAULT_REACTION;
 function currentReaction() { return REACTIONS[reaction] || REACTIONS[DEFAULT_REACTION]; }
+
+// Bonds the finished products hold, for THIS many units of the reaction. Null
+// when the product half is not modelled — see the note on `bondsPerUnit`.
+function productBondTarget() {
+  const per = currentReaction().bondsPerUnit;
+  return per ? per * reactantAmount : null;
+}
+
+// Write `reactantAmount` units of the current reaction into `composition`, and
+// put the per-species dev dials back in step — a stale dial is a lie about what
+// the next NEW will spawn, which is the same reason `setReaction` syncs them.
+function applyReactantAmount(respawn = true) {
+  const unit = currentReaction().composition;
+  for (const k of Object.keys(composition)) composition[k] = (unit[k] || 0) * reactantAmount;
+  if (typeof syncCompositionSliders === 'function') syncCompositionSliders();
+  if (respawn) spawnWorld();
+}
 
 // ── Action log (for bug reports) ─────────────────────────────────────────────
 const actionLog = [];
@@ -4098,7 +4142,25 @@ function breakBody(b) {
 // Capture therefore happens ON CONTACT: a slow enough touch sticks instead of
 // bouncing, and the molecule's own geometry then pulls them to 49.
 let recombineOn   = true;     // dev toggle
-let recombRange   = 1.6;      // x contact width: where the pull starts
+// Where the pull starts, in contact widths. It was 1.6 — about two atom radii,
+// close enough that a pair was already touching by the time anything acted on
+// them, so the attraction was real but invisible. 3.0 is roughly a whole atom
+// of clear space between them, far enough to watch two atoms steer into each
+// other and far short of the grabbing-across-the-box that the top of the
+// slider's range allows.
+//
+// It does NOT make them join sooner, and the block below says why at length.
+// What it buys is that the pull can be seen at all, and that `recombAlign`
+// starts turning each open slot towards its partner earlier, so the pair
+// arrives already shaped like the molecule it is about to be.
+//
+// Measured across 1.6, 3, 5 and 8, a water run at High: completion times
+// indistinguishable (35.3, 47.3, 19.8, 63.8 s — that is the spread of the
+// reaction, not of the reach), `totalKJ` drift exactly 0 at every one, and the
+// tumble essentially untouched (mean |spin| 4.81 -> 4.12, bodies held facing a
+// partner 0.1% -> 1.6% of the time). A wider well is a wider well, not free
+// energy and not a seized-up scene.
+let recombRange   = 3.0;      // x contact width: where the pull starts
 let recombPull    = 420;      // force, px/s^2 x mass=1; an H feels it 16x an O
 const RECOMB_SNAP = 1.03;     // x contact width: close enough to stick
 
@@ -5294,7 +5356,7 @@ function reactionProgress() {
   }
   if (!atoms) return 0;
   if (!recombLatched) return 0.5 * (free / atoms);
-  const target = currentReaction().productBonds;
+  const target = productBondTarget();
   return target ? 0.5 + 0.5 * Math.min(1, bonds / target) : 0.5;
 }
 
@@ -5383,6 +5445,32 @@ function sampleEnergy() {
 // landmark, and the pass is linear and identical on both, so the smoothed pair
 // still sums to 1.
 let graphSmooth = 0.35;
+
+// ─── THE GRAPH'S OWN FIELDS LINE, WHICH IS NOT THE BAR ───────────────────────
+// Two dials that move the FIELDS line on the reaction-coordinate graph and
+// nothing else. The bar chart, the readouts and every number in the audit go
+// on reporting the measured truth; this is the teaching diagram, and a diagram
+// is allowed to be drawn to make its point legible.
+//
+// They are an OFFSET and a TILT, not a pair of endpoints, and that is the whole
+// design. Endpoints would have to be hit by rescaling the measured curve
+// between them, which means dividing by how far it happens to have moved so
+// far — a number that is near zero early in a run and changes as the run goes
+// on, so the line would stretch and squash under its own data while you were
+// trying to set it. An offset and a tilt are added, never divided by: the hump
+// keeps its exact measured shape, and what you set is where the two ends sit.
+//
+//   drawn(i) = measured(i) + graphFieldsStart + p(i) * graphFieldsDelta
+//
+// Both are fractions of the chart's height, the same units the trace is stored
+// in, because that is what the graph actually draws. Both default to 0, so an
+// untouched sim draws exactly what it drew before these existed — a dial whose
+// default is not a no-op is a silent change to every screenshot ever taken.
+//
+// One consequence worth knowing: off zero, the motion and fields lines no
+// longer sum to 1. The measured pair still does, and the bars still show it.
+let graphFieldsStart = 0;     // where the fields line begins, +/- of the chart
+let graphFieldsDelta = 0;     // how much it has moved by the far end
 const SMOOTH_MAX_PASSES = 20;
 const SMOOTH_W = 0.5;
 
@@ -5457,7 +5545,15 @@ function drawEnergyGraph() {
   const fieldsCol   = LIGHT ? '#8a3fa8'          : '#c46cff';
   const motionGlow  = LIGHT ? 'rgba(0,0,0,0)'    : 'rgba(255,45,100,0.9)';
 
-  const px = (p) => PADX + p * (W - PADX * 2);
+  // A SHELF BEFORE AND AFTER, which is what a reaction-coordinate diagram has.
+  // The reaction itself occupies the middle 60% of the axis and the outer 20%
+  // at each end is flat: the reactants sitting there before anything happens,
+  // and the products sitting there after it is over. Without them the line
+  // started and stopped against the frame, which reads as a graph that has
+  // been cropped rather than a reaction that has a before and an after.
+  const LEAD = 0.20;
+  const px = (p) => PADX + (LEAD + p * (1 - 2 * LEAD)) * (W - PADX * 2);
+  const pxL = PADX, pxR = W - PADX;
 
   graphCtx.strokeStyle = gridCol;
   graphCtx.lineWidth = 1;
@@ -5516,9 +5612,23 @@ function drawEnergyGraph() {
   // Smoothed once per draw, then shared by the lines and the markers so the
   // markers cannot drift off the curve they are supposed to be sitting on.
   const series = { motion: smoothedSeries('motion'), fields: smoothedSeries('fields') };
+  // The graph's own offset and tilt on the fields line — see graphFieldsStart.
+  // Applied into the smoothed array, so the line and its marker cannot end up
+  // reading from two different versions of the same number.
+  if (graphFieldsStart || graphFieldsDelta) {
+    series.fields = series.fields.map((v, i) =>
+      v + graphFieldsStart + progressTrace[i].p * graphFieldsDelta);
+  }
 
   const stroke = (key, col, glow, lw, blur, alpha) => {
     const pts = progressTrace.map((s, i) => ({ x: px(s.p), y: py(series[key][i]) }));
+    // The two shelves. Flat, at the height of the landmark each one runs out
+    // from, so the far shelf tracks the reaction as it goes rather than
+    // promising an ending the run has not reached.
+    if (pts.length) {
+      pts.unshift({ x: pxL, y: pts[0].y });
+      pts.push({ x: pxR, y: pts[pts.length - 1].y });
+    }
     graphCtx.save();
     graphCtx.globalAlpha = alpha;
     graphCtx.shadowBlur = LIGHT ? 0 : blur;
@@ -5805,7 +5915,7 @@ function updateEnergyPct() {
 function updateEnergyNote() {
   const el = document.getElementById('energyPctNote');
   if (!el) return;
-  el.textContent = currentReaction().productBonds
+  el.textContent = productBondTarget()
     ? 'Energy along the reaction \u2014 each point set the first time the reaction reached it'
     : 'Energy along the reaction \u2014 this one has no product half modelled yet, so it ends at the peak';
 }
@@ -5858,7 +5968,7 @@ function syncCompositionSliders() {
 function setReaction(id, respawn = true) {
   if (!REACTIONS[id]) return;
   reaction = id;
-  Object.assign(composition, REACTIONS[id].composition);
+  applyReactantAmount(false);          // the reaction's unit, taken reactantAmount times
   const sel = document.getElementById('reactionPick');
   if (sel) sel.value = id;
   const lbl = document.getElementById('newBtnLabel');
@@ -5890,11 +6000,15 @@ document.querySelectorAll('.temp-btn').forEach(btn => {
   btn.addEventListener('click', () => setTemperature(btn.dataset.temp));
 });
 
-document.getElementById('strongWaterBtn').addEventListener('click', function () {
-  strongWater = !strongWater;
-  this.classList.toggle('active', strongWater);
-  // Whatever the waters are already holding goes back to their motion as the
-  // toggle flips, rather than sitting in a field that can no longer be refilled
+// STRONG PRODUCTS IS ALWAYS ON NOW, and its switch is a dev checkbox rather
+// than a toolbar button. It was measured at 100% hold on both reactions and
+// 68% without it, so it is not a thing to be choosing between during a lesson —
+// it is the behaviour, and the switch survives only so the two can be compared
+// side by side. See `setStrongProducts`, called by the dev panel.
+function setStrongProducts(on) {
+  strongWater = on;
+  // Whatever the products are already holding goes back to their motion as the
+  // switch flips, rather than sitting in a field that can no longer be refilled
   // or released. The energy moves between the two bars; the total does not
   // change, which is the same contract returnFieldEnergy keeps everywhere else.
   if (strongWater) {
@@ -5905,7 +6019,23 @@ document.getElementById('strongWaterBtn').addEventListener('click', function () 
     }
   }
   logAction('Strong products ' + (strongWater ? 'on' : 'off'));
-});
+}
+
+// ── The amount slider ───────────────────────────────────────────────────────
+(function bindAmount() {
+  const sl  = document.getElementById('amountSlider');
+  const val = document.getElementById('amountVal');
+  if (!sl) return;
+  sl.max = REACTANT_AMOUNT_MAX;
+  sl.value = reactantAmount;
+  val.textContent = '\u00d7' + reactantAmount;
+  sl.addEventListener('input', () => {
+    reactantAmount = parseInt(sl.value, 10);
+    val.textContent = '\u00d7' + reactantAmount;
+    applyReactantAmount();            // rewrites composition, syncs dev dials, respawns
+    logAction('Amount \u00d7' + reactantAmount);
+  });
+})();
 
 function setViewModeActive(targetBtn) {
   document.querySelectorAll('.awheel-item[data-view]').forEach(b =>
@@ -5997,6 +6127,12 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
       'color:#ffd84d;font-weight:700;margin-top:10px;">Active</div>' +
     '<div style="opacity:0.45;font-size:10px;margin-bottom:2px;">still being ' +
       'turned. Below the line is settled tuning.</div>' +
+    row('devRecombRange', 'Attractive reach', 1.2, 8, 0.1, recombRange, '#ffd84d') +
+    '<div style="opacity:0.45;font-size:10px;">how far out two atoms that could ' +
+      'bond start pulling on each other, in contact widths. Wider does not ' +
+      'make them join sooner \u2014 the well is far too shallow for that \u2014 but it ' +
+      'is what makes the pull VISIBLE, and it turns each molecule\u2019s open slot ' +
+      'to face its partner earlier</div>' +
     row('devSceneZoom', 'View zoom', 0.25, 1, 0.05, sceneZoom, '#ffd84d') +
     '<div style="opacity:0.45;font-size:10px;">this tab only; no atom, speed or ' +
       'threshold changes. 0.5 is 4× the area, so it wants ~4× the molecules ' +
@@ -6021,6 +6157,14 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
       '</select>' +
     '</label>' +
     '<div id="devVibModeNote" style="opacity:0.45;font-size:10px;"></div>' +
+    '<label style="display:flex;align-items:center;gap:7px;margin:9px 0 2px;cursor:pointer;">' +
+      '<input type="checkbox" id="devStrong" checked style="margin:0">' +
+      '<span>Strong products</span>' +
+    '</label>' +
+    '<div style="opacity:0.45;font-size:10px;margin-left:21px;">a finished ' +
+      'product cannot break and cannot take energy into its fields. Ships ON ' +
+      '\u2014 measured, a finished world holds 100% of the time with it and 68% ' +
+      'without. The switch is here only so the two can be compared</div>' +
     row('devJoinFlash', 'New bond stays pink', 0, 3, 0.1, joinFlashSec, '#ffd84d') +
     '<div style="opacity:0.45;font-size:10px;">a join\u2019s own flash, held at ' +
       'full for the first 45% and then fading. A collision\u2019s flare is a ' +
@@ -6098,6 +6242,12 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     '<div style="font-size:9px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.4;margin-top:8px;">' +
       'Line graph</div>' +
     row('devGraphSmooth', 'Curve smoothing', 0, 1, 0.05, graphSmooth, '#00e5ff') +
+    row('devGFStart', 'Fields line starts', -0.5, 0.5, 0.01, graphFieldsStart, '#00e5ff') +
+    row('devGFDelta', 'Fields line change', -1, 1, 0.01, graphFieldsDelta, '#00e5ff') +
+    '<div style="opacity:0.45;font-size:10px;">the GRAPH\u2019s fields line only ' +
+      '\u2014 an offset, and a tilt added across the reaction. The bars, the ' +
+      'readouts and the audit keep reporting the measured truth. Both 0 draws ' +
+      'exactly the measured curve</div>' +
     '<div style="opacity:0.45;font-size:10px;">Averages each landmark towards its ' +
       'neighbours. The two ends stay put.</div>' +
     '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
@@ -6109,7 +6259,6 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     '</label>' +
     '<div id="devRecombNote" style="opacity:0.45;font-size:10px;margin-left:21px;"></div>' +
     row('devRecombPull', 'Pull',  0, 2000, 20,  recombPull,  '#4dff9f') +
-    row('devRecombRange','Reach', 1.2, 4, 0.1, recombRange, '#4dff9f') +
     row('devJoinForm',  'Snap glides in', 0, 0.6, 0.01, joinFormSec, '#4dff9f') +
     row('devRecombAlign','Turns to fit',  0, 60,  1,    recombAlign, '#4dff9f') +
     row('devJoinVib',   'New bond keeps', 0, 0.9, 0.05, joinVibCap,  '#4dff9f') +
@@ -6214,6 +6363,9 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
        v => v > 0 ? Math.round(v * 100) + '% of the shell' : 'still');
   bind('devShWobHz', v => shellWobbleHz = v, false,
        v => v > 0 ? v.toFixed(2) + '×' : 'frozen');
+  const strongCb = panel.querySelector('#devStrong');
+  strongCb.checked = strongWater;
+  strongCb.addEventListener('change', () => setStrongProducts(strongCb.checked));
   bind('devJoinFlash', v => joinFlashSec = v, false,
        v => v > 0 ? v.toFixed(1) + ' s' : 'off');
   bind('devBreakH', v => breakEnergy = v, false, v => v.toFixed(2));
@@ -6223,6 +6375,10 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   bind('devBarZero', v => barZeroAt  = v, false,
        v => Math.round(v * 100) + '% of the broken floor');
   bind('devFieldsZero', v => fieldsZeroKJ = v, false, v => Math.round(v) + ' kJ/mol');
+  bind('devGFStart', v => { graphFieldsStart = v; drawEnergyGraph(); }, false,
+       v => (v > 0 ? '+' : '') + Math.round(v * 100) + '% of chart');
+  bind('devGFDelta', v => { graphFieldsDelta = v; drawEnergyGraph(); }, false,
+       v => v === 0 ? 'flat' : (v > 0 ? '+' : '') + Math.round(v * 100) + '% by the end');
   bind('devGraphSmooth', v => graphSmooth = v, false,
        v => v > 0 ? Math.round(v * 100) + '%' : 'raw steps');
   bind('devRecombPull', v => recombPull  = v, false, v => Math.round(v) + ' px/s²');
