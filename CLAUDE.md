@@ -429,13 +429,64 @@ on/off switch are all dev controls.
 ```javascript
 const SPECIES = { H2: { els: ['H','H'] }, O2: { els: ['O','O'] }, He: { els: ['He'] },
                   CH4: { els: ['C','H','H','H','H'] } };
-const composition = { H2: 4, O2: 2, He: 0, CH4: 0 };   // 0–6 of each, dev sliders
+const composition = { H2: 8, O2: 4, He: 0, CH4: 0 };   // 0–12 of each, dev sliders
 const ATOMIC_MASS = { H: 1, O: 16, He: 4, C: 12 };
 ```
 
 `spawnWorld()` builds a queue from `composition`, shuffles it so a crowded world
 does not cram one species into the gaps the other left, then places each at a
 random position, heading and spin — retrying up to 400 times for a clear spot.
+
+### The camera, on the Reactions tab only
+
+```javascript
+let sceneZoom = 0.5;        // dev slider "View zoom", Reactions tab only
+world.w = sceneW() / sceneZoom;        // the box, in WORLD units
+ctx.translate(0, world.top); ctx.scale(sceneZoom, sceneZoom);   // drawWorld
+```
+
+**Zooming out is a camera move, not a smaller atom.** The obvious way to see
+more of the world is to shrink `ATOM_RADIUS`, and the comment on that constant
+even invites it. It is the wrong way. `ATOM_RADIUS` scales bond lengths and
+shell radii because those are written as multiples of it, but the scene is full
+of lengths that are not — `WORLD_NUCLEON_R`, `SHELL_DOT_R`, `BOND_DOT_GLOW`,
+every stroke width — so the nucleons would grow relative to the atom they sit
+inside and the glows would swell into blobs. Worse, **speed is in px/s**: shrink
+the atoms and the molecules cross twice as many atom-widths a second, which is
+not a zoom, it is a heatwave.
+
+So nothing about an atom changes. The **box** gets bigger and `drawWorld` puts
+one `ctx.scale` on the whole scene, after the translate that lines the box up
+with the toolbar. Every length in the renderer follows for free, because every
+one of them is now a world length drawn through the same transform. Two places
+need the zoom explicitly and they are the two that are in *screen* pixels: the
+wall's `lineWidth` (`1 / sceneZoom`, or it dithers), and the field heatmap's
+buffer resolution (or a zoomed-out world allocates four times the pixels to
+blit down into the same strip of screen).
+
+**Not one physics constant moves.** `LAUNCH_SPEED` is untouched, so a molecule
+covers the same ground per second in world units and proportionally less of the
+screen — the camera pulled back, nothing got hot — and `doseUnit`, `kjPerSim`
+and every break threshold read exactly as they did. Verified: 4 CH₄ + 8 O₂ at
+rest reads 7,432 and 4 CO₂ + 8 H₂O reads 4,200, so Δ = −3,232, **−808 per
+methane**, the same figure as before the zoom; and `totalKJ` drifts by exactly 0
+over 90 s.
+
+**What it does change is density, and density is the clock.** At 0.5 the box has
+four times the area and holds twice the molecules, so the density is halved and
+the mean free path doubles. Both halves of the reaction slow down — the search
+for a partner most of all — and the completion target got harder at the same
+time, because "every product at once" over eight waters waits on a straggler in
+a way four waters never did. Half done went 5.2 s → 22.5 s and fully done went
+13 s → 66 s, and the closing-speed capture fix is the only reason it still
+finishes at all (see **Recombination**).
+
+Two one-slider ways to buy that time back, if the pace ever matters more than
+the field of view: **4× the molecules** at this zoom restores the original
+density exactly (measured: median 75 s to a *sixteen*-water finish, 0 failures),
+or **`sceneZoom` 0.7 with the present counts** gives twice the area for twice
+the molecules, which is the same density as the old world and still shows half
+again as much of it.
 
 ### The reaction picker
 
@@ -447,10 +498,10 @@ is where it is made.
 
 ```javascript
 const REACTIONS = {
-  water:      { composition: { H2: 4, O2: 2, He: 0, CH4: 0 }, icon: 'H2',
-                recombine: true, productBonds:  8, products: ['HHO'] },
-  combustion: { composition: { H2: 0, O2: 4, He: 0, CH4: 2 }, icon: 'CH4',
-                recombine: true, productBonds: 12, products: ['HHO', 'COO'] },
+  water:      { composition: { H2: 8, O2: 4, He: 0, CH4: 0 }, icon: 'H2',
+                recombine: true, productBonds: 16, products: ['HHO'] },
+  combustion: { composition: { H2: 0, O2: 8, He: 0, CH4: 4 }, icon: 'CH4',
+                recombine: true, productBonds: 24, products: ['HHO', 'COO'] },
 };
 ```
 
@@ -2923,18 +2974,24 @@ where its geometry already is, so the click test cannot drift from what is drawn
 ## Recombination — the other half of the reaction
 
 Once the scene has come apart, the atoms find each other again and make the
-reaction's products. Verified end to end, 10 runs each at High:
+reaction's products. Verified end to end at High, in the zoomed-out world
+(8 runs each; see **The camera** for what the zoom did to these times):
 
-| reaction | reaches its products | first complete |
-|---|---|---|
-| 2 H₂ + O₂ → 2 H₂O | **10/10** | 5.8–19.3 s |
-| CH₄ + 2 O₂ → CO₂ + 2 H₂O | **10/10** | 7.7–32.3 s |
+| reaction | reaches its products | half the products | all of them |
+|---|---|---|---|
+| H₂ + O₂ → H₂O (8 waters) | **8/8**, held 100% | 22.5 s | 66.4 s |
+| CH₄ + O₂ → CO₂ + H₂O (4 CO₂, 8 H₂O) | **8/8**, held 100% | 19.1 s | 66.1 s |
+
+The two columns are far apart on purpose, and the gap is the honest shape of
+the thing: the reaction is visibly over — three-quarters of the products made —
+in about 20 seconds, and then one straggler takes as long again to find its
+partner. Before the camera pulled back, the same world at a quarter the area
+and half the molecules was half done at 5.2 s and finished at 13 s.
 
 **It only opens once every original molecule has come apart**, and the condition
 is `world.bodies.every(b => b.els.length === 1)`, latched the first frame it is
 true. The latch is the whole trick: forming the first OH makes the condition
-false again, and the gate must not slam behind it. (Combustion latches at
-1.8–13.7 s from an 18-atom scene.)
+false again, and the gate must not slam behind it.
 
 **The whole reaction is one table of steps**, `JOIN_STEPS`, keyed by the sorted
 elements of the two bodies meeting:
@@ -2975,8 +3032,9 @@ that lives for a few frames, and what it has to get right is which end is open.
 ### Oxygen is the thing there is not enough of
 
 Combustion is the first reaction here where **two products compete for the same
-atom**, and a purely local rule deadlocks on it. Burning two methanes gives 2 C,
-8 H and 8 O, which has to come out as 2 CO₂ and 4 H₂O — four oxygens to the
+atom**, and a purely local rule deadlocks on it. Burning two methanes — half of
+what the tab now spawns, and the arithmetic is the same at any multiple — gives
+2 C, 8 H and 8 O, which has to come out as 2 CO₂ and 4 H₂O — four oxygens to the
 carbons, four to the waters. Nothing stops the first eight meetings all being an
 H and an O: that makes eight OH, uses every hydrogen and every oxygen in the
 world, and leaves two carbons with nothing to bond to and eight hydroxyls that
@@ -3040,11 +3098,76 @@ so a near miss costs the books nothing. What it does put in while a pair is
 closing is tallied as `pullWork` and handed back at the join, or dropped when the
 pair drifts apart.
 
-**Capture needs the bond to be able to hold them**: the pair's relative kinetic
-energy must not exceed the bond's own energy. Two atoms crashing together faster
-than that do not stick in the real world either — they have nowhere to put the
-excess. Measured on a live scene, a typical approach was 53,000 against an O–H
-bond's 181,000, so ordinary encounters capture and only the hardest bounce off.
+**Capture needs the bond to be able to hold them**: the pair's kinetic energy
+of approach must not exceed the bond's own energy. Two atoms crashing together
+faster than that do not stick in the real world either — they have nowhere to
+put the excess.
+
+#### Only the CLOSING speed, not the whole relative velocity
+
+```javascript
+const vClose = rvx * ux + rvy * uy;             // along the line between sites
+const keRel  = 0.5 * mu * vClose * vClose / (displayBoost(a) * displayBoost(b));
+if (keRel <= bondSim) { /* capture */ }
+```
+
+The test used the full relative velocity, `rvx² + rvy²`, and **that was simply
+wrong**. Only the part of the approach along the line between the two bonding
+sites has to be arrested by the bond. The part across it does not need
+arresting at all: it becomes the **product's rotation**, and `joinBodies`
+already handles that exactly — the new spin comes from the pair's angular
+momentum about their common centre of mass, the one quantity a join cannot
+change, clamped at `MAX_SPIN`, with everything left over going to vibration and
+then to speed and `fieldsKJ` counting all of it. So letting a glancing pair
+through costs the books nothing; the energy has a place to go that was built
+before this test existed.
+
+**How much it mattered:** at High the relative kinetic energy of a contact is
+about 776,000 against an O–H bond's 185,000, so a *head-on* hit is refused four
+times over and only the slow tail ever stuck. Judging on the closing speed
+instead admits any approach inside about 60° of a glance — roughly two-thirds
+of contacts. Measured in the zoomed-out world, 12 runs of a 16 H + 8 O scene
+given 120 s to make eight waters:
+
+| capture test | completed |
+|---|---|
+| full relative speed | **0 / 12** |
+| closing speed | **12 / 12**, median 50 s |
+
+The old test was survivable only because the old box was small enough that
+contacts were cheap. Four times the area made it fatal.
+
+#### Widening the reach does nothing — measured, and here is why
+
+The obvious companion to the fix above, and it does not work. The thought: the
+reach is two atom radii, so the end of a run is a random walk; let it grow as
+the candidate pairs run out — three times as far with one pair left, three
+times the capture width — and leave a crowded box alone. Built, measured over
+14 runs of a world holding nothing but the final H and OH:
+
+| reach | median time to join |
+|---|---|
+| ×1 | 12.7 s |
+| ×3 | 18.9 s |
+
+No effect, and if anything the wrong sign. **The pull is nowhere near strong
+enough to bend anything.** Its well is `F × R` deep — 420 × 109 px ≈ 46,000 —
+against a relative kinetic energy of about 776,000. The well is **six per cent**
+of the energy of the thing crossing it, so a pair that was going to miss still
+misses: a wider reach buys more approaches and no more contacts. Capture here is
+geometric, and the two sites have to actually touch.
+
+**Nor would a deeper well help**, which is worth knowing before anyone reaches
+for `recombPull`. A conservative well hands back on the way out exactly what it
+took on the way in, so a deeper one just delivers the pair to contact going
+*faster*, straight into the capture test. Two bodies cannot be bound by
+attraction alone. What binds them is the bond having somewhere to put the
+energy — which is the allowance the capture test already gives them, and why
+the closing-speed fix above was the only lever that could have worked.
+
+After that, the one thing left that moves these times is **the density of the
+box**, which is a question about how many molecules are in it and not about
+recombination at all.
 
 ### The pull comes out as spin, a glow, and speed
 
@@ -3510,16 +3633,17 @@ take. The right half counts **bonds** for the same reason — every bond in the
 world after the latch is a product bond, since everything was a free atom a
 moment earlier.
 
-Measured, one water run end to end: 14 landmarks at 0, 0.083, 0.25, 0.333,
-0.417, **0.5** (12 free atoms, `recombLatched` true), 0.563 … 1.0 (4 waters).
+Measured, one water run end to end, in the smaller pre-zoom world: 14 landmarks
+at 0, 0.083, 0.25, 0.333, 0.417, **0.5** (12 free atoms, `recombLatched` true),
+0.563 … 1.0 (4 waters).
 The fields fraction climbs 0.658 → **0.930** at the midpoint and falls to 0.394,
 monotone on both sides — a clean hump whose products sit lower than its
 reactants, which is what exothermic looks like.
 
 ### A reaction with no product half yet
 
-`REACTIONS[*].productBonds` is how many bonds the finished products hold — 8 for
-water, 12 for combustion. Set it `null` and progress stops at 0.5: the curve
+`REACTIONS[*].productBonds` is how many bonds the finished products hold — 16
+for water, 24 for combustion. Set it `null` and progress stops at 0.5: the curve
 climbs to the peak and ends there, markers and all, with the right half of the
 axis empty under PRODUCTS, and the caption under the graph says so.
 

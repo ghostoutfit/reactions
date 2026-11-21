@@ -1171,6 +1171,37 @@ const barCtx         = barChartCanvas.getContext('2d');
 // painted over it.
 function sceneW() { return Math.max(200, canvas.width - BAR_PANEL_W); }
 
+// ─── The camera, on the Reactions tab only ───────────────────────────────────
+// ZOOMING OUT IS A CAMERA MOVE, NOT A SMALLER ATOM.
+//
+// The obvious way to see more of the world is to shrink ATOM_RADIUS, and the
+// comment on that constant even invites it. It is the wrong way. ATOM_RADIUS
+// scales bond lengths and shell radii because those are written as multiples of
+// it, but the scene is also full of lengths that are not: WORLD_NUCLEON_R,
+// SHELL_DOT_R, BOND_DOT_GLOW, every stroke width. Halve the atom and all of
+// those stay put, so the nucleons grow relative to the atom they are inside and
+// the glows swell into blobs. Worse, speed is in px/s: shrink the atoms and the
+// molecules cross twice as many atom-widths a second, which is not a zoom, it
+// is a heatwave.
+//
+// So nothing about an atom changes. The WORLD BOX gets bigger — `syncWorldBox`
+// divides the visible band by the zoom to get its size in world units — and
+// `drawWorld` puts a single ctx.scale on the whole scene. Every length in the
+// renderer follows for free, because every one of them is now a world length
+// being drawn through the same transform. LAUNCH_SPEED is untouched, so a
+// molecule still covers the same ground per second in world units and covers
+// proportionally less of the screen: the camera pulled back, nothing got hot.
+//
+// And because not one physics constant moves, `doseUnit`, `kjPerSim` and every
+// break threshold read exactly as they did. The only things the zoom changes
+// are the two it should: there is more room, and (see COMPOSITION_DEFAULT) more
+// in it.
+//
+// Reactions only. The One Bond tab has its own zoom and the sandbox is laid out
+// against the canvas, so both stay at 1 — `drawWorld` is the Reactions tab's
+// draw and nothing else calls it.
+let sceneZoom = 0.5;
+
 // ─── Field heatmap buffers ────────────────────────────────────────────────────
 // The field is accumulated as floats at low resolution, then colour-mapped once
 // and blitted up to world size. There is no cache: every molecule moves every
@@ -1737,7 +1768,13 @@ function drawFieldHeatmap(destCtx, segsIn, boxW, boxH, opts) {
   const gain   = (opts && opts.gain)  || FIELD_GAIN;
   const cmap   = (opts && opts.colormap) || COLORMAP;
 
-  const scale = FIELD_SCALE[_quality] || 0.2;
+  // The buffer is sized in SCREEN pixels, not world ones: a caller that brings
+  // its own box is already working in screen units, and the world box is in
+  // world units, so the world's scale carries the zoom. Without that factor a
+  // zoomed-out world would allocate a buffer four times the area to be blitted
+  // down into the same strip of screen — paying for resolution the display
+  // cannot show.
+  const scale = (FIELD_SCALE[_quality] || 0.2) * (boxW ? 1 : sceneZoom);
   const w = Math.max(1, Math.ceil((boxW || world.w) * scale));
   const h = Math.max(1, Math.ceil((boxH || world.h) * scale));
   ensureFieldBuffers(w, h);
@@ -2493,8 +2530,13 @@ const SPECIES = {
   He:    { els: ['He'] },        // monatomic: no bond, two lone electrons
   CH4:   { els: ['C', 'H', 'H', 'H', 'H'] },   // shape in MOLECULE_SHAPES
 };
-const COMPOSITION_DEFAULT = { H2: 4, O2: 2, He: 0, CH4: 0 };  // 2:1 — water's ratio
-const COMPOSITION_MAX = 6;
+// TWO OF EVERYTHING, because the camera pulled back. `sceneZoom` at 0.5 gives
+// the box four times the area; at the old counts a reaction would have been six
+// molecules rattling around a field. These are still the balanced ratios — 2:1
+// for water, 1:2 for combustion — just taken twice, which is what a doubled
+// coefficient on both sides of an equation always is.
+const COMPOSITION_DEFAULT = { H2: 8, O2: 4, He: 0, CH4: 0 };  // 2:1 — water's ratio
+const COMPOSITION_MAX = 12;
 const composition = { ...COMPOSITION_DEFAULT };
 
 // ─── Reactions ────────────────────────────────────────────────────────────────
@@ -2514,22 +2556,22 @@ const composition = { ...COMPOSITION_DEFAULT };
 // of the model rather than a missing feature.
 //
 // COMBUSTION IS BALANCED, and the composition is where that is said: one CH4
-// wants exactly two O2, so the entry is 2 and 4 rather than any two numbers
+// wants exactly two O2, so the entry is 4 and 8 rather than any two numbers
 // that happen to look reasonable. Spawn it unbalanced and the leftovers simply
 // stay free at the end, which is also true of the real thing.
 const REACTIONS = {
   water: {
     label: 'H₂ + O₂  →  H₂O',
-    composition: { H2: 4, O2: 2, He: 0, CH4: 0 },
+    composition: { H2: 8, O2: 4, He: 0, CH4: 0 },
     icon: 'H2', recombine: true,
-    productBonds: 8,            // 4 waters, two O–H each
+    productBonds: 16,           // 8 waters, two O–H each
     products: ['HHO'],
   },
   combustion: {
     label: 'CH₄ + O₂  →  CO₂ + H₂O',
-    composition: { H2: 0, O2: 4, He: 0, CH4: 2 },
+    composition: { H2: 0, O2: 8, He: 0, CH4: 4 },
     icon: 'CH4', recombine: true,
-    productBonds: 12,           // 2 CO2 at two bonds, 4 waters at two
+    productBonds: 24,           // 4 CO2 at two bonds, 8 waters at two
     products: ['HHO', 'COO'],
   },
 };
@@ -2586,8 +2628,10 @@ function syncWorldBox() {
   // The bar chart owns the right-hand strip on EVERY tab, so the walls stop
   // short of it. Same reason the box stops above the energy bar: a molecule
   // must never be behind an opaque panel looking like it vanished.
-  world.w   = sceneW();
-  world.h   = Math.max(120, canvas.height - tbH - sbH);
+  // In WORLD units, which at a zoom under 1 is more than the band measures: the
+  // visible strip of screen is a window onto a bigger box. See `sceneZoom`.
+  world.w   = sceneW() / sceneZoom;
+  world.h   = Math.max(120, canvas.height - tbH - sbH) / sceneZoom;
   syncBarPanel();
   return { oldW, oldH };
 }
@@ -4024,6 +4068,37 @@ let recombRange   = 1.6;      // x contact width: where the pull starts
 let recombPull    = 420;      // force, px/s^2 x mass=1; an H feels it 16x an O
 const RECOMB_SNAP = 1.03;     // x contact width: close enough to stick
 
+// ── WIDENING THE REACH DOES NOTHING, and here is the arithmetic ──────────────
+// This was tried, built and measured, and it is written down because the idea
+// is an obvious one and will occur to the next person too.
+//
+// The thought: `recombRange` is about two atom radii, so the end of a run is a
+// random walk and the last pair takes as long as it takes. Let the reach grow
+// as the candidate pairs run out — three times as far with one pair left,
+// three times the capture width, three times the rate — and leave a crowded
+// box untouched. Measured over 14 runs of a world holding nothing but the
+// final H and OH: 12.7 s at the normal reach, 18.9 s at three times it. No
+// effect, and if anything the wrong sign.
+//
+// The reason is that the pull is nowhere near strong enough to bend anything.
+// Its well is F x R deep: 420 x 109 px is about 46,000, against a relative
+// kinetic energy at High of about 776,000. The well is SIX PER CENT of the
+// energy of the thing crossing it, so a pair that was going to miss still
+// misses — a wider reach buys more approaches and no more contacts. Capture
+// here is geometric: the two sites have to actually touch.
+//
+// Nor does a deeper well help, and that is worth knowing too. A conservative
+// well hands back on the way in exactly what it takes on the way out, so a
+// deeper one simply delivers the pair to contact going FASTER, straight into
+// the capture test. Two bodies cannot be bound by attraction alone; what binds
+// them is the bond having somewhere to put the energy, which is the allowance
+// the capture test already gives them.
+//
+// So the only lever on the endgame that can work is the capture test itself —
+// see the closing-speed test down in stepRecombination — and after that, the
+// density of the box, which is a question about how many molecules are in it
+// and not about recombination at all.
+
 // HOW THE JOIN LOOKS, which is a separate question from when it happens.
 //
 // Capture is on contact and the bond is shorter than contact — an O and an H
@@ -4544,9 +4619,26 @@ function stepRecombination(dt) {
         // the boost left in, carbon stalled at CO — 2 CO + 2 free O still
         // sitting there after 240 s, having been inside capture range for 4458
         // frames and as close as 41 px with a snap threshold of 83.
+        //
+        // AND ONLY THE CLOSING SPEED, not the whole relative velocity. The part
+        // of the approach along the line between the two sites is what the bond
+        // has to arrest; the part across it does not need arresting at all,
+        // because it becomes the product's ROTATION. `joinBodies` already
+        // handles that exactly: it takes the new spin from the angular momentum
+        // of the pair about their common centre of mass — the one quantity a
+        // join cannot change — clamps it at MAX_SPIN, and puts everything left
+        // over into vibration and then speed, with fieldsKJ counting all of it.
+        // So admitting a glancing pair costs the audit nothing; the energy has
+        // a place to go that was built before this test existed.
+        //
+        // Judging a glancing pair on its full relative speed was the only
+        // energy refusal in here that was simply wrong, and it refused exactly
+        // the pairs that circle each other at the end of a run rather than
+        // meeting head on.
         const mu = (B[i].mass * B[k].mass) / (B[i].mass + B[k].mass);
         const rvx = B[k].vx - B[i].vx, rvy = B[k].vy - B[i].vy;
-        const keRel = 0.5 * mu * (rvx * rvx + rvy * rvy)
+        const vClose = rvx * ux + rvy * uy;
+        const keRel = 0.5 * mu * vClose * vClose
                     / (displayBoost(B[i]) * displayBoost(B[k]));
         // The same figure the join will release, not the element-pair table's
         // guess at it: a C=O that is worth 799 must be allowed to capture a
@@ -4868,7 +4960,9 @@ function drawWalls() {
   const LIGHT = document.body.classList.contains('screenshot-mode');
   ctx.save();
   ctx.strokeStyle = LIGHT ? 'rgba(0,0,0,0.22)' : 'rgba(150,190,255,0.16)';
-  ctx.lineWidth = 1;
+  // One SCREEN pixel. The scene is drawn through the zoom, so a lineWidth of 1
+  // would come out at the zoom's width — a hairline that dithers in and out.
+  ctx.lineWidth = 1 / sceneZoom;
   ctx.strokeRect(0.5, 0.5, world.w - 1, world.h - 1);
   ctx.restore();
 }
@@ -4878,8 +4972,11 @@ function drawWorld() {
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   ctx.save();
-  // World (0,0) sits at the top-left of the visible band
+  // World (0,0) sits at the top-left of the visible band. The translate is in
+  // screen px — it lines the box up with the toolbar — so it comes before the
+  // zoom, and everything inside is a world length from here on.
   ctx.translate(0, world.top);
+  ctx.scale(sceneZoom, sceneZoom);
 
   drawWalls();
   if (document.getElementById('showFields').checked) drawFieldHeatmap(ctx);
@@ -5963,6 +6060,10 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     '<div style="height:1px;background:rgba(255,255,255,0.12);margin:11px 0 2px;"></div>' +
     '<div style="font-size:9px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.4;margin-top:8px;">' +
       'Scene</div>' +
+    row('devSceneZoom', 'View zoom',     0.25, 1,  0.05, sceneZoom,        '#9fb0ff') +
+    '<div style="opacity:0.45;font-size:10px;">the camera, on this tab only. ' +
+      'Below 1 the box is bigger than the screen band and everything in it is ' +
+      'drawn smaller — no atom, speed or threshold changes</div>' +
     row('devBgLift',  'Scene lift',      0,   60,  1,    bgLift,           '#9fb0ff') +
     '<div style="opacity:0.45;font-size:10px;">how far the background sits above ' +
       'the theme’s near-black. 0 is the old floor, on which a CPK-black ' +
@@ -6105,6 +6206,11 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   bind('devBFloor',   v => BOND_FIELD_FLOOR = v, false, v => v.toFixed(2));
   bind('devBBoost',   v => BOND_FIELD_BOOST = v, false, v => v.toFixed(2));
   bind('devBGamma',   v => bondShownGamma = v, false, v => v.toFixed(2));
+  // Changing the zoom resizes the box, so the molecules are carried with it the
+  // same way a window resize carries them — otherwise zooming in leaves half
+  // the world outside a wall.
+  bind('devSceneZoom', v => { sceneZoom = v; restretchWorld(); }, false,
+       v => v.toFixed(2) + '×');
   bind('devBgLift',   v => { bgLift = v; applySceneBg(); }, false, v => v.toFixed(0));
   bind('devLoneArc',  v => { loneArcFrac = v;
          for (const b of world.bodies) buildElectrons(b);
