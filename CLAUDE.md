@@ -429,8 +429,8 @@ on/off switch are all dev controls.
 ```javascript
 const SPECIES = { H2: { els: ['H','H'] }, O2: { els: ['O','O'] }, He: { els: ['He'] },
                   CH4: { els: ['C','H','H','H','H'] } };
-let reactantAmount = 4;                                // the AMOUNT slider, 1-8
-const composition = { H2: 8, O2: 4, He: 0, CH4: 0 };   // = the unit x the amount
+let reactantAmount = 7;                                // the AMOUNT slider, 1-8
+const composition = { H2: 14, O2: 7, He: 0, CH4: 0 };  // = the unit x the amount
 const ATOMIC_MASS = { H: 1, O: 16, He: 4, C: 12 };
 ```
 
@@ -459,9 +459,11 @@ that box moves while it is dragged. (The figure recorded here used to be
 352×319; that was stale before this change — checked against the previous
 commit, which also measures 369×336.)
 
-**8 is there for a reason.** `sceneZoom` 0.5 gave the box four times the area,
-and ×8 is twice today's counts — the setting that restores the pre-zoom
-density. See **The camera**.
+The default is **×7** at a zoom of **0.8**, which is a far denser box than the
+×4-at-0.5 these two started as: 1.56× the screen area holding 21 molecules
+rather than 4× holding 12. That density, with the reactant ease below, is what
+brought a water run's latch down to **1.6 s** and its median finish to **26 s**
+from the 17 s / 66 s they were at.
 
 `productBondTarget()` derives the progress graph's target from `bondsPerUnit ×
 reactantAmount` rather than a total written down beside the composition,
@@ -478,7 +480,7 @@ which is where this repo puts every other alternative it keeps.
 ### The camera, on the Reactions tab only
 
 ```javascript
-let sceneZoom = 0.5;        // dev slider "View zoom", Reactions tab only
+let sceneZoom = 0.8;        // dev slider "View zoom", Reactions tab only
 world.w = sceneW() / sceneZoom;        // the box, in WORLD units
 ctx.translate(0, world.top); ctx.scale(sceneZoom, sceneZoom);   // drawWorld
 ```
@@ -3832,7 +3834,120 @@ Dormant, kept because the next round of work wants it. None of it is live:
 - **`world.bodies[].id`** is stable per body — the handle for selecting one
   molecule and charting it alone.
 
+### The last few reactants go easier
+
+A reaction that is nearly done drags. The last intact O₂ has twenty-odd free
+atoms to be hit by, most of them light, so it sits there taking small doses
+that leak away between them while the scene looks finished and is not.
+
+```javascript
+let breakEaseMax = 3;        // ACTIVE: divide the last reactant's threshold by this
+reactantEase = 1 + (breakEaseMax - 1) * (1 - reactantsLeft / reactantsAtSpawn);
+breakThreshold(b) = breakEnergy * f / (isReactant(b) ? reactantEase : 1);
+```
+
+**It changes WHEN, not WHAT.** The energy a break puts into fields is set by
+the bond that stopped existing — `fieldsKJ` is free atoms less the D of every
+bond still standing — and D is not in this. A lower threshold only means the
+bond lets go holding less stacked vibration; the step in the fields bar is the
+same size whenever it comes. Measured, breaking one O=O:
+
+| `breakEaseMax` | `reactantEase` | threshold | step in fields |
+|---|---|---|---|
+| 1 | 1.00 | 1.500 | **+495** |
+| 3 | 2.50 | 0.600 | **+495** |
+| 8 | 6.25 | 0.240 | **+495** |
+
+The threshold falls by a factor of six and the fields step does not move off
+the bond's own dissociation energy. `totalKJ` drift stays exactly 0 over full
+runs at every setting.
+
+**Reactants only.** A product must not get easier to pull apart as the run goes
+on — that is the opposite of what the run is for — and an intermediate like OH
+is not a reactant either. `isReactant` asks the current reaction's own
+`composition` what it spawned, so nothing here names a molecule. Verified: a
+water's threshold is untouched at any ease.
+
+`vibLoad` divides by the same factor, or an eased reactant would break while
+its colour was still climbing and "full pink means about to go" would quietly
+stop being true.
+
+What it buys is the dissociation half, which is where the drag was:
+
+| | latch, ease 1 | latch, ease 3 |
+|---|---|---|
+| water | 16.6 s | **4.5 s** |
+| combustion | 14.3 s (worst 29.2) | **9.8 s** (worst 14.4) |
+
+Completion times move too but are dominated by the recombination half's own
+spread, which this does not touch and was never meant to.
+
+### The line has no wiggles, and no future
+
+Two faults in the drawn curve, both now fixed.
+
+**The wiggles** were the spline. It was a uniform Catmull-Rom — the tangent at
+each point taken as `(next - previous) / 6`, with no regard for how far apart
+in x the points are. Landmarks land at whatever progress the reaction happened
+to reach, so two can be a pixel apart and the next two a third of the chart
+apart; given that, a uniform tangent is far too long for the short intervals
+and the curve bulges past the points it is supposed to pass through. That is
+the little hooks and ledges that showed up near the leading end, where the
+landmarks bunch up.
+
+It is **Fritsch–Carlson** now: each tangent is the weighted harmonic mean of
+the two neighbouring secant slopes, and zero wherever the data turns. The curve
+cannot leave the interval it is in, so it passes through every point with no
+overshoot, and — the part that matters for the shelves — a run of equal values
+is drawn perfectly flat instead of rippling.
+
+**The phantom shelf** was the products line. Drawing it from the leading end of
+a run still in progress was a line claiming the reaction had finished and
+levelled off, which it had not, and it ran out to the frame so the whole
+right-hand side was full of a result that did not exist yet. The reactants
+shelf is always drawn — the reactants really were sitting there before anything
+happened — but the products shelf appears only once the trace has actually
+reached `p = 1`. Past the leading end there is nothing to say, so nothing is
+drawn.
+
+### Dragging in the Sandbox puts it where you dropped it
+
+Dragging an atom out of a molecule always detached it — `sbRebuildBonds`
+decides bonds by what is near what, so pulling it away is enough. What was
+missing is the other half: letting go on an occupied spot left it buried in
+whatever was there, and `sbRelax` then spent the next second shoving the two
+apart to somewhere neither of them was put.
+
+Now a drop that made **no bond** is placed: it keeps the spot it was dropped on
+when that spot is clear, and otherwise slides to the nearest clear one. The
+scan is the ADD buttons' own — `sbScanForRoom`, with `sbRoomFor` and
+`sbRoomNear` differing only in where they aim it, the spawn ring or the drop
+point — so a dragged atom lands by exactly the rule a placed one does and the
+tab has one idea of what "there is room" means. `sbClearance` takes an `ignore`
+set, because what the pointer is holding cannot be in its own way.
+
+A drop that **did** make a bond is left where the snap put it. That drop was
+the point of the drag: you brought an atom up to a partner to build something,
+and sliding it away to find room would undo the thing you just did. Overlap
+inside a molecule is not overlap, it is a bond — a bond sits at 0.72 of the two
+radii summed, so partners always overlap, and a clearance test that forgets
+that reports every bonded atom in the scene as a collision.
+
+Verified: an H dragged off a methane detaches (5 bonds → 4) and lands at the
+drop point exactly (0 px off); an O₂ dropped squarely on another O₂ forms no
+bond and slides 120 px to a clear spot; and the scene has **zero** real
+overlaps after either, counting bonded partners as the bonds they are.
+
 ### The graph has a before and an after
+
+The graph is **821 px** wide where it used to be 587. The toggle beside it was
+never the culprit — at `flex: 1` it was being squeezed to 56 px — it was the
+one-line caption under the percentages, which made `#energyReadout` a 534 px
+column and took every one of those pixels off the graph in the flex row beside
+it. Capped at 300 px the caption wraps to two lines and the graph gets the
+difference. The toggle is now a fixed **96 px**: SHOW LINE GRAPH and HIDE LINE
+GRAPH are the same length, so one width fits both and pressing it cannot
+resize it.
 
 The reaction occupies the **middle 60%** of the axis and the outer 20% at each
 end is a flat shelf — the reactants sitting there before anything happens, the
@@ -3885,6 +4000,7 @@ gold above a gold rule, holding the handful still being turned:
 | Shell drift, Drift speed | the only motion in the default view |
 | Bond storage | whether hits stack at all, and whether the colour says so |
 | New bond stays pink | the join flash, below |
+| Last reactants go easier | the kinetic nudge, below |
 | Strong products | ships ON; here only so it can be compared |
 | Bond capacity, Vibration hold | together, whether the scene comes apart |
 
@@ -3913,7 +4029,7 @@ So a join has its own flash, and unlike a collision's it **holds** before it
 fades:
 
 ```javascript
-let joinFlashSec = 1.2;          // how long a new bond stays lit, in all
+let joinFlashSec = 0.4;          // how long a new bond stays lit, in all
 const JOIN_FLASH_HOLD = 0.45;    // the fraction of that spent at FULL pink
 nb.flash = joinFlashSec;         // set in joinBodies, counted down in stepWorld
 b.flare = Math.max(b.flare, Math.min(1, t / (1 - JOIN_FLASH_HOLD)));
@@ -3923,8 +4039,10 @@ Applied **over the top** of the ordinary decay with a `max`, so nothing has to
 know which kind of body it is on — a product, an OH halfway to being water, a
 molecule that is also being hit: each takes whichever is brighter this frame.
 
-Measured on a formed OH: `load` holds at **1.00 for 0.54 s**, then fades to
-nothing over the next 0.6 s. Sampling the drawn canvas at the bond's midpoint
+Measured on a formed OH at `joinFlashSec` 1.2: `load` held at **1.00 for
+0.54 s**, then faded over the next 0.6 s. It ships at **0.4 s**, so the hold
+is 0.18 s — measured again at that setting, `load` is 1.00 through 0.13 s and
+down to 0.25 by 0.6 s. Sampling the drawn canvas at the bond's midpoint
 gives **rgb(253, 94, 205)** mid-flash against **rgb(207, 221, 250)** at rest.
 
 **It is purely cosmetic.** `flare` only ever scales brightness and picks a

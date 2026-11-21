@@ -578,9 +578,9 @@
   #energyBarButtons {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
     height: 80px;
-    padding: 0 12px;
+    padding: 0 8px;
     flex-shrink: 0;
     margin-top: auto;
   }
@@ -598,6 +598,14 @@
     align-items: center;
     justify-content: center;
     gap: 4px;
+    /* THE CAP IS WHAT GIVES THE GRAPH ITS WIDTH. #energyReadout is a column —
+       the percentages above, the toggle below — so the column is as wide as
+       its widest child, and that was the one-line caption under the numbers:
+       534 px of sentence, every pixel of it taken off the graph in the flex
+       row beside it. Capped, the caption wraps to two lines and the graph gets
+       the difference. (The toggle was never the culprit: at flex: 1 it was
+       being squeezed to 56 px inside that column.) */
+    max-width: 300px;
     padding: 8px 12px;
     font-size: 22px;
     font-weight: 700;
@@ -618,17 +626,24 @@
   #energyGraphToggle {
     border: 1px solid var(--accent2);
     border-radius: 8px;
-    font-size: 15px;
+    font-size: 12px;
     font-weight: 700;
-    letter-spacing: 1px;
+    letter-spacing: 0.5px;
     text-transform: uppercase;
     cursor: pointer;
     background: var(--accent2-dim);
     color: rgba(255,255,255,0.5);
     font-family: inherit;
-    flex: 1;
-    line-height: 1.25;
-    padding: 6px 10px;
+    /* A FIXED WIDTH, not flex: 1. The two labels are the same length — SHOW
+       LINE GRAPH and HIDE LINE GRAPH — so one width fits both and the button
+       cannot resize when it is pressed, which would shove the graph beside it.
+       It used to take a share of the bar as a flex child, and every pixel it
+       took was a pixel off the graph it exists to reveal. 96px fits the wider
+       of the two labels on two lines with room to spare. */
+    flex: 0 0 auto;
+    width: 96px;
+    line-height: 1.2;
+    padding: 6px 4px;
     text-align: center;
     white-space: normal;
     box-shadow:
@@ -811,9 +826,9 @@
         <div id="amountGroup" style="display:flex;flex-direction:column;gap:2px;align-items:stretch;width:100%;min-width:0;">
           <div style="display:flex;justify-content:space-between;align-items:baseline;">
             <span style="font-size:9px;letter-spacing:0.07em;text-transform:uppercase;opacity:0.5;">Amount</span>
-            <span id="amountVal" style="font-size:10px;font-weight:700;color:var(--accent1);min-width:18px;text-align:right;">&times;4</span>
+            <span id="amountVal" style="font-size:10px;font-weight:700;color:var(--accent1);min-width:18px;text-align:right;">&times;7</span>
           </div>
-          <input type="range" id="amountSlider" min="1" max="8" step="1" value="4" style="width:100%;min-width:0;">
+          <input type="range" id="amountSlider" min="1" max="8" step="1" value="7" style="width:100%;min-width:0;">
         </div>
         <div id="speciesCounters" style="display:flex;gap:5px;justify-content:center;">
           <div style="flex:1;background:rgba(255,255,255,0.05);border-radius:6px;padding:3px 5px;text-align:center;font-size:11px;color:var(--text-dim);line-height:1.5;white-space:nowrap;">
@@ -1209,7 +1224,7 @@ function sceneW() { return Math.max(200, canvas.width - BAR_PANEL_W); }
 // Reactions only. The One Bond tab has its own zoom and the sandbox is laid out
 // against the canvas, so both stay at 1 — `drawWorld` is the Reactions tab's
 // draw and nothing else calls it.
-let sceneZoom = 0.5;
+let sceneZoom = 0.8;
 
 // ─── Field heatmap buffers ────────────────────────────────────────────────────
 // The field is accumulated as floats at low resolution, then colour-mapped once
@@ -2548,18 +2563,17 @@ const SPECIES = {
 // of a run would otherwise be an artefact of the slider rather than of the
 // chemistry.
 //
-// The amount is 4 by default, which is exactly what the tab spawned before this
-// existed, and reaches 8 — the figure that restores the pre-zoom DENSITY, since
+// The amount is 7 by default and reaches 8 — the figure that restores the pre-zoom DENSITY, since
 // `sceneZoom` 0.5 gave the box four times the area. See `productBondTarget`:
 // the progress graph's target is derived from the amount rather than written
 // down beside it, because two numbers that have to agree eventually do not.
-let reactantAmount = 4;
+let reactantAmount = 7;
 const REACTANT_AMOUNT_MAX = 8;
 // The per-species dev dials still exist underneath, and they can make a world
 // the amount slider never would — an unbalanced one, on purpose. Their ceiling
 // is the most any balanced world needs: 8 units of water is 16 H2.
 const COMPOSITION_MAX = REACTANT_AMOUNT_MAX * 2;
-const COMPOSITION_DEFAULT = { H2: 2 * 4, O2: 1 * 4, He: 0, CH4: 0 };
+const COMPOSITION_DEFAULT = { H2: 2 * 7, O2: 1 * 7, He: 0, CH4: 0 };
 const composition = { ...COMPOSITION_DEFAULT };
 
 // ─── Reactions ────────────────────────────────────────────────────────────────
@@ -3145,6 +3159,8 @@ function spawnWorld() {
     }
     world.bodies.push(placed);
   }
+  reactantsAtSpawn = countReactants();   // the denominator for reactantEase
+  reactantEase = 1;
   spinCapHits = 0; floorTopUps = 0; energyCreated = 0; fieldsReturned = 0;
   breakCount = 0; vibPeak = 0; breakCostPaid = 0;
   joinCount = 0; recombLatched = false;
@@ -3208,6 +3224,7 @@ function turnToward(b, target, max) {
 }
 
 function stepWorld(dt) {
+  updateReactantEase();        // see breakEaseMax — one scan, not one per hit
   // Move, spin, wrap
   for (const b of world.bodies) {
     b.x += b.vx * dt;
@@ -3648,9 +3665,58 @@ function bondEnergyFactor(b) {
   return bd ? bondEnergyOf(b, bd) / BOND_ENERGY_MAX : 0;
 }
 
+// ─── THE LAST FEW REACTANTS GO EASIER ────────────────────────────────────────
+// A reaction that is nearly done drags. The last intact O2 has twenty-odd free
+// atoms to be hit by and most of them are light, so it sits there taking small
+// doses that leak away between them while the scene looks finished and is not.
+// This makes a reactant's bond progressively cheaper to break as its own kind
+// runs out: at full population nothing changes at all, and by the last one the
+// threshold is divided by `breakEaseMax`.
+//
+// IT CHANGES WHEN, NOT WHAT. The energy a break puts into fields is set by the
+// bond that stopped existing — `fieldsKJ` is free atoms less the D of every
+// bond still standing — and D is not in this. Lowering the threshold only means
+// the bond lets go holding less stacked vibration; the step in the fields bar
+// is the same size whenever it comes. This is a kinetic nudge, nothing else,
+// and the numbers below were measured to confirm it.
+//
+// REACTANTS ONLY. A product must not become easier to pull apart as the run
+// goes on — that is the opposite of what the run is for — and an intermediate
+// like OH is not a reactant either. `isReactant` asks the current reaction's
+// own composition what it spawned, so nothing here names a molecule.
+let breakEaseMax = 3;        // divide the last reactant's threshold by this
+let reactantsAtSpawn = 0;    // how many there were, set by spawnWorld
+let reactantEase = 1;        // recomputed once a frame, not per collision
+
+function isReactant(b) {
+  if (b.els.length < 2) return false;
+  const unit = currentReaction().composition;
+  const key = speciesKey(b.els);
+  for (const k of Object.keys(unit)) {
+    if ((unit[k] || 0) > 0 && SPECIES[k] && speciesKey(SPECIES[k].els) === key) return true;
+  }
+  return false;
+}
+
+function countReactants() {
+  let n = 0;
+  for (const b of world.bodies) if (isReactant(b)) n++;
+  return n;
+}
+
+// Once per frame rather than per call: `breakThreshold` is asked on every
+// collision, and a scan of the world inside that would be a loop inside a loop
+// for a number that cannot change between two collisions in the same frame.
+function updateReactantEase() {
+  if (reactantsAtSpawn <= 0 || breakEaseMax <= 1) { reactantEase = 1; return; }
+  const gone = 1 - countReactants() / reactantsAtSpawn;
+  reactantEase = 1 + (breakEaseMax - 1) * Math.max(0, Math.min(1, gone));
+}
+
 function breakThreshold(b) {
   const f = bondEnergyFactor(b);
-  return f ? breakEnergy * f : Infinity;
+  if (!f) return Infinity;
+  return breakEnergy * f / (isReactant(b) ? reactantEase : 1);
 }
 
 // Fraction of a body's held vibration, 0..1 — what the bond's COLOUR reads.
@@ -3670,7 +3736,11 @@ function vibLoad(b) {
   // single place the ramp reads the field, so nothing else has to know.
   if (!vibVisible()) return 0;
   const f = bondEnergyFactor(b);
-  const cap = breakEnergy * colourFull * f;
+  // Divided by the same ease the threshold is, so "full pink" still means
+  // "about to go". Left undivided, an eased reactant would break while its
+  // colour was still climbing — exactly the failure the note above describes,
+  // arriving by a different door.
+  const cap = breakEnergy * colourFull * f / (isReactant(b) ? reactantEase : 1);
   return cap > 0 ? Math.min(1, b.vib / cap) : 0;
 }
 
@@ -3772,7 +3842,7 @@ let strongFlareSec = 0.5;          // how long a strong product may stay pink
 // Purely cosmetic. `flare` only ever scales brightness and picks a colour; no
 // energy is read from it, so lengthening it cannot move a single number in the
 // bars.
-let joinFlashSec = 1.2;            // how long a new bond stays lit, in all
+let joinFlashSec = 0.4;            // how long a new bond stays lit, in all
 const JOIN_FLASH_HOLD = 0.45;      // the fraction of that spent at FULL pink
 // Sorted element string, the same key `joinEls` matches on, so a product cannot
 // be named here in a form the join table could not produce.
@@ -3815,7 +3885,7 @@ function canStoreVib(b) {
 //
 // The dev diagnostics (`energySplit`, `vibPeak`, `runBreakTests`) stay honest in
 // all three: the secret is kept from the picture, not from the instruments.
-let vibMode = 'shown';
+let vibMode = 'hidden';
 const VIB_MODES = {
   shown:  'stepped, shown',
   none:   'one hit or nothing',
@@ -5516,16 +5586,53 @@ function traceAt(vals, p) {
 // the reaction moves in steps and the line that shows it should not look like
 // it does. Tension is the standard 1/6, and the end segments reuse their own
 // endpoint for the missing neighbour so the curve starts and ends cleanly.
+// A SPLINE THAT CANNOT OVERSHOOT ITS OWN DATA.
+//
+// This was a uniform Catmull-Rom: the tangent at each point taken as
+// (next - previous) / 6, with no regard for how far apart in x the points
+// actually are. That is fine for evenly spaced samples and these are not —
+// landmarks land at whatever progress the reaction happened to reach, so two
+// can be a pixel apart and the next two a third of the chart apart. Given
+// that, a uniform tangent is far too long for the short intervals, and the
+// curve bulges past the points it is supposed to pass through: the little
+// hooks and ledges that appeared near the leading end of the line, where the
+// landmarks bunch up.
+//
+// Fritsch-Carlson instead. Each tangent is the weighted harmonic mean of the
+// two neighbouring secant slopes, which is zero whenever the data turns and
+// never steep enough to leave the interval it is in. The curve is therefore
+// monotone wherever the data is, passes through every point, and — this is the
+// one that matters for the shelves — a run of equal values is drawn perfectly
+// flat instead of rippling between them.
 function splineThrough(ctx, pts) {
   ctx.moveTo(pts[0].x, pts[0].y);
-  if (pts.length === 2) { ctx.lineTo(pts[1].x, pts[1].y); return; }
-  for (let i = 0; i < pts.length - 1; i++) {
-    const p0 = pts[i - 1] || pts[i], p1 = pts[i];
-    const p2 = pts[i + 1], p3 = pts[i + 2] || pts[i + 1];
+  const n = pts.length;
+  if (n === 2) { ctx.lineTo(pts[1].x, pts[1].y); return; }
+
+  const dx = [], m = [];
+  for (let i = 0; i < n - 1; i++) {
+    dx[i] = pts[i + 1].x - pts[i].x;
+    m[i]  = dx[i] !== 0 ? (pts[i + 1].y - pts[i].y) / dx[i] : 0;
+  }
+
+  const t = new Array(n);
+  t[0] = m[0];
+  t[n - 1] = m[n - 2];
+  for (let i = 1; i < n - 1; i++) {
+    // A turning point, or a flat on either side, gets a flat tangent — that is
+    // what stops the curve sailing past a peak and coming back.
+    if (m[i - 1] * m[i] <= 0) { t[i] = 0; continue; }
+    const w1 = 2 * dx[i] + dx[i - 1];
+    const w2 = dx[i] + 2 * dx[i - 1];
+    t[i] = (w1 + w2) / (w1 / m[i - 1] + w2 / m[i]);
+  }
+
+  for (let i = 0; i < n - 1; i++) {
+    const h = dx[i];
     ctx.bezierCurveTo(
-      p1.x + (p2.x - p0.x) / 6, p1.y + (p2.y - p0.y) / 6,
-      p2.x - (p3.x - p1.x) / 6, p2.y - (p3.y - p1.y) / 6,
-      p2.x, p2.y);
+      pts[i].x + h / 3,     pts[i].y + t[i] * h / 3,
+      pts[i + 1].x - h / 3, pts[i + 1].y - t[i + 1] * h / 3,
+      pts[i + 1].x, pts[i + 1].y);
   }
 }
 
@@ -5620,14 +5727,27 @@ function drawEnergyGraph() {
       v + graphFieldsStart + progressTrace[i].p * graphFieldsDelta);
   }
 
+  // Has the reaction actually reached its far end? Only then is there a
+  // products shelf to draw — see inside `stroke`.
+  const done = progressTrace.length > 0 &&
+               progressTrace[progressTrace.length - 1].p >= 1 - 1e-6;
+
   const stroke = (key, col, glow, lw, blur, alpha) => {
     const pts = progressTrace.map((s, i) => ({ x: px(s.p), y: py(series[key][i]) }));
-    // The two shelves. Flat, at the height of the landmark each one runs out
-    // from, so the far shelf tracks the reaction as it goes rather than
-    // promising an ending the run has not reached.
+    // THE REACTANTS SHELF, ALWAYS. Flat, at the height of the first landmark:
+    // the reactants really were sitting there before anything happened, so
+    // there is something true to draw.
+    //
+    // THE PRODUCTS SHELF, ONLY ONCE THERE ARE PRODUCTS. Drawing it from the
+    // leading end of a run still in progress was a line claiming the reaction
+    // had finished and levelled off, which it had not — and it ran the line
+    // out to the frame so the whole right-hand side was full of a result that
+    // did not exist yet. Past the leading end there is nothing to say, so
+    // nothing is drawn and the panel is simply empty until the reaction gets
+    // there.
     if (pts.length) {
       pts.unshift({ x: pxL, y: pts[0].y });
-      pts.push({ x: pxR, y: pts[pts.length - 1].y });
+      if (done) pts.push({ x: pxR, y: pts[pts.length - 1].y });
     }
     graphCtx.save();
     graphCtx.globalAlpha = alpha;
@@ -6169,6 +6289,11 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     '<div style="opacity:0.45;font-size:10px;">a join\u2019s own flash, held at ' +
       'full for the first 45% and then fading. A collision\u2019s flare is a ' +
       'tenth of this and was never meant to carry the moment a bond forms</div>' +
+    row('devBreakEase', 'Last reactants go easier', 1, 8, 0.25, breakEaseMax, '#ffd84d') +
+    '<div style="opacity:0.45;font-size:10px;">divides a REACTANT\u2019s break ' +
+      'threshold as its own kind runs out \u2014 1\u00d7 at full population, this much ' +
+      'by the last one. Changes WHEN a bond goes, never what the break is ' +
+      'worth: the step in the fields bar is the same size either way. 1 is off</div>' +
     row('devBreakH', 'Bond capacity',  0.5, 12, 0.25, breakEnergy, '#ffd84d') +
     row('devVibTau', 'Vibration hold', 0.3, 8,  0.1,  VIB_TAU,     '#ffd84d') +
     '<div style="opacity:0.45;font-size:10px;">how many hits a bond takes and ' +
@@ -6368,6 +6493,8 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   strongCb.addEventListener('change', () => setStrongProducts(strongCb.checked));
   bind('devJoinFlash', v => joinFlashSec = v, false,
        v => v > 0 ? v.toFixed(1) + ' s' : 'off');
+  bind('devBreakEase', v => breakEaseMax = v, false,
+       v => v > 1 ? '\u00f7' + v.toFixed(2) + ' by the last' : 'off');
   bind('devBreakH', v => breakEnergy = v, false, v => v.toFixed(2));
   bind('devColFull', v => colourFull = v, false, v => Math.round(v * 100) + '% of cap');
   bind('devVibTau', v => VIB_TAU     = v, false, v => v.toFixed(1) + ' s');
@@ -8325,9 +8452,13 @@ const SB_EDGE = 14;                // px kept between any atom and the edge
 const SB_ROOM_STEP = 12;           // px grid the scan walks
 
 // How much more than the required gap this spot has. Negative means too close.
-function sbClearance(x, y, el) {
+// `ignore` is a Set of atom indices that do not count as obstacles — what the
+// pointer is holding cannot be in its own way.
+function sbClearance(x, y, el, ignore) {
   let worst = Infinity;
-  for (const a of sandbox.atoms) {
+  for (let i = 0; i < sandbox.atoms.length; i++) {
+    if (ignore && ignore.has(i)) continue;
+    const a = sandbox.atoms[i];
     const need = SB_ROOM * Math.max(valenceRadius(el), valenceRadius(a.el));
     worst = Math.min(worst, Math.hypot(x - a.x, y - a.y) - need);
   }
@@ -8358,13 +8489,46 @@ function sbRoomFor(shape) {
   const RR = Math.min(sceneW(), canvas.height - world.top) * 0.28;
   const px = (x0 + x1) / 2 + Math.cos(a) * RR;
   const py = (y0 + y1) / 2 + Math.sin(a) * RR;
+  return sbScanForRoom(shape, px, py, null);
+}
 
+// THE SAME SCAN, AIMED SOMEWHERE ELSE. The ADD buttons want the spot nearest a
+// walking ring position so repeated presses fan out; a dropped atom wants the
+// spot nearest WHERE IT WAS DROPPED, which is the only difference between the
+// two. One scan, two targets, so a dragged atom lands by exactly the rule a
+// placed one does and the tab has a single idea of what "there is room" means.
+function sbRoomNear(shape, tx, ty, ignore) {
+  if (!shape || !shape.length) return null;
+  let L = 0, R = 0, T = 0, B = 0;
+  for (const a of shape) {
+    const r = valenceRadius(a.el);
+    L = Math.max(L, r - a.lx); R = Math.max(R, r + a.lx);
+    T = Math.max(T, r - a.ly); B = Math.max(B, r + a.ly);
+  }
+  return sbScanForRoom(shape, tx, ty, ignore,
+                       SB_EDGE + L, sceneW() - SB_EDGE - R,
+                       world.top + SB_EDGE + T, canvas.height - SB_EDGE - B);
+}
+
+function sbScanForRoom(shape, px, py, ignore, X0, X1, Y0, Y1) {
+  let x0 = X0, x1 = X1, y0 = Y0, y1 = Y1;
+  if (x0 === undefined) {
+    let L = 0, R = 0, T = 0, B = 0;
+    for (const a of shape) {
+      const r = valenceRadius(a.el);
+      L = Math.max(L, r - a.lx); R = Math.max(R, r + a.lx);
+      T = Math.max(T, r - a.ly); B = Math.max(B, r + a.ly);
+    }
+    x0 = SB_EDGE + L; x1 = sceneW() - SB_EDGE - R;
+    y0 = world.top + SB_EDGE + T; y1 = canvas.height - SB_EDGE - B;
+  }
+  if (x1 < x0 || y1 < y0) return null;
   let best = null, bestD = Infinity;
   for (let y = y0; y <= y1; y += SB_ROOM_STEP) {
     for (let x = x0; x <= x1; x += SB_ROOM_STEP) {
       let ok = true;
       for (const at of shape) {
-        if (sbClearance(x + at.lx, y + at.ly, at.el) < 0) { ok = false; break; }
+        if (sbClearance(x + at.lx, y + at.ly, at.el, ignore) < 0) { ok = false; break; }
       }
       if (!ok) continue;
       const d = Math.hypot(x - px, y - py);
@@ -8694,6 +8858,10 @@ function sbMove(ev) {
 function sbUp(ev) {
   const pr = sandbox.press;
   const dragging = sandbox.drag >= 0 || !!sandbox.dragMol;
+  // What the hand was holding, kept past the reset below so the drop can be
+  // placed. A single atom is a set of one; a grabbed molecule is all of it.
+  const held = sandbox.dragMol ? sandbox.dragMol.idx.slice()
+             : sandbox.drag >= 0 ? [sandbox.drag] : [];
   sandbox.press = null;
   sandbox.drag = -1;
   sandbox.dragMol = null;
@@ -8716,8 +8884,50 @@ function sbUp(ev) {
   // Settle into the real shape only once you let go: snapping mid-drag would
   // fight the hand.
   sbSnapAll();
+  sbPlaceDropped(held);
   sbUpdateReadout();
   sbSyncAddButtons();
+}
+
+// ── WHERE A DRAGGED ATOM ACTUALLY LANDS ─────────────────────────────────────
+// Dragging an atom out of a molecule already detaches it — `sbRebuildBonds`
+// decides bonds by what is near what, so pulling it away is enough. What was
+// missing is the other half: letting go in a spot that is already occupied
+// left it buried in whatever was there, and `sbRelax` then spent the next
+// second shoving the two apart to somewhere neither of them was put.
+//
+// So a drop that made NO BOND is placed: it keeps the spot it was dropped on
+// if that spot is clear, and otherwise slides to the nearest clear one by the
+// same scan the ADD buttons use. Only the target differs — the drop point
+// instead of the spawn ring — so a dropped atom and a placed one obey one rule.
+//
+// A drop that DID make a bond is left exactly where the snap put it. That drop
+// was the point of the drag: you brought an atom up to a partner to build
+// something, and sliding it away to find room would undo the thing you just
+// did. Overlap inside a molecule is not overlap, it is a bond.
+function sbPlaceDropped(held) {
+  if (!held || !held.length) return;
+  const A = sandbox.atoms;
+  if (held.some(i => i >= A.length)) return;        // the scene changed under us
+  const set = new Set(held);
+  // Bonded to anything outside the hand? Then it joined something, and it
+  // stays where it joined.
+  for (const b of sandbox.bonds) {
+    if (set.has(b.i) !== set.has(b.k)) return;
+  }
+  // The dropped thing as a shape about its own centre, which is what the scan
+  // takes, plus the centre it is currently sitting at.
+  const cx = held.reduce((t, i) => t + A[i].x, 0) / held.length;
+  const cy = held.reduce((t, i) => t + A[i].y, 0) / held.length;
+  const shape = held.map(i => ({ el: A[i].el, lx: A[i].x - cx, ly: A[i].y - cy }));
+  // Already clear where it was let go: that is the spot, and nothing moves.
+  const clear = shape.every(at =>
+    sbClearance(cx + at.lx, cy + at.ly, at.el, set) >= 0);
+  if (clear) return;
+  const spot = sbRoomNear(shape, cx, cy, set);
+  if (!spot) return;                                // nowhere to go; leave it
+  held.forEach((i, q) => { A[i].x = spot.x + shape[q].lx; A[i].y = spot.y + shape[q].ly; });
+  sbRebuildBonds();
 }
 
 canvas.addEventListener('pointerdown', sbDown);
