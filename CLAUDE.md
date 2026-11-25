@@ -5315,6 +5315,92 @@ done, and now there are two molecules asking.
   rather than bent at 104.5°. The electron structure is already right (4
   bonding, 2 lone pairs) — only the geometry is missing.
 
+## The glow stops disappearing where the energy is greatest
+
+Two tabs were drawing a field that argued with the number printed beside it.
+
+### One Bond: the lobe holds all the way out
+
+`drawBondTab` used to multiply its lobe by `bondContact`, which falls to zero
+by 4.07 r₀ — and the drag goes to **4.8 r₀**. So over the last fifth of the
+travel the readout said **1000 kJ/mol**, the most the pair will ever hold, and
+the screen was black. The comment on the constant defended it: the glow is the
+*interaction*, the number is the *energy*, and past four natural lengths there
+is no interaction left to draw.
+
+It is a fair argument and it loses to the tab's job. **This tab is the energy
+picture.** The envelope is gone from the brightness:
+
+```javascript
+mag: bondShownMag(bondTabD())
+     * (BOND_FIELD_FLOOR + (1 - BOND_FIELD_FLOOR) * work)
+     * BOND_FIELD_GAIN * BOND_FIELD_BOOST,     // no * contact
+```
+
+Measured, an H–H across the drag — peak field now, and what it was before:
+
+| sep | now | before |
+|---|---|---|
+| 1.0 r₀ | 0.772 | 0.772 |
+| 2.0 r₀ | 0.854 | 0.854 |
+| 3.5 r₀ | 0.901 | 0.901 |
+| 4.0 r₀ | 0.904 | **0.141** |
+| 4.4 r₀ | 0.904 | **0** |
+| 4.8 r₀ | 0.904 | **0** |
+
+Identical everywhere the fade was not already eating it, and full pink
+(255, 92, 208) at the end stop instead of nothing. Every pair in the dropdown
+is lit at 4.8 r₀.
+
+`bondContact` itself stays, because it still does the other half of its job:
+**it decides where a bond is.** The Sandbox asks `sbContact` whether a pair is
+close enough to be bonded at all, and it is still the fade on a stretched
+Sandbox bond — which is consistent now rather than in spite of the above,
+because the moment that fade completes the pair becomes two unbonded atoms and
+the next section takes over the telling.
+
+### Sandbox: show energy in unbonded atoms
+
+A checkbox in the energy box, off by default. `sbTotalEnergy` has always
+counted `SB_FREE_ATOM` for every atom in the scene, bonded or not, so a screen
+of loose atoms read *6,000 kJ/mol* over an empty black field. This is the
+switch that makes the picture say what the arithmetic says.
+
+On, every atom with **no bonds** gets a round lobe at the top of the scale.
+Not decoration: two atoms far enough apart to be unbonded are storing the most
+they ever will — the whole dissociation energy of any bond they might make is
+already in their fields, which is why making the bond gives energy back.
+
+An atom **inside a molecule is not in this**. Its field is drawn where its
+bonds are, relative to the atoms it is bonded to, because that is what its
+energy is relative to; a molecule wearing bond lobes *and* a halo per atom
+would double on screen what the total counts once.
+
+The lobe is a new primitive in `drawFieldHeatmap`, `solo`:
+
+```javascript
+if (s.solo > 0) {           // a lobe with no second nucleus
+  const add = s.mag * Math.sin(kR * d);     // d from the nucleus, 0 past R
+```
+
+The same sine a bond uses, read **radially** instead of along an axis: zero at
+the nucleus, brightest at half the reach, nothing past it. `SB_FREE_REACH = 2`
+× the valence radius puts that bright ring exactly on the valence shell — the
+field is brightest where the electrons that would do the bonding are. So a free
+atom reads as a shell of field, in the same shape language as every other lobe
+on screen, and the nucleus still shows through the middle.
+
+**One maximum, two tabs.** A free atom's `mag` is `BOND_FIELD_GAIN *
+BOND_FIELD_BOOST`, which is exactly what One Bond's strongest pair reaches at
+the end of its drag. Measured: two free H in the Sandbox read **1000 kJ/mol**
+at peak field **1.17**, and One Bond's pair at 4.8 r₀ reads 1000 at 1.17. The
+two tabs now make the same claim with the same brightness.
+
+Measured on the rest of it: a fully bonded scene (CH₄ + CO₂) produces **0**
+extra segments and a peak field identical to 0.003 on or off; the toggle never
+moves the total; 25 free atoms cost **0.33 → 0.79 ms** a frame; the Reactions
+world builds no `solo` segments at all and its `totalKJ` drift is still 0.
+
 ## Deployment
 
 `origin` is **`github.com/ghostoutfit/reactions`**. (The fission remote was

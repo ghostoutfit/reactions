@@ -961,6 +961,15 @@
         <span id="sbFormula" style="font-size:12px;opacity:0.75;">&mdash;</span>
         <span id="sbBreakdown" style="font-size:10px;opacity:0.5;line-height:1.5;">&mdash;</span>
       </div>
+      <!-- The readout counts every free atom's 500 whether or not anything is
+           drawn for it; this is the switch that makes the picture say it too. -->
+      <div style="display:flex;flex-direction:column;gap:3px;justify-content:center;padding:8px 0;min-width:186px;">
+        <label style="display:flex;align-items:center;gap:7px;cursor:pointer;font-size:12px;">
+          <input type="checkbox" id="sbFreeFields" style="margin:0;accent-color:#c46cff;">
+          <span>Show energy in unbonded atoms</span>
+        </label>
+        <span id="sbFreeFieldsNote" style="font-size:10px;opacity:0.5;line-height:1.4;"></span>
+      </div>
     </div>
   </div>
 </div>
@@ -1922,6 +1931,33 @@ function drawFieldHeatmap(destCtx, segsIn, boxW, boxH, opts) {
     const ax = s.x1 - ox, ay = s.y1 - oy, bx2 = s.x2 - ox, by2 = s.y2 - oy;
     const sdx = s.x2 - s.x1, sdy = s.y2 - s.y1;
     const L = Math.hypot(sdx, sdy);
+
+    // A FREE ATOM'S OWN FIELD: a lobe with no second nucleus. `solo` is how
+    // far it reaches, and the profile is the SAME sine a bond uses, read
+    // radially instead of along an axis — zero at the nucleus, brightest at
+    // half the reach, nothing past it. So an unbonded atom reads as a shell of
+    // field around itself rather than a blob with a nucleus buried in it, and
+    // it is the same shape language as every other lobe on the screen.
+    if (s.solo > 0) {
+      const R = s.solo, kR = Math.PI / R;
+      const x0 = Math.max(0,     Math.floor((ax - R) * scale));
+      const x1 = Math.min(w - 1, Math.ceil ((ax + R) * scale));
+      const y0 = Math.max(0,     Math.floor((ay - R) * scale));
+      const y1 = Math.min(h - 1, Math.ceil ((ay + R) * scale));
+      for (let py = y0; py <= y1; py++) {
+        const wy = py * inv - ay;
+        for (let px = x0; px <= x1; px++) {
+          const wx = px * inv - ax;
+          const d = Math.hypot(wx, wy);
+          if (d >= R) continue;
+          const add = s.mag * Math.sin(kR * d);
+          fieldAcc[py * w + px]  += add;
+          fieldLoad[py * w + px] += add * s.load;
+        }
+      }
+      continue;
+    }
+
     if (L < 1e-6) continue;
     const ux = sdx / L, uy = sdy / L;
     const sigma  = L * widthK * s.squeeze;
@@ -9112,15 +9148,24 @@ window.runBreakTests = function (seconds = 180) {
 // been done to the bond yet.
 const BOND_MORSE_A = 1.5;   // x 1/r0 — how quickly the well opens out
 
-// ...and then it has to fade anyway. Pulled far enough the two atoms simply do
-// not interact, so there is nothing between them to draw, even though this is
-// exactly where the stored energy is greatest. The glow is the INTERACTION; the
-// number is the energy. They disagree at long range and that disagreement is
-// the point — hence `bondContact`, which holds at 1 while the atoms still feel
-// each other and falls to 0 once they do not.
-// The glow holds all the way out to where the reading says 99%, then goes over
-// the last one percent. So the lobe is pink right up to the moment the bond is
-// called whole, and the "highest energy, no glow" state is everything past it.
+// How far apart two atoms can be and still count as interacting: 1 while they
+// feel each other, smoothly 0 once they do not. It reaches zero just past where
+// the stored-energy reading says 100%, so the boundary lands exactly where the
+// bond is called broken.
+//
+// IT IS NO LONGER A BRIGHTNESS ENVELOPE. One Bond used to multiply its lobe by
+// this, on the argument that the glow is the INTERACTION while the number is
+// the ENERGY, and that their disagreement at long range was the point. In
+// practice it read as the picture giving up: the readout said all of the bond
+// energy was in the field and the field had vanished. The energy is what these
+// tabs are for, so the lobe now holds at full out to the end of the drag — see
+// `drawBondTab`, and `sbFreeFields` for the same claim about free atoms.
+//
+// What it still does is decide WHERE A BOND IS. The Sandbox asks `sbContact`
+// whether a pair is close enough to be bonded at all (`<= 0` and there is no
+// bond), and it is still the fade on a stretched Sandbox bond's lobe — which is
+// consistent, because at the moment that fade completes the pair becomes two
+// unbonded atoms and the free-atom fields take over the telling.
 const BOND_CONTACT_HOLD = 3.79;  // x r0 — reads 99% here
 const BOND_CONTACT_GONE = 4.07;  // x r0 — reads 100% here, and is gone
 
@@ -9631,11 +9676,24 @@ function drawBondTab() {
   const [A, B] = bondTabAtoms();
   const z = bondTabZoom();
   const work    = bondWorkFraction(bondTab.sep, bondTab.r0);
-  const contact = bondContact(bondTab.sep, bondTab.r0);
 
   // The field lobe, through the same heatmap the main tab uses. Brightness is
-  // the stored energy, so the lobe GROWS as you pull — then the contact
-  // envelope takes it away again once the atoms are too far apart to interact.
+  // the stored energy, so the lobe GROWS as you pull — ALL THE WAY OUT, and it
+  // stays at its brightest once the stored energy tops out.
+  //
+  // `bondContact` is deliberately NOT in this. It used to be, and the note on
+  // that constant argues for it: past about four natural lengths the two atoms
+  // no longer interact, so there is no interaction left to draw. True, and it
+  // made the lobe fade to nothing over the last fifth of the drag — the one
+  // place on this tab where the picture and the number flatly contradicted
+  // each other. The readout said 100% of the bond energy was in the field and
+  // the field was invisible.
+  //
+  // THIS TAB IS THE ENERGY PICTURE, so the energy wins. Pull them apart and
+  // the glow keeps climbing and then holds at full: two separated atoms are
+  // storing the most they ever will, and that is what maximum brightness is
+  // for. The Sandbox makes the same claim for every unbonded atom — see
+  // `sbFreeFields` — so the two tabs now say one thing instead of two.
   const seg = [{
     x1: A.x, y1: A.y, x2: B.x, y2: B.y,
     // Scaled so the strongest bond at its natural length peaks EXACTLY at the
@@ -9647,16 +9705,16 @@ function drawBondTab() {
     // the ramp is the strongest bond ON THIS TAB and nothing clips.
     mag: bondShownMag(bondTabD())
          * (BOND_FIELD_FLOOR + (1 - BOND_FIELD_FLOOR) * work)
-         * contact * BOND_FIELD_GAIN * BOND_FIELD_BOOST,
+         * BOND_FIELD_GAIN * BOND_FIELD_BOOST,
     // Narrower than the main tab's lobe. FIELD_WIDTH is a fraction of the bond
     // LENGTH and the gaussian reaches 2.5 sigma, so a squeeze of 1 gave a lobe
     // reaching ~193 px either side of a 257 px bond — taller than the bond is
     // long, which reads as a blob with two nuclei in it. 0.5 puts the reach at
     // about a third of the length, and the bond is the shape again.
     squeeze: BOND_FIELD_SQUEEZE,
-    // Colour follows the stored energy, NOT the fade: a nearly-broken bond is
-    // pink right up until it stops being drawn at all, rather than washing back
-    // through purple to white on its way out.
+    // Colour follows the stored energy: a bond pulled to the end of its travel
+    // is full pink and stays there. This used to read "not the fade", back when
+    // there was a fade for it to disagree with.
     load: work,
   }];
   drawFieldHeatmap(ctx, seg, W, H,
@@ -10108,6 +10166,56 @@ function sbTotalEnergy() {
   return e;
 }
 
+// ── SHOW ENERGY IN UNBONDED ATOMS ───────────────────────────────────────────
+// The readout has always counted SB_FREE_ATOM for every atom in the scene,
+// bonded or not, and the picture has only ever drawn the bonds. So a screen of
+// loose atoms read "6,000 kJ/mol" over an empty black field, which is the one
+// place this tab could be accused of hiding its own arithmetic.
+//
+// On, every atom with no bonds gets its own round lobe AT THE TOP OF THE SCALE.
+// That is not decoration and it is not a guess: two atoms far enough apart to
+// be unbonded are storing the most they ever will — the whole dissociation
+// energy of any bond they might make is already in their fields, which is
+// exactly why making the bond gives energy BACK. One Bond says the same thing
+// at the end of its drag, where the lobe now holds at full instead of fading.
+//
+// AN ATOM IN A MOLECULE IS NOT IN THIS. Its field is drawn where its bonds
+// are, relative to the atoms it is bonded to, because that is what its energy
+// is relative to — and a molecule wearing both its bond lobes and a halo per
+// atom would double-count on screen what the total counts once.
+//
+// Off by default: the tab opens as the scene you built, and this is the extra
+// reading rather than the first one.
+let sbFreeFields = false;
+
+// How far a free atom's field reaches, as a multiple of its valence radius.
+// The profile peaks at HALF the reach (see `solo` in drawFieldHeatmap), so 2
+// puts the brightest ring exactly on the valence shell — the field is brightest
+// where the electrons that would do the bonding actually are.
+const SB_FREE_REACH = 2;
+
+function sbFreeFieldSegs() {
+  const A = sandbox.atoms;
+  const bonded = new Array(A.length).fill(false);
+  for (const b of sandbox.bonds) { bonded[b.i] = true; bonded[b.k] = true; }
+  const segs = [];
+  for (let i = 0; i < A.length; i++) {
+    if (bonded[i]) continue;
+    segs.push({
+      x1: A[i].x, y1: A[i].y, x2: A[i].x, y2: A[i].y,
+      solo: valenceRadius(A[i].el) * SB_FREE_REACH,
+      // bondShownMag(BOND_SHOWN_MAX) is 1 by construction: the top of the ramp,
+      // which is what "storing the maximum" has to look like. Everything else
+      // on the tab is some fraction of this, so a free atom is the brightest
+      // thing in any scene — and dimmer the moment it bonds, which is the
+      // reading.
+      mag: BOND_FIELD_GAIN * BOND_FIELD_BOOST,
+      load: 1,        // full pink: nothing is holding more than this
+    });
+  }
+  return segs;
+}
+
 // Connected components of the bond graph — the molecules.
 function sbMolecules() {
   const n = sandbox.atoms.length;
@@ -10335,8 +10443,9 @@ function drawSandbox() {
   ctx.fillRect(0, 0, W, H);
   const A = sandbox.atoms;
 
-  // One lobe per bond, through the same heatmap everything else uses.
-  if (sandbox.bonds.length) {
+  // One lobe per bond, through the same heatmap everything else uses — plus,
+  // with SHOW ENERGY IN UNBONDED ATOMS on, one round lobe per unbonded atom.
+  if (sandbox.bonds.length || (sbFreeFields && A.length)) {
     const segs = sandbox.bonds.map(b => ({
       x1: A[b.i].x, y1: A[b.i].y, x2: A[b.k].x, y2: A[b.k].y,
       // Through bondShownMag, the same compressed depth scale the One Bond tab
@@ -10350,6 +10459,7 @@ function drawSandbox() {
       squeeze: BOND_FIELD_SQUEEZE,
       load: b.work,
     }));
+    if (sbFreeFields) segs.push(...sbFreeFieldSegs());
     drawFieldHeatmap(ctx, segs, W, H,
       { width: BOND_FIELD_WIDTH, gain: BOND_FIELD_GAIN, colormap: BOND_COLORMAP });
   }
@@ -11074,6 +11184,24 @@ function sbUpdateReadout() {
       Math.round(n * SB_FREE_ATOM - sbTotalEnergy()) + ' held in ' +
       sandbox.bonds.length + (sandbox.bonds.length === 1 ? ' bond' : ' bonds')
     : '\u2014';
+
+  // The note counts the atoms the switch is actually about, so it answers
+  // "why has nothing changed?" on a scene that has no free atoms in it.
+  const nEl = document.getElementById('sbFreeFieldsNote');
+  if (nEl) {
+    const free = sbFreeCount();
+    nEl.textContent = !n ? ''
+      : !free ? 'every atom here is bonded'
+      : sbFreeFields
+        ? free + (free === 1 ? ' atom' : ' atoms') + ' at the top of the scale'
+        : free + (free === 1 ? ' atom is' : ' atoms are') + ' counted but not drawn';
+  }
+}
+
+function sbFreeCount() {
+  const bonded = new Set();
+  for (const b of sandbox.bonds) { bonded.add(b.i); bonded.add(b.k); }
+  return sandbox.atoms.length - bonded.size;
 }
 
 for (const [id, key] of SB_ADDABLE) {
@@ -11085,6 +11213,16 @@ document.getElementById('sbClear').addEventListener('click', () => {
   sbClearSel();
   sbUpdateReadout(); sbSyncAddButtons(); logAction('Sandbox cleared');
 });
+
+{
+  const ff = document.getElementById('sbFreeFields');
+  ff.checked = sbFreeFields;
+  ff.addEventListener('change', () => {
+    sbFreeFields = ff.checked;
+    sbUpdateReadout();
+    logAction('Unbonded atom fields ' + (sbFreeFields ? 'on' : 'off'));
+  });
+}
 
 // The arrow keys drive whatever is outlined; Escape drops the outline and
 // Delete removes a deletable molecule, so the X has a keyboard twin.
