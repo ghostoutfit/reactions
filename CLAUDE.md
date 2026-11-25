@@ -5303,9 +5303,11 @@ done, and now there are two molecules asking.
   only ever runs down to free atoms. Recombination is the other half, and the
   natural next piece: free H and free O are now produced in quantity and have
   nothing to do with themselves.
-- Internal vibration exists only as a scalar energy store (`b.vib`) that decides
-  when a bond breaks and how it glows. The molecule is still perfectly **rigid**
-  — nothing actually oscillates, so the atoms never move relative to each other.
+- Internal vibration is still a scalar energy store (`b.vib`) that decides when
+  a bond breaks, how it glows and — now — how far apart its atoms are **drawn**
+  (see `drawLocals`). The body itself is still perfectly **rigid**: nothing
+  actually oscillates, and the stretch is a picture of the store rather than
+  motion the physics knows about.
 - Only two counter slots in the toolbar (`sp1`/`sp2`). Breaking makes this
   worse, not better: a part-broken world holds up to **four** species (H₂, O₂,
   H, O) with two slots to show them in. `updateSpeciesCounters` now sorts by
@@ -5366,40 +5368,133 @@ counted `SB_FREE_ATOM` for every atom in the scene, bonded or not, so a screen
 of loose atoms read *6,000 kJ/mol* over an empty black field. This is the
 switch that makes the picture say what the arithmetic says.
 
-On, every atom with **no bonds** gets a round lobe at the top of the scale.
-Not decoration: two atoms far enough apart to be unbonded are storing the most
-they ever will — the whole dissociation energy of any bond they might make is
-already in their fields, which is why making the bond gives energy back.
+#### Energy is between two atoms, never inside one
+
+The first version of this drew a **ring around each free atom**, and it was
+wrong. It said an atom carries its energy the way it carries its mass.
+`SB_FREE_ATOM` is half of One Bond's 1000 and that 1000 is the height of a
+**pair**; a lone atom in an empty universe has nothing to be 500 kJ/mol away
+from. A one-nucleus lobe draws a quantity that does not exist, so
+`drawFieldHeatmap` has no such primitive — every lobe in this sim spans two
+nuclei.
+
+What it draws instead is exactly the picture One Bond now shows at the end of
+its drag, extended to the loose atoms on this tab: **a lobe between two atoms,
+at the top of the scale and full pink**, because a pair too far apart to be
+bonded is storing the most it ever will. Pull a bond past breaking in One Bond
+and you get one of these; the Sandbox just has more than one pair in it.
+
+**Which pairs.** Every unbonded atom is joined to its **nearest unbonded
+neighbour**, and a pair that chooses each other draws one lobe, not two. All
+pairs is the literal reading and it is unusable: the count goes up as the
+square, every lobe is as wide as the gap it spans, and six loose atoms white
+out the screen under fifteen overlapping maxima. The nearest neighbour is the
+pair that would actually bond if they came together, so it is the one worth
+drawing — and with two atoms in the scene it is One Bond's picture exactly.
 
 An atom **inside a molecule is not in this**. Its field is drawn where its
 bonds are, relative to the atoms it is bonded to, because that is what its
-energy is relative to; a molecule wearing bond lobes *and* a halo per atom
-would double on screen what the total counts once.
+energy is relative to.
 
-The lobe is a new primitive in `drawFieldHeatmap`, `solo`:
-
-```javascript
-if (s.solo > 0) {           // a lobe with no second nucleus
-  const add = s.mag * Math.sin(kR * d);     // d from the nucleus, 0 past R
-```
-
-The same sine a bond uses, read **radially** instead of along an axis: zero at
-the nucleus, brightest at half the reach, nothing past it. `SB_FREE_REACH = 2`
-× the valence radius puts that bright ring exactly on the valence shell — the
-field is brightest where the electrons that would do the bonding are. So a free
-atom reads as a shell of field, in the same shape language as every other lobe
-on screen, and the nucleus still shows through the middle.
-
-**One maximum, two tabs.** A free atom's `mag` is `BOND_FIELD_GAIN *
+**One maximum, two tabs.** The pair's `mag` is `BOND_FIELD_GAIN *
 BOND_FIELD_BOOST`, which is exactly what One Bond's strongest pair reaches at
 the end of its drag. Measured: two free H in the Sandbox read **1000 kJ/mol**
-at peak field **1.17**, and One Bond's pair at 4.8 r₀ reads 1000 at 1.17. The
-two tabs now make the same claim with the same brightness.
+at peak field **1.17** with the midpoint at (255, 92, 208); One Bond's pair at
+4.8 r₀ reads 1000 at 1.17 in the same pink. The two tabs make the same claim
+with the same brightness.
 
 Measured on the rest of it: a fully bonded scene (CH₄ + CO₂) produces **0**
-extra segments and a peak field identical to 0.003 on or off; the toggle never
-moves the total; 25 free atoms cost **0.33 → 0.79 ms** a frame; the Reactions
-world builds no `solo` segments at all and its `totalKJ` drift is still 0.
+extra lobes and an identical peak field on or off; the toggle never moves the
+total; one loose atom draws nothing, because it has nothing to be apart from;
+and the Reactions world is untouched by any of it.
+
+## A hit shows in the length, not only in the colour
+
+Energy going into a bond's field is energy going into pulling its atoms apart,
+so a loaded bond is a **longer** bond. It was only ever a colour before, which
+left the world saying that a bond about to break is the same shape as one at
+rest — in a sim whose other tab is entirely about watching a bond lengthen as
+you put energy into it.
+
+**It is drawing only.** `b.atoms` is untouched, so mass, inertia, radius and
+every collision are exactly what they were; `totalKJ` drift stays 0. Real
+intramolecular motion would mean a new energy account to keep, and the books
+here balance exactly.
+
+**It tracks the same number the colour does**, through one function both call:
+
+```javascript
+function bondDrawLoad(b) { return Math.min(1, Math.max(b.flare, vibLoad(b))); }
+```
+
+So a bond cannot be drawn stretched and cold, or pink and short. With BOND
+STORAGE on `hidden` the load is the collision flare alone — a hit still shows
+and the hidden accumulation stays hidden, exactly as the ramp keeps it.
+
+### Why a uniform scale and not a push along each bond
+
+The obvious rule is to push each bond's two ends apart along itself, half the
+extra each. It is wrong, and measurably: a methane's carbon is pulled equally
+by four bonds and so cannot move at all, which left its C–H at **3.14 px on a
+52.3 px bond** — 6% — while an H–H under the same load grew 12%. One load has
+to mean one stretch or the picture is not a reading.
+
+`drawLocals` scales the molecule about its own centre instead. Scaling is
+affine, so every pairwise distance grows by the same fraction whatever the
+shape is. Measured across all three reactions, every bond of every molecule
+comes out at exactly **12%** at load 1, and the mass centre stays at (0, 0) —
+so a stretching molecule neither drifts nor wobbles about the point it spins
+on. It is also what a hot molecule actually does: breathe.
+
+`bondStretchMax` is in ACTIVE at **0.12**. The settle is the flare's own decay:
+12% → 4.9% at 300 ms → 0.5% at 1.1 s.
+
+## Asteroids is the default
+
+`toroidWorld` ships **on**. The walls were only ever the simpler thing to
+build: they are an outside object with no business in a picture of a gas
+reacting with itself, and every bounce off one is momentum the box hands the
+world from nowhere. The torus has no outside, so what the scene does it does to
+itself. The dev checkbox keeps the walls for comparison.
+
+## The reaction button IS the picker
+
+It was a `<select>` with a button under it that respawned — two controls for
+one decision, and the reaction was a line of text over a picture of **one**
+reactant.
+
+Now the big pink button opens the list, and every row is that reaction's own
+reactants drawn with **the scene's renderer**: nucleus, shells, inner
+electrons, valence electrons in their Lewis seats, the bond's field lobe, and
+the electrons moving. The molecule on the button is the same object as the
+molecule in the world rather than a diagram of it. A `<select>` cannot hold a
+canvas, so the menu is ours; `#reactionPick` stays as the hidden source of
+truth everything else already reads and writes.
+
+**The respawn was not lost.** Choosing the reaction already on screen gives a
+fresh world of it, which is what NEW used to do. One press, one decision.
+
+**The reactants come from `composition`**, never written out a second time, so
+a reaction cannot show one thing and spawn another — with the reaction's own
+`icon` first, because `composition` is in table order and that is not the order
+the equation is written in. Combustion lists O2 before CH4 while its label
+reads "CH₄ + O₂", so the pictures came out backwards from the line of text
+directly under them.
+
+**The lobes are drawn once and kept.** A reactant on a button is always at
+rest, so its field never changes; only the electrons move. Re-running
+`drawFieldHeatmap` every frame would also resize the shared field buffer twice
+a frame — the world's is ~993×435 of `Float32` — which is megabytes of churn a
+frame for a picture that does not change.
+
+**The button is sized for its widest reaction, measured once.** Its faces are
+not the same width: two reactants and "CH₄ + O₂ → CO₂ + H₂O" come to 163 px
+where ammonia's one picture and "NH₃ → N₂ + H₂" come to 102. Left alone the
+group shrank by 61 px on ammonia and dragged TEMP, AMOUNT and the counters left
+with it. `sizeReactionButton` builds every face once, measures, and pins the
+widest — measured rather than written down, so a reaction added later sizes the
+button itself. All three now hold the group at **164 px** with TEMP fixed at
+361 and no label clipped.
 
 ## Deployment
 

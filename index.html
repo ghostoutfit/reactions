@@ -447,8 +447,51 @@
     text-shadow: 0 0 6px var(--accent2-glow), 0 0 16px var(--accent2-dim);
   }
 
-  /* ── NEW button wrapper (the molecule choice dropdown was removed) ────────── */
+  /* ── The reaction button, and the menu it drops ──────────────────────────── */
   .respawn-wrap { position: relative; display: flex; flex-direction: column; align-self: stretch; }
+
+  /* Hangs off the wrapper's own `position: relative`, so opening it cannot
+     move anything in the toolbar — the row keeps the height it has whether
+     the menu is up or not. */
+  #reactionMenu {
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 40;
+    margin-top: 6px;
+    padding: 5px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    border-radius: 10px;
+    border: 1px solid var(--accent1);
+    background: rgba(10, 8, 20, 0.97);
+    box-shadow: 0 0 2px var(--accent1), 0 0 14px var(--accent1-glow),
+                0 10px 34px rgba(0, 0, 0, 0.75);
+  }
+  .reaction-opt {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 9px 5px 6px;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.72);
+    font: inherit;
+    font-size: 12px;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .reaction-opt:hover { background: var(--accent1-dim); color: #fff; }
+  .reaction-opt[aria-selected="true"] {
+    border-color: var(--accent1);
+    color: #fff;
+    text-shadow: 0 0 8px var(--accent1-glow);
+  }
+  .reaction-opt .opt-pics { display: flex; align-items: center; gap: 2px; }
+  .opt-plus { opacity: 0.45; font-size: 12px; }
 
   .ctrl-box-blue {
     display: flex;
@@ -802,13 +845,22 @@
            choose the reaction, press NEW. Both stretch to the button's own
            width, which the molecule canvas fixes, so changing the selection
            cannot resize this group or shift the temperature buttons beside it. -->
+      <!-- THE BUTTON IS THE PICKER. It used to be a <select> with a button
+           under it that respawned, which is two controls for one decision and
+           made the reaction a line of text over a picture of one reactant.
+           Now the big pink button opens the list and every row is the
+           reaction's own reactants, drawn live. A <select> cannot hold a
+           canvas, so the menu is ours; #reactionPick stays as the hidden
+           source of truth everything else already reads and writes. -->
       <div class="respawn-wrap" id="respawnGroup" style="gap:4px;">
         <span style="font-size:9px;letter-spacing:0.07em;text-transform:uppercase;opacity:0.5;text-align:center;">Reaction</span>
-        <select id="reactionPick" style="font-size:11px;padding:2px 4px;width:100%;min-width:0;box-sizing:border-box;"></select>
-        <button id="newBtn" class="btn" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;align-self:stretch;flex:1;padding:6px 12px;">
-          <canvas id="newBtnMolecule" width="96" height="42" style="display:block;flex-shrink:0;image-rendering:pixelated"></canvas>
-          <span id="newBtnLabel" style="font-size:11px;text-transform:none;letter-spacing:normal;">H&#8322;</span>
+        <select id="reactionPick" style="display:none;"></select>
+        <button id="newBtn" class="btn" aria-haspopup="listbox" aria-expanded="false"
+                style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;align-self:stretch;flex:1;padding:6px 12px;">
+          <span id="newBtnReactants" style="display:flex;align-items:center;justify-content:center;gap:2px;"></span>
+          <span id="newBtnLabel" style="font-size:11px;text-transform:none;letter-spacing:normal;white-space:nowrap;">H&#8322;</span>
         </button>
+        <div id="reactionMenu" role="listbox" style="display:none;"></div>
       </div>
       <div style="display:flex;flex-direction:column;gap:5px;align-items:stretch;">
         <!-- Temperature, where the speed dial used to be. Three buttons of
@@ -1860,11 +1912,12 @@ function bondSegments() {
     const heat    = Math.max(b.flare, VIB_GLOW * vibLoad(b));
     const bright  = 1 + FLARE_GAIN * heat;
     const squeeze = 1 - FLARE_SQUEEZE * heat;
-    // How loaded this bond is, 0..1 — what COLOURS it. Vibration is the energy
+    // How loaded this bond is, 0..1 — what COLOURS it, and through
+    // `bondDrawLoad` the same number that STRETCHES it. Vibration is the energy
     // it is holding; flare is the collision that just landed. The larger of the
     // two, so a hit shows immediately and a bond that has been worked on stays
     // coloured between hits.
-    const load = Math.min(1, Math.max(b.flare, vibLoad(b)));
+    const load = bondDrawLoad(b);
     // One copy per box the molecule shows up in, so a bond on the seam glows on
     // both sides exactly as its atoms are drawn on both sides. A copy that
     // lands outside the buffer is clipped there and costs nothing.
@@ -1931,33 +1984,9 @@ function drawFieldHeatmap(destCtx, segsIn, boxW, boxH, opts) {
     const ax = s.x1 - ox, ay = s.y1 - oy, bx2 = s.x2 - ox, by2 = s.y2 - oy;
     const sdx = s.x2 - s.x1, sdy = s.y2 - s.y1;
     const L = Math.hypot(sdx, sdy);
-
-    // A FREE ATOM'S OWN FIELD: a lobe with no second nucleus. `solo` is how
-    // far it reaches, and the profile is the SAME sine a bond uses, read
-    // radially instead of along an axis — zero at the nucleus, brightest at
-    // half the reach, nothing past it. So an unbonded atom reads as a shell of
-    // field around itself rather than a blob with a nucleus buried in it, and
-    // it is the same shape language as every other lobe on the screen.
-    if (s.solo > 0) {
-      const R = s.solo, kR = Math.PI / R;
-      const x0 = Math.max(0,     Math.floor((ax - R) * scale));
-      const x1 = Math.min(w - 1, Math.ceil ((ax + R) * scale));
-      const y0 = Math.max(0,     Math.floor((ay - R) * scale));
-      const y1 = Math.min(h - 1, Math.ceil ((ay + R) * scale));
-      for (let py = y0; py <= y1; py++) {
-        const wy = py * inv - ay;
-        for (let px = x0; px <= x1; px++) {
-          const wx = px * inv - ax;
-          const d = Math.hypot(wx, wy);
-          if (d >= R) continue;
-          const add = s.mag * Math.sin(kR * d);
-          fieldAcc[py * w + px]  += add;
-          fieldLoad[py * w + px] += add * s.load;
-        }
-      }
-      continue;
-    }
-
+    // EVERY lobe here is between two nuclei, including the Sandbox's
+    // free-atom pairs: a field is something two atoms have between them, so a
+    // one-nucleus lobe would be drawing a quantity that does not exist.
     if (L < 1e-6) continue;
     const ux = sdx / L, uy = sdy / L;
     const sigma  = L * widthK * s.squeeze;
@@ -2875,7 +2904,14 @@ function logAction(msg) {
 //
 //   A MOLECULE CAN STRADDLE AN EDGE, and half of it has to be drawn on the
 //   other side or it looks like it is being eaten.
-let toroidWorld = false;
+//
+// IT IS NOW THE DEFAULT for the Reactions world. The walls were only ever the
+// simpler thing to build: they are an outside object with no business in a
+// picture of a gas reacting with itself, and every bounce off one is a
+// momentum the box handed the world from nowhere. The torus has no outside, so
+// what the scene does it does to itself. The dev checkbox keeps the walls
+// available to compare against.
+let toroidWorld = true;
 
 // The shortest signed delta across a periodic axis.
 function wrapDelta(d, span) {
@@ -3226,9 +3262,54 @@ function bodyGhosts(b) {
   return out;
 }
 
+// ── A HIT SHOWS IN THE LENGTH, NOT ONLY IN THE COLOUR ───────────────────────
+// Energy going into a bond's field is energy going into pulling its atoms
+// apart, so a loaded bond is a LONGER bond. It was only ever a colour before,
+// which left the picture saying that a bond about to break is the same shape
+// as one at rest, in a sim whose whole other tab is about watching a bond
+// lengthen as you put energy into it.
+//
+// IT IS DRAWING ONLY. The body stays rigid: its mass, inertia, radius and
+// every collision it takes are computed from `b.atoms`, which this never
+// touches. Letting the atoms really move would mean real intramolecular
+// dynamics and a new energy account to keep, and the books here balance to a
+// drift of exactly 0 — this buys the reading without reopening them.
+//
+// IT TRACKS THE SAME NUMBER THE COLOUR DOES, through one function both call,
+// so the stretch and the hue cannot disagree: a bond cannot be drawn stretched
+// and cold, or pink and short. With BOND STORAGE on 'hidden' the load is the
+// collision flare alone, so a hit still shows and the hidden accumulation stays
+// hidden — the stretch keeps that secret exactly as the ramp does.
+let bondStretchMax = 0.12;      // share of its own length, at load 1
+
+function bondDrawLoad(b) { return Math.min(1, Math.max(b.flare, vibLoad(b))); }
+
+// The atoms' local coordinates with that stretch applied: the molecule is
+// SCALED UP about its own centre, which is the point it rotates about.
+//
+// A uniform scale is the only rule that grows EVERY bond by the same share,
+// whatever the molecule is shaped like. The obvious alternative — push each
+// bond's two ends apart along itself — does not: a methane's carbon is pulled
+// equally by four bonds and cannot move at all, so its C–H came out at half
+// the stretch a diatomic's bond got from the same load. Measured, 3.14 px on a
+// 52.3 px bond where an H–H grew 12%. One load has to mean one stretch or the
+// picture is not a reading, and scaling is affine — every pairwise distance
+// grows by exactly the same fraction — so it means one stretch everywhere.
+//
+// It also happens to be what a hot molecule does: breathe.
+//
+// Returns `b.atoms` untouched when there is nothing to show, which is what
+// most bodies on most frames want.
+function drawLocals(b) {
+  const load = bondStretchMax > 0 && b.bonds && b.bonds.length ? bondDrawLoad(b) : 0;
+  if (load <= 0) return b.atoms;
+  const k = 1 + bondStretchMax * load;
+  return b.atoms.map(at => ({ ...at, lx: at.lx * k, ly: at.ly * k }));
+}
+
 function bodyAtoms(b, dx = 0, dy = 0) {
   const ca = Math.cos(b.angle), sa = Math.sin(b.angle);
-  return b.atoms.map((at, i) => ({
+  return drawLocals(b).map((at, i) => ({
     x: b.x + at.lx * ca - at.ly * sa + dx,
     y: b.y + at.lx * sa + at.ly * ca + dy,
     z: 0, el: at.el, i, bodyId: b.id,
@@ -5828,7 +5909,8 @@ function drawMoleculeIcon(canvas, els, jitter = null, pad = 3) {
 // they do not all drift in lockstep. (The speed dial used to run a second rAF
 // loop of its own at the full frame rate, for an icon 46 px across.)
 const ICON_CANVASES = [
-  { id: 'newBtnMolecule',      pad: 4, wobble: 0.7, jitter: { x: 0, y: 0 } },   // respawn button
+  // The reaction button's molecules are no longer in here: they are the real
+  // renderer now, with electrons that move — see LIVE_SPECIES_CANVASES.
   // Both view buttons carry the same icon. They are two pictures of the same
   // thing, so the button should say which VIEW you get, not pretend the
   // molecule differs between them. Each keeps its own jitter so they do not
@@ -5837,6 +5919,95 @@ const ICON_CANVASES = [
   { id: 'spaceModeIcon',       pad: 1, wobble: 0.4, jitter: { x: 0, y: 0 } },
 ];
 
+// ── THE REACTION BUTTON'S PICTURES ──────────────────────────────────────────
+// Not the flat rings `drawMoleculeIcon` makes. These are the scene's own
+// renderer — nucleus, shells, inner electrons, valence electrons in their
+// Lewis seats, and the bond's field lobe — at thumbnail size, with the
+// electrons MOVING, because the molecule on the button should be the same
+// object as the molecule in the world rather than a diagram of it.
+//
+// THE LOBES ARE DRAWN ONCE AND KEPT. Nothing about them changes: a reactant on
+// a button is always at rest, so its field is always the floor of the ramp.
+// Only the electrons move. Re-running `drawFieldHeatmap` every frame would
+// also mean resizing the shared field buffer twice a frame — the world's is
+// ~993x435 of Float32 and the thumbnails' is tiny — which is megabytes of
+// churn a frame for a picture that does not change.
+const _speciesPicCache = new Map();
+
+function speciesPic(key, w, h) {
+  const ck = key + ':' + w + 'x' + h;
+  let pic = _speciesPicCache.get(ck);
+  if (pic) return pic;
+
+  const shape = moleculeGeometry(SPECIES[key].els);
+  // The molecule's extent, halos included, then the scale that fits it.
+  let L = 0, R = 0, T = 0, B = 0;
+  for (const a of shape) {
+    const r = valenceRadius(a.el);
+    L = Math.max(L, r - a.lx); R = Math.max(R, r + a.lx);
+    T = Math.max(T, r - a.ly); B = Math.max(B, r + a.ly);
+  }
+  const k = Math.min(w / Math.max(1, L + R), h / Math.max(1, T + B)) * 0.94;
+  // Atoms stay in BOX coordinates and the transform only scales about the
+  // centre — the field buffer is indexed in the box's own pixels and clamps at
+  // 0, so an atom at a negative coordinate would lose its lobe.
+  const cx = w / 2 / k + (L - R) / 2, cy = h / 2 / k + (T - B) / 2;
+  const A = shape.map(a => ({ el: a.el, x: cx + a.lx, y: cy + a.ly }));
+
+  // The scene's own bonding rules, run on this shape in isolation, so the
+  // picture shows the bonds and the ORDERS the reaction will actually spawn.
+  const saved = sandbox.atoms;
+  sandbox.atoms = A;
+  sbRebuildBonds();
+  const bonds = sandbox.bonds;
+  sandbox.atoms = saved;
+  sbRebuildBonds();
+
+  const lobes = document.createElement('canvas');
+  lobes.width = Math.ceil(w / k); lobes.height = Math.ceil(h / k);
+  if (bonds.length) {
+    drawFieldHeatmap(lobes.getContext('2d'), bonds.map(b => ({
+      x1: A[b.i].x, y1: A[b.i].y, x2: A[b.k].x, y2: A[b.k].y,
+      mag: bondShownMag(b.D) * BOND_FIELD_FLOOR * b.contact
+           * BOND_FIELD_GAIN * BOND_FIELD_BOOST,
+      squeeze: BOND_FIELD_SQUEEZE, load: 0,
+    })), lobes.width, lobes.height,
+      { width: BOND_FIELD_WIDTH, gain: BOND_FIELD_GAIN, colormap: BOND_COLORMAP });
+  }
+
+  pic = { A, bonds, k, lobes };
+  _speciesPicCache.set(ck, pic);
+  return pic;
+}
+
+// One frame of one species. The electrons read the world's own `shellWobble`
+// and `shellPhase`, so the buttons breathe in time with the scene.
+function drawSpeciesLive(cv, key) {
+  if (!cv) return;
+  const w = cv.width, h = cv.height;
+  const c = cv.getContext('2d');
+  const pic = speciesPic(key, w, h);
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.clearRect(0, 0, w, h);
+  c.setTransform(pic.k, 0, 0, pic.k, 0, 0);
+  c.drawImage(pic.lobes, 0, 0);
+  const P = byLayer(pic.A);
+  for (const p of P) {
+    drawAtomBody(c, p.x, p.y, p.el, valenceRadius(p.el));
+    drawShellBands(c, p.x, p.y, p.el, valenceRadius(p.el),
+                   elemShellInk(p.el), worldNucleusR(p.el));
+  }
+  for (const p of P) drawInnerElectrons(c, p);
+  for (const p of P) drawNucleons(c, p.x, p.y, p.el, shellWobble, WORLD_NUCLEON_R);
+  sbDrawValenceElectrons(c, pic.A, pic.bonds);
+  c.setTransform(1, 0, 0, 1, 0, 0);
+}
+
+// Every live species canvas on the toolbar, rebuilt whenever the button or the
+// menu is. Each carries the species it draws, so the loop needs to know nothing
+// about which is which.
+const LIVE_SPECIES_CANVASES = [];
+
 let _iconLast = -67;
 function toolbarIconLoop(now) {
   if (now - _iconLast >= 67) {   // ~15 fps
@@ -5844,12 +6015,10 @@ function toolbarIconLoop(now) {
     for (const ic of ICON_CANVASES) {
       ic.jitter.x = (ic.jitter.x + (Math.random() - 0.5) * ic.wobble) * 0.78;
       ic.jitter.y = (ic.jitter.y + (Math.random() - 0.5) * ic.wobble) * 0.78;
-      // The NEW button shows what the picker will spawn; the view buttons are
-      // about the view, not the species, so they keep the H2 they always had.
-      const els = ic.id === 'newBtnMolecule'
-        ? SPECIES[currentReaction().icon].els
-        : SPECIES.H2.els;
-      drawMoleculeIcon(document.getElementById(ic.id), els, ic.jitter, ic.pad);
+      drawMoleculeIcon(document.getElementById(ic.id), SPECIES.H2.els, ic.jitter, ic.pad);
+    }
+    for (const lc of LIVE_SPECIES_CANVASES) {
+      if (lc.cv.isConnected && lc.cv.offsetParent !== null) drawSpeciesLive(lc.cv, lc.key);
     }
   }
   requestAnimationFrame(toolbarIconLoop);
@@ -6076,6 +6245,11 @@ function drawInnerElectrons(c, p) {
 function drawElectronsAsDots(b, dc = ctx, gx = 0, gy = 0) {
   if (!b.electrons) return;
   const ca = Math.cos(b.angle), sa = Math.sin(b.angle);
+  // The SAME stretched frame the nuclei are drawn in. Read from `b.atoms`
+  // instead, a shared pair would stay at the rest midpoint while the two atoms
+  // it belongs to moved out from under it — and a lone pair would sit off its
+  // own shell. The whole molecule moves together or none of it does.
+  const LA = drawLocals(b);
   for (const e of b.electrons) {
     if (e.kind === 'lone' && !showLonePairs) continue;
     let lx, ly;
@@ -6085,7 +6259,7 @@ function drawElectronsAsDots(b, dc = ctx, gx = 0, gy = 0) {
       // drawing THAT as a dot made the bonding electrons look like they were
       // perpetually swinging round the molecule — the "dance". A shared pair
       // sits in the gap.
-      const ai = b.atoms[e.i], ak = b.atoms[e.k];
+      const ai = LA[e.i], ak = LA[e.k];
       const mx = (ai.lx + ak.lx) / 2, my = (ai.ly + ak.ly) / 2;
       const dx = ak.lx - ai.lx, dy = ak.ly - ai.ly;
       const L = Math.hypot(dx, dy) || 1;
@@ -6105,7 +6279,7 @@ function drawElectronsAsDots(b, dc = ctx, gx = 0, gy = 0) {
       // 0.6 exists so a lone-pair ring does not collide with the bonding lobes
       // in it. There are no lobes here, and applying it anyway put
       // the electron at 0.54 of its own band, 17.5 px adrift on an oxygen.
-      const at = b.atoms[e.i];
+      const at = LA[e.i];
       const outer = (ATOM_SHELLS[at.el] || [1]).length - 1;
       const r = shellRadius(at.el, outer, 1, worldNucleusR(at.el));
       const ang = e.angle0 + shellPhase * (b.bonds.length === 0 ? loneSpeedFree : 1);
@@ -7956,10 +8130,6 @@ document.getElementById('clearBtn').addEventListener('click', () => {
   logAction('Reset world');
 });
 
-document.getElementById('newBtn').addEventListener('click', () => {
-  spawnWorld();
-  logAction('Respawned molecules');
-});
 
 // ── The reaction picker ──────────────────────────────────────────────────────
 // Choosing a reaction writes its whole composition and respawns, so the world
@@ -7990,23 +8160,167 @@ function syncCompositionSliders() {
   }
 }
 
+// ── WHAT A REACTION STARTS WITH ─────────────────────────────────────────────
+// The species its composition actually puts in the world. Read from
+// `composition` rather than written out a second time, so a reaction cannot
+// show one thing on its button and spawn another. Ammonia has ONE reactant and
+// the other two have two; nothing here assumes a number, it just draws what is
+// there.
+//
+// THE REACTION'S OWN `icon` GOES FIRST, because `composition` is keyed in table
+// order and that is not the order the equation is written in: combustion's
+// composition lists O2 before CH4 while its label reads "CH₄ + O₂", so the
+// pictures came out backwards from the line of text directly under them.
+function reactantsOf(id) {
+  const c = REACTIONS[id].composition;
+  const first = REACTIONS[id].icon;
+  const rest = Object.keys(c).filter(k => c[k] > 0 && k !== first);
+  return (c[first] > 0 ? [first] : []).concat(rest);
+}
+
+// One species canvas, registered with the toolbar loop so its electrons move.
+function liveSpeciesCanvas(key, w, h) {
+  const cv = document.createElement('canvas');
+  cv.width = w; cv.height = h;
+  cv.style.display = 'block';
+  LIVE_SPECIES_CANVASES.push({ cv, key });
+  return cv;
+}
+
+// The reactants of `id` as pictures with a + between them, into `host`.
+function fillReactantPics(host, id, w, h) {
+  host.innerHTML = '';
+  // Anything this host owned is no longer on screen, so it should stop being
+  // drawn. Without this the loop would keep painting every menu it has ever
+  // built, and the array would grow every time the menu opened.
+  for (let i = LIVE_SPECIES_CANVASES.length - 1; i >= 0; i--) {
+    if (!LIVE_SPECIES_CANVASES[i].cv.isConnected) LIVE_SPECIES_CANVASES.splice(i, 1);
+  }
+  reactantsOf(id).forEach((key, n) => {
+    if (n) {
+      const plus = document.createElement('span');
+      plus.className = 'opt-plus';
+      plus.textContent = '+';
+      host.appendChild(plus);
+    }
+    host.appendChild(liveSpeciesCanvas(key, w, h));
+  });
+}
+
+// ── The menu the big button drops ───────────────────────────────────────────
+const REACTION_MENU_PIC = { w: 54, h: 40 };
+const REACTION_BTN_PIC  = { w: 62, h: 46 };
+
+function buildReactionMenu() {
+  const menu = document.getElementById('reactionMenu');
+  if (!menu) return;
+  menu.innerHTML = '';
+  for (const id of Object.keys(REACTIONS)) {
+    const opt = document.createElement('div');
+    opt.className = 'reaction-opt';
+    opt.setAttribute('role', 'option');
+    opt.setAttribute('aria-selected', String(id === reaction));
+    opt.dataset.id = id;
+    const pics = document.createElement('span');
+    pics.className = 'opt-pics';
+    opt.appendChild(pics);
+    const lbl = document.createElement('span');
+    lbl.textContent = REACTIONS[id].label;
+    opt.appendChild(lbl);
+    menu.appendChild(opt);
+    fillReactantPics(pics, id, REACTION_MENU_PIC.w, REACTION_MENU_PIC.h);
+  }
+}
+
+function reactionMenuOpen() {
+  return document.getElementById('reactionMenu').style.display === 'flex';
+}
+
+function setReactionMenu(open) {
+  const menu = document.getElementById('reactionMenu');
+  const btn  = document.getElementById('newBtn');
+  if (!menu || !btn) return;
+  if (open) buildReactionMenu();
+  menu.style.display = open ? 'flex' : 'none';
+  btn.setAttribute('aria-expanded', String(open));
+}
+
+// The button's own face: the reactants, then the whole equation under them.
+function syncReactionButton() {
+  const host = document.getElementById('newBtnReactants');
+  if (host) fillReactantPics(host, reaction, REACTION_BTN_PIC.w, REACTION_BTN_PIC.h);
+  const lbl = document.getElementById('newBtnLabel');
+  if (lbl) lbl.textContent = REACTIONS[reaction].label;
+}
+
+// ── THE BUTTON IS SIZED FOR ITS WIDEST REACTION, ONCE ───────────────────────
+// Its face changes with the reaction and the faces are not the same width: two
+// reactants and "CH₄ + O₂ → CO₂ + H₂O" come to 163 px where ammonia's one
+// picture and "NH₃ → N₂ + H₂" come to 102. Left to itself the group shrank by
+// 61 px on ammonia and dragged TEMP, AMOUNT and the counters left with it —
+// the toolbar rearranging itself because of a choice made inside one control.
+//
+// So every face is built once, measured, and the widest wins. MEASURED rather
+// than written down as a number, so a reaction added later sizes the button
+// itself instead of quietly overflowing it.
+function sizeReactionButton() {
+  const grp = document.getElementById('respawnGroup');
+  const host = document.getElementById('newBtnReactants');
+  const lbl = document.getElementById('newBtnLabel');
+  if (!grp || !host || !lbl) return;
+  grp.style.minWidth = '';
+  let widest = 0;
+  for (const id of Object.keys(REACTIONS)) {
+    fillReactantPics(host, id, REACTION_BTN_PIC.w, REACTION_BTN_PIC.h);
+    lbl.textContent = REACTIONS[id].label;
+    widest = Math.max(widest, grp.getBoundingClientRect().width);
+  }
+  syncReactionButton();                       // put the real one back
+  grp.style.minWidth = Math.ceil(widest) + 'px';
+}
+
 function setReaction(id, respawn = true) {
   if (!REACTIONS[id]) return;
   reaction = id;
   applyReactantAmount(false);          // the reaction's unit, taken reactantAmount times
   const sel = document.getElementById('reactionPick');
   if (sel) sel.value = id;
-  const lbl = document.getElementById('newBtnLabel');
-  if (lbl) lbl.textContent = formulaOf(SPECIES[REACTIONS[id].icon].els);
+  syncReactionButton();
   syncCompositionSliders();
   if (respawn) spawnWorld();
   logAction('Reaction: ' + id);
 }
 
 fillReactionPick();
-setReaction(reaction, false);     // label and dials in step with the default
+setReaction(reaction, false);     // button and dials in step with the default
+// After the fonts have settled, or the measurement is of the fallback face.
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(sizeReactionButton);
+else sizeReactionButton();
 document.getElementById('reactionPick').addEventListener('change', function () {
   setReaction(this.value);
+});
+
+// THE BUTTON IS THE PICKER, and it kept the respawn it always had: choosing
+// the reaction already on screen gives you a fresh world of it, which is
+// exactly what pressing NEW used to do. So nothing was lost by merging the
+// two controls — one press, one decision.
+document.getElementById('newBtn').addEventListener('click', e => {
+  e.stopPropagation();
+  setReactionMenu(!reactionMenuOpen());
+});
+
+document.getElementById('reactionMenu').addEventListener('click', e => {
+  const opt = e.target.closest('.reaction-opt');
+  if (!opt) return;
+  e.stopPropagation();
+  setReactionMenu(false);
+  if (opt.dataset.id === reaction) { spawnWorld(); logAction('Respawned molecules'); }
+  else setReaction(opt.dataset.id);
+});
+
+document.addEventListener('click', () => { if (reactionMenuOpen()) setReactionMenu(false); });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && reactionMenuOpen()) setReactionMenu(false);
 });
 
 
@@ -8327,6 +8641,11 @@ replayOnBox.addEventListener('change', () => {
       'product cannot break and cannot take energy into its fields. Ships ON ' +
       '\u2014 measured, a finished world holds 100% of the time with it and 68% ' +
       'without. The switch is here only so the two can be compared</div>' +
+    row('devStretch', 'Hit stretches bond', 0, 0.4, 0.01, bondStretchMax, '#ffd84d') +
+    '<div style="opacity:0.45;font-size:10px;">how far a fully loaded bond is ' +
+      'DRAWN apart, as a share of its own length. Tracks the same load as the ' +
+      'colour, so it grows on the hit and settles back as the energy drains. ' +
+      'Drawing only — the molecule stays rigid and no collision changes</div>' +
     row('devJoinFlash', 'New bond stays pink', 0, 3, 0.1, joinFlashSec, '#ffd84d') +
     '<div style="opacity:0.45;font-size:10px;">a join\u2019s own flash, held at ' +
       'full for the first 45% and then fading. A collision\u2019s flare is a ' +
@@ -8569,6 +8888,7 @@ replayOnBox.addEventListener('change', () => {
        v => v > 1 ? '\u00f7' + v.toFixed(2) + ' by the last' : 'off');
   bind('devBreakH', v => breakEnergy = v, false, v => v.toFixed(2));
   bind('devColFull', v => colourFull = v, false, v => Math.round(v * 100) + '% of cap');
+  bind('devStretch', v => bondStretchMax = v, false, v => Math.round(v * 100) + '%');
   bind('devVibTau', v => VIB_TAU     = v, false, v => v.toFixed(1) + ' s');
   bind('devVibGlow', v => VIB_GLOW   = v, false, v => v.toFixed(2));
   bind('devBarZero', v => { barZeroAt = v; anchorBarScale(); }, false,
@@ -10172,44 +10492,65 @@ function sbTotalEnergy() {
 // loose atoms read "6,000 kJ/mol" over an empty black field, which is the one
 // place this tab could be accused of hiding its own arithmetic.
 //
-// On, every atom with no bonds gets its own round lobe AT THE TOP OF THE SCALE.
-// That is not decoration and it is not a guess: two atoms far enough apart to
-// be unbonded are storing the most they ever will — the whole dissociation
-// energy of any bond they might make is already in their fields, which is
-// exactly why making the bond gives energy BACK. One Bond says the same thing
-// at the end of its drag, where the lobe now holds at full instead of fading.
+// ENERGY IS BETWEEN TWO ATOMS, NEVER INSIDE ONE. This is the whole point and
+// it is worth being exact about, because the first version of this drew a ring
+// around each free atom and that was wrong — it said an atom carries its energy
+// the way it carries its mass. It does not. `SB_FREE_ATOM` is half of One
+// Bond's 1000, and that 1000 is the height of a PAIR; a lone atom in an empty
+// universe has nothing to be 500 kJ/mol away from.
+//
+// So this is exactly the picture One Bond now shows at the end of its drag,
+// extended to the loose atoms on this tab: a LOBE BETWEEN TWO ATOMS, at the top
+// of the scale and full pink, because a pair too far apart to be bonded is
+// storing the most it ever will. Pull a bond past breaking in One Bond and you
+// get one of these; the Sandbox just has more than one pair of atoms in it.
+//
+// WHICH PAIRS. Every unbonded atom is joined to its NEAREST unbonded
+// neighbour, and a pair that chooses each other draws one lobe between them,
+// not two. All pairs would be the literal reading and it is unusable: the
+// count goes up as the square, every lobe is as wide as the gap it spans, and
+// six loose atoms white out the screen with fifteen overlapping maxima. The
+// nearest neighbour is the pair that would actually bond if they came
+// together, so it is the one worth drawing — and with two atoms in the scene
+// it is One Bond's picture exactly.
 //
 // AN ATOM IN A MOLECULE IS NOT IN THIS. Its field is drawn where its bonds
 // are, relative to the atoms it is bonded to, because that is what its energy
-// is relative to — and a molecule wearing both its bond lobes and a halo per
-// atom would double-count on screen what the total counts once.
+// is relative to.
 //
 // Off by default: the tab opens as the scene you built, and this is the extra
 // reading rather than the first one.
 let sbFreeFields = false;
 
-// How far a free atom's field reaches, as a multiple of its valence radius.
-// The profile peaks at HALF the reach (see `solo` in drawFieldHeatmap), so 2
-// puts the brightest ring exactly on the valence shell — the field is brightest
-// where the electrons that would do the bonding actually are.
-const SB_FREE_REACH = 2;
-
 function sbFreeFieldSegs() {
   const A = sandbox.atoms;
   const bonded = new Array(A.length).fill(false);
   for (const b of sandbox.bonds) { bonded[b.i] = true; bonded[b.k] = true; }
-  const segs = [];
-  for (let i = 0; i < A.length; i++) {
-    if (bonded[i]) continue;
+  const free = [];
+  for (let i = 0; i < A.length; i++) if (!bonded[i]) free.push(i);
+  if (free.length < 2) return [];          // nothing to be apart FROM
+
+  // Nearest unbonded neighbour for each, then one lobe per distinct pair.
+  const segs = [], drawn = new Set();
+  for (const i of free) {
+    let best = -1, bestD = Infinity;
+    for (const k of free) {
+      if (k === i) continue;
+      const d = Math.hypot(A[k].x - A[i].x, A[k].y - A[i].y);
+      if (d < bestD) { bestD = d; best = k; }
+    }
+    if (best < 0) continue;
+    const key = Math.min(i, best) + ':' + Math.max(i, best);
+    if (drawn.has(key)) continue;
+    drawn.add(key);
     segs.push({
-      x1: A[i].x, y1: A[i].y, x2: A[i].x, y2: A[i].y,
-      solo: valenceRadius(A[i].el) * SB_FREE_REACH,
-      // bondShownMag(BOND_SHOWN_MAX) is 1 by construction: the top of the ramp,
-      // which is what "storing the maximum" has to look like. Everything else
-      // on the tab is some fraction of this, so a free atom is the brightest
-      // thing in any scene — and dimmer the moment it bonds, which is the
-      // reading.
+      x1: A[i].x, y1: A[i].y, x2: A[best].x, y2: A[best].y,
+      // The top of the ramp. `bondShownMag` of the deepest well is 1 by
+      // construction, and One Bond's strongest pair reaches exactly this at
+      // the end of its drag — so "the most it can hold" is one brightness
+      // across both tabs.
       mag: BOND_FIELD_GAIN * BOND_FIELD_BOOST,
+      squeeze: BOND_FIELD_SQUEEZE,
       load: 1,        // full pink: nothing is holding more than this
     });
   }
@@ -11192,9 +11533,10 @@ function sbUpdateReadout() {
     const free = sbFreeCount();
     nEl.textContent = !n ? ''
       : !free ? 'every atom here is bonded'
-      : sbFreeFields
-        ? free + (free === 1 ? ' atom' : ' atoms') + ' at the top of the scale'
-        : free + (free === 1 ? ' atom is' : ' atoms are') + ' counted but not drawn';
+      : !sbFreeFields
+        ? free + (free === 1 ? ' atom is' : ' atoms are') + ' counted but not drawn'
+      : free === 1 ? 'one loose atom, with nothing to be apart from'
+      : free + ' loose atoms, each joined to its nearest';
   }
 }
 
