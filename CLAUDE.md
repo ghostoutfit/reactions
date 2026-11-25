@@ -4441,6 +4441,141 @@ it. Once the peak is passed the axis settles and everything reads normally.
 **lets it go** — picking is a toggle, so the way back to the world's graph is
 the same gesture that got you to the atom's.
 
+### The curve is known before the reaction runs
+
+The graph used to be a **trace**: landmarks recorded as the reaction reached
+them, so the line grew rightwards and the right-hand side of the panel was empty
+until the run got there. That is an honest record and a poor diagram. A
+reaction-coordinate diagram is a statement about **states** — what the reactants
+are worth, what it costs to pull them apart, what the products are worth — and
+all three are known from the bond tables the moment the world is spawned.
+
+So the whole curve is drawn up front and the reaction walks along it, marked by
+a **dashed line** down the panel with a dot on each curve. Fields is exact, not
+a fit: `fieldsKJ` is free atoms less the dissociation energy of every bond still
+standing, and `reactionProgress` is the share of atoms freed on the left and of
+product bonds formed on the right, so fields is linear in progress on each half
+with its peak exactly at the middle.
+
+| | predicted | measured |
+|---|---|---|
+| water, reactants | 4,899 | **4,899** at spawn |
+| water, products | 3,444 | **3,444** at the end |
+| combustion, reactants | 5,574 | **5,574** |
+| combustion, products | 3,150 | **3,150** |
+
+The apex is the one point the run does not quite reach — 8,505 measured against
+9,000 predicted for water — because joining starts the instant the latch opens,
+so the world is never *entirely* loose atoms. That gap is the honest difference
+between the diagram and the run, and the marker shows it: the markers read the
+**measured** energy, so when the world departs from the diagram the dot sits off
+the line and says so.
+
+**What the products will be worth is solved, not written down.** The counts of
+each product are whatever uses up exactly the atoms the scene was spawned with —
+a bounded search, once per spawn, over the atom inventory. A number written
+twice is a number that eventually disagrees with itself, which is why
+`productBondTarget` derives its total too.
+
+**Motion is the same curve upside down**, because the total is a constant: the
+hump in fields *is* the dip in motion, and the climb after it is the products
+paying out. Drawn on its own axis, because motion is five times the size of
+fields and on one shared axis the dip would be a wobble at the top of the frame.
+
+**Motion's axis is anchored across all three speeds**, not fitted to the curve
+in front of it. Fitted, a temperature change would scale straight back out and
+the line would sit in exactly the same place at Low as at High — the one thing
+it most needs not to do. Measured, the flat stretch before the reaction starts
+sits at **20% / 41% / 74%** of the panel at Low / Med / High, and returns to 20%
+coming back down.
+
+**It cannot be both**, and the dev panel says so with a switch. Spanning the
+speeds costs depth: the dip uses about a fifth of the frame where fields' hump
+uses three quarters, because the frame has to hold Low and High at once. *Motion
+line spans speeds* off fits the run instead — the dip fills the panel and a
+speed change moves nothing.
+
+### The turn into position
+
+An OH meeting its second hydrogen swung into line at a flat 32 rad/s and stopped
+dead on arrival: three discontinuities in a row. The tumble stopped and the slew
+started at full speed, the slew ran at one rate however far it had to go, and it
+hit the target and halted. *Clunky* is the right word — nothing else in the
+scene moves like that.
+
+It is a **critically damped approach** now (`smoothDampAngle`, the closed-form
+step, exact at any frame rate). The body carries an angular **rate**, started
+from the tumble it already had, pulled towards the target and eased to rest on
+it; critically damped, so it cannot wobble into place either. `recombAlign` is
+now a **ceiling** on the rate rather than the rate itself.
+
+Both ends are blended against the tumble they replace, so a pair that drifts
+apart eases back into its spin instead of snapping to it. And it **sees it
+coming**: the turn starts at `alignLead` × the pull range, so there is time to
+come round gently rather than doing the whole rotation in the last few frames.
+Turning early costs nothing — `spin` is untouched, this is drawn rotation only.
+
+**The chosen slot is latched, with hysteresis.** A water's oxygen has two slots,
+and "whichever is the shorter turn" flips between them as the pair drifts round
+each other, so the target teleported by a bond angle and the turn snapped after
+it. Measured: 13.9 rad/s of honest turning with **19.1 rad/s of jump** on the
+frames it changed its mind. With the slot latched unless the other beats it by
+1.2 rad, the worst frame-to-frame change falls to **11.7**, and `totalKJ` drift
+stays exactly 0.
+
+### The replay, continued
+
+**The in-between frames are calculated.** At a quarter speed each recorded frame
+was held for four display frames and the molecules stepped. Positions are now
+blended — body placement, body angle, and the atoms' local coordinates while a
+bond closes — but **only between frames describing the same molecules**. Across
+the one frame where a molecule stops being two molecules there is no honest
+blend (bonds appear, atoms change hands, electrons are rebuilt), so that frame
+is cut to. The blend runs everywhere except the single place a hard cut is the
+truthful picture.
+
+**The pre-roll is short**: 0.28 s, down from 0.7. The approach is interesting
+for about a quarter of a second; past that it is two particles travelling, which
+the sim shows all the time anyway.
+
+**The cooldown was swallowing the sequence.** A join is usually the second half
+of something — a followed oxygen goes free, makes an OH, then makes a water,
+three moments inside a few seconds — and at 2.5 s two of them were lost. At
+**0.8 s**, following a hydrogen catches 2 of 2 and following an oxygen 2 of 3,
+against roughly 1 of 3 before.
+
+**The camera is not clamped to the walls.** It was, so the close-up never showed
+anything outside the box, and the cost was that a moment happening near an edge
+was pushed off-centre by exactly the amount the clamp moved the camera — the
+moments where being centred matters most. It now goes where it happened and
+carries on as though the wall were not there. The wall is still drawn, so it is
+obvious what you are looking past, and the world is untouched either way.
+
+**Every clip is kept** (the last `REPLAY_KEEP` = 12), and the **ALL** button
+beside the VISUALS checkbox plays them one after another, round and round.
+Pressing it again hands the world straight back: the sim was paused, not
+rewound, so it carries on from the frame it stopped at. Verified over a 60 s run
+following an oxygen — 3 clips caught, the reel visits all three in order and
+wraps, and stopping leaves `playing` false with the camera cleared.
+
+**The switch moved to VISUALS.** The replay is a thing you watch, so it belongs
+with the other things you watch rather than three screens down a dev panel. The
+dev checkbox mirrors it rather than being a second opinion on the same variable.
+
+### Oxygen's electrons are busier
+
+```javascript
+const ELEM_WOBBLE = { O: { amp: 0.7, rate: 2 } };   // valence shell only
+```
+
+An oxygen carries six valence electrons to a hydrogen's one, so the same reach
+on each reads as a crowd milling about rather than as a shell. Tighter and
+quicker is what makes six of them look like a full shell instead of a scribble.
+Measured on a 38.1 px shell: reach **9.25 → 6.51 px** (70%) and distance covered
+**19.9 → 27.8 px/s**, which is 2× the rate at 0.7× the reach. Valence only — the
+inner shells are there to say the atom has an inside and have no business being
+the liveliest thing on screen. Applied in all three tabs.
+
 ### What it opens on
 
 Four defaults moved together, and they are a set: the sim opens on

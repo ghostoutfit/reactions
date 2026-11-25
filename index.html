@@ -871,6 +871,17 @@
           <input type="checkbox" id="showFields" checked>
           <span class="field-label-electric">Show energy in fields</span>
         </label>
+        <!-- The replay is a thing you watch, so its switch belongs with the
+             other things you watch rather than three screens down a dev panel.
+             The button beside it plays every moment caught so far, round and
+             round; pressing it again hands the world straight back. -->
+        <div style="display:flex;align-items:center;gap:8px;" id="replayRow">
+          <label class="toggle-label" style="margin:0">
+            <input type="checkbox" id="replayOnBox" checked>
+            <span class="field-label-electric">Replay joins &amp; breaks</span>
+          </label>
+          <button id="reelBtn" class="btn" style="flex:0 0 auto;padding:3px 9px;font-size:11px;letter-spacing:0.4px;">ALL</button>
+        </div>
 
       </div>
       <div style="display:flex;gap:10px;align-self:stretch;align-items:center">
@@ -2939,6 +2950,10 @@ function assembleBody(geo, bonds, x, y, heading, speed, spin, nominal = speed) {
     // moleculeBonds. The centre-of-mass shift above does not touch the indices,
     // so the list arrives as given.
     bonds,
+    alignW: 0,               // angular rate while turning to fit — see stepAlign
+    alignSlot: null,         // which of the two slots it settled on
+    alignMix: 0,             // how far the turn has taken over from the tumble
+    alignGoal: null,
     flare: 0,                // collision brightness, decays towards 0
     flash: 0,                // seconds left of a JOIN's pink — see joinFlashSec
     vib: 0,                  // energy held in the bond; past breakThreshold it lets go
@@ -3270,6 +3285,60 @@ function turnToward(b, target, max) {
   b.angle += Math.abs(d) <= max ? d : Math.sign(d) * max;
 }
 
+// ─── THE TURN INTO POSITION ──────────────────────────────────────────────────
+//
+// An OH meeting its second hydrogen used to swing into line at a FLAT 32 rad/s
+// and stop dead on arrival, which is three discontinuities in a row: the tumble
+// stops and the slew starts at full speed, the slew runs at one rate however
+// far it has to go, and it hits the target and halts. Clunky is exactly the
+// right word for it — nothing in this scene moves like that.
+//
+// So it is a critically damped approach instead. The body carries an angular
+// RATE, started from the tumble it already had, pulled towards the target and
+// eased to rest on it. Critically damped means it never overshoots, so a
+// molecule cannot wobble into place either.
+const ALIGN_FADE = 0.22;      // s to hand over between tumbling and turning
+let alignTau  = 0.30;         // s — how long the turn takes to settle
+let alignLead = 1.9;          // x the pull range: it starts turning this early
+
+// Unity's SmoothDampAngle, which is the closed-form critically damped step —
+// exact for any dt rather than a spring integrated badly at low frame rates.
+function smoothDampAngle(angle, target, w, tau, dt) {
+  const omega = 2 / Math.max(1e-3, tau);
+  const x = omega * dt;
+  const expf = 1 / (1 + x + 0.48 * x * x + 0.235 * x * x * x);
+  let err = angle - target;
+  err = Math.atan2(Math.sin(err), Math.cos(err));
+  const temp = (w + omega * err) * dt;
+  return [target + (err + temp) * expf, (w - omega * temp) * expf];
+}
+
+// One frame of "turn to fit", blended against the tumble it replaces so that
+// BOTH ends of the manoeuvre are smooth: a pair that drifts apart eases back
+// into its spin instead of snapping back to it.
+function stepAlign(b, dt) {
+  if (b.alignTo != null) b.alignGoal = b.alignTo;
+  const want = b.alignTo != null ? 1 : 0;
+  b.alignMix += (want - b.alignMix) * Math.min(1, dt / ALIGN_FADE);
+  if (b.alignGoal == null || b.alignMix <= 1e-3) {
+    b.alignGoal = null;
+    b.alignMix = 0;
+    b.alignSlot = null;             // a fresh approach picks a slot fresh
+    b.alignW = b.spin;              // primed, so taking over costs no jump
+    b.angle += b.spin * dt;
+    return;
+  }
+  const [na, nw] = smoothDampAngle(b.angle, b.alignGoal, b.alignW, alignTau, dt);
+  b.alignW = nw;
+  let d = na - b.angle;
+  d = Math.atan2(Math.sin(d), Math.cos(d));
+  // `recombAlign` is now a CEILING on the rate rather than the rate itself, so
+  // the slider still answers the same question: how fast may it turn at most.
+  const cap = recombAlign * dt;
+  if (Math.abs(d) > cap) d = Math.sign(d) * cap;
+  b.angle += d * b.alignMix + b.spin * dt * (1 - b.alignMix);
+}
+
 function stepWorld(dt) {
   updateReactantEase();        // see breakEaseMax — one scan, not one per hit
   stepSpeedPreferences(dt);    // see speedWander — a distribution, not one speed
@@ -3282,8 +3351,7 @@ function stepWorld(dt) {
     // drawn rotation is spent turning its open slot to face it instead of
     // tumbling. `spin` is left exactly as it was, so this neither adds nor
     // removes energy and a pair that drifts apart picks its tumble back up.
-    if (b.alignTo != null) turnToward(b, b.alignTo, recombAlign * dt);
-    else b.angle += b.spin * dt;
+    stepAlign(b, dt);
     // Atoms closing the last of the way into a bond that has just formed.
     if (b.form > 0) {
       b.form = Math.max(0, b.form - dt / Math.max(0.01, b.formSec));
@@ -4725,16 +4793,28 @@ function slotLocalDirs(b) {
 
 // The body angle that would have that slot facing `worldDir`, picking the one of
 // the two that is the shorter turn from where the body is now.
+// THE CHOSEN SLOT IS LATCHED, with hysteresis. A water's oxygen has two slots
+// and "whichever is the shorter turn" flips between them as the pair drifts
+// round each other — so the target would teleport by a bond angle and the turn
+// would snap after it. Measured before this: 13.9 rad/s of honest turning with
+// 19 rad/s of jump on the frames it changed its mind. Once a slot is picked it
+// is kept unless the other is better by ALIGN_SWITCH, which is most of a right
+// angle and far more than the wobble that caused the flapping.
+const ALIGN_SWITCH = 1.2;     // rad the other slot must beat it by
 function alignTarget(b, worldDir) {
   const dirs = slotLocalDirs(b);
   if (!dirs) return null;
-  let best = null, bestD = Infinity;
-  for (const ld of dirs) {
-    const th = worldDir - ld;
-    const d = Math.abs(Math.atan2(Math.sin(th - b.angle), Math.cos(th - b.angle)));
-    if (d < bestD) { bestD = d; best = th; }
+  const away = (th) =>
+    Math.abs(Math.atan2(Math.sin(th - b.angle), Math.cos(th - b.angle)));
+  const d0 = away(worldDir - dirs[0]), d1 = away(worldDir - dirs[1]);
+  let pick = b.alignSlot;
+  if (pick !== 0 && pick !== 1) pick = d0 <= d1 ? 0 : 1;
+  else {
+    const mine = pick === 0 ? d0 : d1, other = pick === 0 ? d1 : d0;
+    if (other < mine - ALIGN_SWITCH) pick = 1 - pick;
   }
-  return best;
+  b.alignSlot = pick;
+  return worldDir - dirs[pick];
 }
 
 // WHERE THE NEW MOLECULE GOES: the placement that moves the atoms least.
@@ -5030,8 +5110,19 @@ function stepRecombination(dt) {
       const touch = B[i].atoms[si].r + B[k].atoms[sk].r;
       let dx = x2 - x1, dy = y2 - y1;
       const d = Math.hypot(dx, dy) || 1e-6;
-      if (d > recombRange * touch) continue;
+      // IT SEES IT COMING. The turn starts further out than the pull does, so a
+      // molecule has time to come round gently instead of being asked to do the
+      // whole rotation in the last few frames before contact. Turning early
+      // costs nothing: `spin` is untouched, so this is drawn rotation only, and
+      // a pair that never meets eases back into its tumble.
+      if (d > recombRange * alignLead * touch) continue;
       const ux = dx / d, uy = dy / d;
+      B[i].alignTo = alignTarget(B[i], Math.atan2(uy, ux));
+      B[k].alignTo = alignTarget(B[k], Math.atan2(-uy, -ux));
+      // Past here is the PULL, which keeps its own range — widening that was
+      // measured to do nothing (see "Widening the reach does nothing") and the
+      // energy tally below is defined on it.
+      if (d > recombRange * touch) continue;
 
       // WHAT THE PULL HAS PUT IN, as a potential difference rather than a path
       // integral. A constant inward force is conservative, so its work depends
@@ -5114,11 +5205,6 @@ function stepRecombination(dt) {
       const F = recombPull;
       B[i].vx += ux * F / B[i].mass * dt;  B[i].vy += uy * F / B[i].mass * dt;
       B[k].vx -= ux * F / B[k].mass * dt;  B[k].vy -= uy * F / B[k].mass * dt;
-      // And the little rotation: each body turns its open slot towards the other
-      // while the pull closes the gap, so by the time they touch the geometry
-      // almost already fits and the snap has next to nothing left to move.
-      B[i].alignTo = alignTarget(B[i], Math.atan2(uy, ux));
-      B[k].alignTo = alignTarget(B[k], Math.atan2(-uy, -ux));
     }
   }
 
@@ -5608,14 +5694,25 @@ let shellPhase = 0;       // kept so the draw path needs no special case
 // Offset of one electron from its seat this frame. The two frequencies are
 // deliberately not a round ratio, so a pair never settles into lockstep, and
 // `seed` keeps every electron on its own schedule.
-function shellWobbleAt(seed, r) {
-  const a = shellWobbleAmp * r;
+// SOME ELEMENTS ARE BUSIER THAN OTHERS. An oxygen carries six valence
+// electrons to a hydrogen's one, so the same reach on each of them reads as a
+// crowd milling about rather than as a shell; tighter and quicker is what makes
+// six of them look like a full shell instead of a scribble. Per element, and
+// only on the valence shell — the inner shells are there to say the atom has an
+// inside and have no business being the liveliest thing on screen.
+const ELEM_WOBBLE = {
+  O: { amp: 0.7, rate: 2 },
+};
+function shellWobbleAt(seed, r, el) {
+  const e = (el && ELEM_WOBBLE[el]) || null;
+  const a = shellWobbleAmp * r * (e ? e.amp : 1);
+  const rate = e ? e.rate : 1;
   const k = a * shellShake;
   const t = shellWobble;
-  return [a * Math.sin(t * shellWobbleHz + seed) +
-          k * Math.sin(t * SHELL_SHAKE_HZ + seed * 3.1),
-          a * Math.cos(t * shellWobbleHz * 1.37 + seed * 2.3) +
-          k * Math.cos(t * SHELL_SHAKE_HZ * 1.19 + seed * 1.7)];
+  return [a * Math.sin(t * shellWobbleHz * rate + seed) +
+          k * Math.sin(t * SHELL_SHAKE_HZ * rate + seed * 3.1),
+          a * Math.cos(t * shellWobbleHz * 1.37 * rate + seed * 2.3) +
+          k * Math.cos(t * SHELL_SHAKE_HZ * 1.19 * rate + seed * 1.7)];
 }
 
 function drawAtomShells(c, p) {
@@ -5681,7 +5778,7 @@ function drawElectronsAsDots(b, dc = ctx) {
       const outer = (ATOM_SHELLS[at.el] || [1]).length - 1;
       const r = shellRadius(at.el, outer, 1, worldNucleusR(at.el));
       const ang = e.angle0 + shellPhase * (b.bonds.length === 0 ? loneSpeedFree : 1);
-      const [wx, wy] = shellWobbleAt(e.angle0 * 3.1 + e.i, r);
+      const [wx, wy] = shellWobbleAt(e.angle0 * 3.1 + e.i, r, at.el);
       lx = at.lx + r * Math.cos(ang) + wx;
       ly = at.ly + r * Math.sin(ang) + wy;
     }
@@ -5842,6 +5939,7 @@ function resetEnergyTrace() {
   energyAtSpawn = Math.max(1e-6, energyOfMotion());
   anchorEnergyTotal();         // the run's constant total
   anchorBarScale();            // and the axis, which the temperature must not move
+  anchorCurve();               // ...and the curve the whole run will walk along
   sampleEnergy();              // the reactants, at x = 0
 }
 
@@ -6226,11 +6324,150 @@ let followAxisPad = 0.15;          // x the span, at each end
 // THE CONSEQUENCE, and it is a real one: the two bars no longer share a scale,
 // so they no longer sum to the chart and you can no longer read one going up as
 // the other comes down. The panel says so under its title.
+// ─── THE CURVE IS KNOWN BEFORE THE REACTION RUNS ─────────────────────────────
+//
+// The graph used to be a TRACE: landmarks recorded as the reaction reached
+// them, so the line grew rightwards and the right-hand side of the panel was
+// empty until the run got there. That is an honest record and a poor diagram.
+// A reaction-coordinate diagram is a statement about STATES — here is what the
+// reactants are worth, here is what it costs to pull them apart, here is what
+// the products are worth — and all three are known from the bond tables the
+// moment the world is spawned. So the whole curve is drawn up front and the
+// reaction's own position runs along it.
+//
+// Fields is exact, not a fit: `fieldsKJ` is free atoms less the dissociation
+// energy of every bond still standing, and `reactionProgress` is the share of
+// atoms freed on the left and the share of product bonds formed on the right.
+// So fields is linear in progress on each half, with its peak exactly at the
+// middle, where every atom is free and nothing is discounting anything.
+//
+//   p = 0     every reactant bond intact     free - (what the reactants hold)
+//   p = 0.5   every atom loose               free
+//   p = 1     every product bond made        free - (what the products hold)
+let motionAxisSpansSpeeds = true;   // see motionAxisRange — the either/or
+let curveTotalLoKJ  = 0;   // the run's total at LOW, for the motion frame
+let curveTotalHiKJ  = 0;   // ...and at HIGH
+let curveFreeKJ     = 0;   // SB_FREE_ATOM x every atom in the world
+let curveReactKJ    = 0;   // ...less the reactants' bonds
+let curveProductKJ  = 0;   // ...less the products'
+
+// WHAT THE PRODUCTS WILL BE WORTH, solved from the atom inventory rather than
+// written down beside the reaction. A number written twice is a number that
+// eventually disagrees with itself — the same reason `productBondTarget`
+// derives its total instead of carrying one. The counts of each product are
+// whatever uses up exactly the atoms the scene was spawned with, which for both
+// reactions here has one answer; the search is bounded by the atom count and
+// runs once per spawn.
+function speciesBondKJ(els) {
+  let sum = 0;
+  for (const bd of moleculeBonds(els)) {
+    const a = els[bd[0]], c = els[bd[1]];
+    sum += bd[2] ? bondDFor(a, c, bd[2]) : bondEnergy(a, c);
+  }
+  return sum;
+}
+function elementTally(list) {
+  const t = {};
+  for (const el of list) t[el] = (t[el] || 0) + 1;
+  return t;
+}
+function solveProductBondKJ() {
+  const prods = (currentReaction().products || [])
+    .map(k => JOIN_STEPS[k]).filter(Boolean);
+  if (!prods.length) return 0;
+  const have = elementTally(world.bodies.flatMap(b => b.els));
+  const keys = Object.keys(have);
+  const per  = prods.map(els => elementTally(els));
+  const cap  = prods.map(els => Math.min(...els.map(e => Math.floor((have[e] || 0) /
+                  per[prods.indexOf(els)][e]))));
+  let best = null;
+  const n = new Array(prods.length).fill(0);
+  (function walk(j) {
+    if (best !== null) return;
+    if (j === prods.length) {
+      for (const k of keys) {
+        let used = 0;
+        for (let q = 0; q < prods.length; q++) used += n[q] * (per[q][k] || 0);
+        if (used !== have[k]) return;
+      }
+      best = n.slice();
+      return;
+    }
+    for (let v = cap[j]; v >= 0 && best === null; v--) { n[j] = v; walk(j + 1); }
+    n[j] = 0;
+  })(0);
+  if (!best) return 0;
+  return best.reduce((a, v, j) => a + v * speciesBondKJ(prods[j]), 0);
+}
+
+// Anchored once per spawn, beside the bar scale, from the world as it was given.
+function anchorCurve() {
+  const atoms = world.bodies.reduce((a, b) => a + b.els.length, 0);
+  curveFreeKJ = atoms * SB_FREE_ATOM;
+  let held = 0;
+  for (const b of world.bodies) for (const bd of b.bonds) held += bondEnergyOf(b, bd);
+  curveReactKJ   = curveFreeKJ - held;
+  curveProductKJ = curveFreeKJ - solveProductBondKJ();
+  // The two ends of the thermostat, from the world as spawned — `barFullKJ` is
+  // already the hot one, anchored a line earlier by `anchorBarScale`.
+  curveTotalHiKJ = barFullKJ;
+  curveTotalLoKJ = fieldsKJ() + motionAtTemp(TEMP_LOW);
+}
+
+// The predicted curve, in kJ/mol, at any point on the axis.
+function curveFieldsKJ(p) {
+  const q = Math.max(0, Math.min(1, p));
+  return q <= 0.5
+    ? curveReactKJ   + (curveFreeKJ - curveReactKJ)   * (q / 0.5)
+    : curveFreeKJ    + (curveProductKJ - curveFreeKJ) * ((q - 0.5) / 0.5);
+}
+// ...and motion, which is the same curve upside down, because the total is a
+// constant: a hump in fields IS a dip in motion. The temperature moves
+// `totalKJ`, so turning the heat up lifts the whole motion line — the flat
+// stretch before the reaction starts along with the rest of it.
+function curveMotionKJ(p) {
+  return Math.max(0, totalKJ - curveFieldsKJ(p));
+}
+
 function fieldsAxisRange() {
-  if (!progressTrace.length) return { lo: 0, hi: 1 };
-  const v = smoothedSeries('fKJ');
-  return atomAxisRange([Math.min(...v), Math.max(...v),
-                        Math.max(0, fieldsKJ() - fieldsZeroKJ)]);
+  if (!curveFreeKJ) return { lo: 0, hi: 1 };
+  const z = fieldsZeroKJ;
+  return atomAxisRange([curveReactKJ - z, curveFreeKJ - z, curveProductKJ - z,
+                        Math.max(0, fieldsKJ() - z)]);
+}
+// MOTION'S AXIS IS ANCHORED ACROSS ALL THREE SPEEDS, not fitted to the curve in
+// front of it. Fitted, a temperature change would have scaled straight back out
+// again — the curve would move and the frame would move with it, and the line
+// would sit in exactly the same place on screen at Low as at High. That is the
+// one thing it most needs not to do: turning the heat up has to visibly LIFT
+// the whole motion line, the flat stretch before the reaction starts included.
+//
+// So the frame spans the coldest this world can be at its lowest (Low, at the
+// peak, where fields has taken the most) to the hottest at its highest (High,
+// with the products made). Same principle as `barFullKJ` — see "one axis for
+// every speed" — and anchored at the same moment.
+function motionAxisRange() {
+  if (!curveFreeKJ) return { lo: 0, hi: 1 };
+  const z = motionZeroKJ();
+  // AN EITHER/OR, AND IT CANNOT BE BOTH. A frame that holds Low and High at
+  // once is a frame in which one run's dip is a fifth of the height; a frame
+  // fitted to the run fills the panel with the dip and then moves with the
+  // temperature, so the line sits in exactly the same place at Low as at High.
+  // Spanning the speeds is the default because watching the whole line lift
+  // when the heat goes up is the thing the mirror was asked for.
+  if (!motionAxisSpansSpeeds) {
+    return atomAxisRange([0, 0.5, 1].map(p => Math.max(0, curveMotionKJ(p) - z))
+                         .concat([Math.max(0, motionKJ() - z)]));
+  }
+  const r = atomAxisRange([
+    Math.max(0, curveTotalLoKJ - curveFreeKJ - z),
+    Math.max(0, curveTotalHiKJ - Math.min(curveReactKJ, curveProductKJ) - z),
+  ]);
+  // A cold world at the peak has barely any motion left, so the padded floor
+  // runs below zero — which is not a quantity and is a fifth of the panel spent
+  // on nothing. Motion cannot be negative; the axis should not pretend it can.
+  r.lo = Math.max(0, r.lo);
+  return r;
 }
 
 function atomAxisRange(vals) {
@@ -6265,8 +6502,16 @@ function atomAxisRange(vals) {
 let replayOn       = true;    // the dev toggle
 let replayRate     = 0.25;    // how fast the clip runs, x real time
 let replayZoom     = 1.9;     // x the scene zoom, while it plays
-let replayCooldown = 2.5;     // s of play before another one may trigger
-const REPLAY_PRE  = 0.7;      // s of clip before the moment
+// A JOIN IS USUALLY THE SECOND HALF OF SOMETHING. A followed oxygen goes free,
+// then makes an OH, then makes a water — three moments inside a few seconds —
+// and at 2.5 s the cooldown swallowed two of them. It is here to stop the sim
+// replaying itself into a slideshow, not to pick which moment matters, so it is
+// short enough now to let a sequence through.
+let replayCooldown = 0.8;     // s of play before another one may trigger
+// SHORT. The approach is interesting for about a quarter of a second; past that
+// it is two particles travelling, which the sim shows all the time anyway.
+const REPLAY_KEEP = 12;       // clips held for the reel
+const REPLAY_PRE  = 0.28;     // s of clip before the moment
 const REPLAY_POST = 0.35;     // ...and after it
 
 const replay = {
@@ -6274,6 +6519,9 @@ const replay = {
   t: 0,             // the recording clock
   eventAt: null,    // when the moment happened, while the post-roll is running
   clip: null,       // what the button replays
+  clips: [],        // ...and every one so far, for the reel
+  reel: false,      // cycling through them all
+  reelAt: 0,
   playing: false,
   clock: 0,
   loop: false,      // the button's own mode: run it again and again
@@ -6350,6 +6598,11 @@ function startReplay(frames, eventAt) {
   // the clip, which cannot happen while the post-roll is what builds it.
   const at = frames.find(f => f.t >= eventAt) || frames[frames.length - 1];
   replay.clip = { frames: frames.slice(), eventAt, at: { x: at.cam.x, y: at.cam.y } };
+  // KEPT, ALL OF THEM, so the run can be played back as a reel. Bounded, because
+  // a long run at High is a lot of frames and each one holds every body in the
+  // world; the oldest goes first, which is also the order you would stop caring.
+  replay.clips.push(replay.clip);
+  while (replay.clips.length > REPLAY_KEEP) replay.clips.shift();
   replay.playing = true;
   replay.clock = frames[0].t;
   // The button is dead until there is something to replay, and this is the one
@@ -6375,6 +6628,9 @@ function replayAgain() {
 // existed: a clip of uids 63-89 played against a world holding 227-281.
 function forgetReplay() {
   replay.frames.length = 0;
+  replay.clips.length = 0;
+  replay.reel = false;
+  replay.reelAt = 0;
   replay.t = 0;
   replay.eventAt = null;
   replay.clip = null;
@@ -6389,9 +6645,32 @@ function forgetReplay() {
 function stopReplay() {
   replay.playing = false;
   replay.loop = false;
+  replay.reel = false;
   replayCam = null;
   replay.holdUntil = replay.t + replayCooldown;
   syncReplayBtn();
+}
+
+// THE REEL: every moment this run has caught, one after another, round and
+// round. Switching it off hands the world straight back — the sim was paused,
+// not rewound, so there is nothing to catch up on and it carries on from the
+// frame it stopped at.
+function toggleReel() {
+  if (replay.reel) { stopReplay(); return; }
+  if (!replay.clips.length) return;
+  replay.reel = true;
+  replay.loop = false;
+  replay.reelAt = 0;
+  replay.clip = replay.clips[0];
+  replay.playing = true;
+  replay.clock = replay.clip.frames[0].t;
+  syncReplayBtn();
+}
+
+function reelNext() {
+  replay.reelAt = (replay.reelAt + 1) % replay.clips.length;
+  replay.clip = replay.clips[replay.reelAt];
+  replay.clock = replay.clip.frames[0].t;
 }
 
 // THE CAMERA IS PINNED TO WHERE IT IS ABOUT TO HAPPEN, FROM THE FIRST FRAME.
@@ -6405,15 +6684,44 @@ function stopReplay() {
 // for the whole clip. The pre-roll is then a still frame of the place it is
 // going to happen, with both particles flying into it. That is the shot.
 //
-// Kept inside the walls, because a close-up that wanders off the box is mostly
-// background.
-function replayCamAt(p) {
-  const z = sceneZoom * replayZoom;
-  const vw = sceneW() / z, vh = (world.h * sceneZoom) / z;
-  const clamp = (v, half, span) =>
-    span <= half * 2 ? span / 2 : Math.max(half, Math.min(span - half, v));
-  return { x: clamp(p.x, vw / 2, world.w),
-           y: clamp(p.y, vh / 2, world.h) };
+// NOT CLAMPED TO THE WALLS. It was, so that the close-up never showed anything
+// outside the box — and the cost was that a moment happening near an edge was
+// pushed off-centre by exactly the amount the clamp moved the camera, which is
+// the moments where being centred matters most. The camera now goes where it
+// happened, carries on as though the wall were not there, and whatever empty
+// background comes with that is a fair price; the wall itself is still drawn,
+// so it is obvious what you are looking past. The world is untouched either
+// way — this is a camera, and it picks up exactly where it left off.
+function replayCamAt(p) { return { x: p.x, y: p.y }; }
+
+// Blend two recorded frames, when and only when they describe the same molecules
+// — same count, same ids, same atoms in each. Anything else is a frame in which
+// the world changed shape, and those are cut to rather than crossed.
+function tweenBodies(A, B, u) {
+  if (A.length !== B.length) return A;
+  const out = [];
+  for (let n = 0; n < A.length; n++) {
+    const a = A[n], b = B[n];
+    if (a.id !== b.id || a.atoms.length !== b.atoms.length) return A;
+    const c = Object.assign({}, a);
+    c.x = a.x + (b.x - a.x) * u;
+    c.y = a.y + (b.y - a.y) * u;
+    // Shortest way round, so a molecule crossing +/-PI does not unwind.
+    let d = b.angle - a.angle;
+    d = Math.atan2(Math.sin(d), Math.cos(d));
+    c.angle = a.angle + d * u;
+    c.flare = a.flare + (b.flare - a.flare) * u;
+    c.atoms = a.atoms.map((at, i) => {
+      const bt = b.atoms[i];
+      if (!bt || bt.uid !== at.uid) return at;
+      const q = Object.assign({}, at);
+      q.lx = at.lx + (bt.lx - at.lx) * u;
+      q.ly = at.ly + (bt.ly - at.ly) * u;
+      return q;
+    });
+    out.push(c);
+  }
+  return out;
 }
 
 function stepReplay(dtWall) {
@@ -6423,17 +6731,30 @@ function stepReplay(dtWall) {
   const end = frames[frames.length - 1].t;
   replay.clock += dtWall * Math.max(0.02, replayRate);
   if (replay.clock > end) {
+    if (replay.reel) { reelNext(); return; }
     if (replay.loop) replay.clock = frames[0].t;
     else { stopReplay(); return; }
   }
-  // The nearest recorded frame, not an interpolated one: the bodies are whole
-  // objects with bonds and electrons, and there is no honest way to blend two
-  // of them across the frame a molecule stopped being two molecules.
-  let f = frames[0];
-  for (const g of frames) { if (g.t <= replay.clock) f = g; else break; }
+  // THE IN-BETWEEN FRAMES ARE CALCULATED, which is what makes it slow motion
+  // rather than a slideshow. At a quarter speed each recorded frame would
+  // otherwise be held for four display frames and the molecules would step.
+  //
+  // Only POSITIONS are blended — body placement, body angle, and the atoms'
+  // local coordinates while a bond is closing. Everything structural is taken
+  // from the earlier of the two frames, because there is no honest way to blend
+  // across the frame a molecule stopped being two molecules: bonds appear,
+  // atoms change hands, electrons are rebuilt. So the blend runs everywhere
+  // except over the single frame where that happens, which is the one place a
+  // hard cut is the truthful picture.
+  let a = frames[0], b = frames[0], u = 0;
+  for (let n = 0; n < frames.length; n++) {
+    if (frames[n].t <= replay.clock) { a = frames[n]; b = frames[n + 1] || frames[n]; }
+    else break;
+  }
+  if (b !== a && b.t > a.t) u = Math.max(0, Math.min(1, (replay.clock - a.t) / (b.t - a.t)));
 
   const live = world.bodies;
-  world.bodies = f.bodies;
+  world.bodies = u > 0 ? tweenBodies(a.bodies, b.bodies, u) : a.bodies;
   // Recomputed each frame but from the SAME point, so the shot is still and
   // the clamp still answers to the zoom slider while a clip is looping.
   replayCam = replayCamAt(clip.at);
@@ -6708,54 +7029,46 @@ function drawEnergyGraph() {
   const { W, H, PADX, TOP, AXIS, gH, px, pxL, pxR, LIGHT,
           gridCol, axisCol, textCol, dimCol, motionCol, fieldsCol, motionGlow } = G;
 
-  if (progressTrace.length < 1) return;
+  // THE WHOLE CURVE, UP FRONT. Both lines are drawn from the bond tables the
+  // moment the world is spawned — see "the curve is known before the reaction
+  // runs" — so the panel is a reaction diagram you can read before anything
+  // happens, and the run's job is to walk along it rather than to draw it.
+  //
+  // Each line is on its OWN fitted axis, the same ones the two bars use, so a
+  // line half way up and a bar half way up are the same reading. That is also
+  // what lets the mirror be visible at all: motion is `totalKJ` less fields and
+  // five times its size, so on one shared axis the dip would be a wobble at the
+  // top of the frame.
+  const fa = fieldsAxisRange(), ma = motionAxisRange();
+  const fSpan = Math.max(1, fa.hi - fa.lo), mSpan = Math.max(1, ma.hi - ma.lo);
+  const pyF = (kj) => TOP + gH * (1 - Math.max(0, Math.min(1, (kj - fa.lo) / fSpan)));
+  const pyM = (kj) => TOP + gH * (1 - Math.max(0, Math.min(1, (kj - ma.lo) / mSpan)));
 
-  // The trace is already in bar fractions, so a point on the line sits at the
-  // height the bar beside it stood at when the reaction passed that landmark.
-  const py = (f) => TOP + gH * (1 - Math.max(0, Math.min(1, f)));
-
-  // Smoothed once per draw, then shared by the lines and the markers so the
-  // markers cannot drift off the curve they are supposed to be sitting on.
-  // MOTION is a fraction of the bar's own chart, as it always was. FIELDS is
-  // read in kJ/mol off its own fitted axis — see fieldsAxisRange — so the line
-  // and the fields bar beside it say the same thing, and the curve uses the
-  // whole panel instead of lying along the bottom of it.
-  const fa = fieldsAxisRange();
-  const fSpan = Math.max(1, fa.hi - fa.lo);
-  const series = {
-    motion: smoothedSeries('motion'),
-    fields: smoothedSeries('fKJ').map(v => (v - fa.lo) / fSpan),
+  // Sampled, not splined through three points: the curve has a corner at the
+  // peak — every atom free is a real cusp, where breaking stops and joining
+  // starts — and a spline would round it off into something the reaction does
+  // not do.
+  const STEPS = 48;
+  const build = (fn, py) => {
+    const pts = [{ x: pxL, y: py(fn(0)) }];
+    for (let n = 0; n <= STEPS; n++) {
+      const q = n / STEPS;
+      pts.push({ x: px(q), y: py(fn(q)) });
+    }
+    pts.push({ x: pxR, y: py(fn(1)) });
+    return pts;
   };
+  const fieldsPts = build(curveFieldsKJ, kj => pyF(kj - fieldsZeroKJ));
+  const motionPts = build(curveMotionKJ, kj => pyM(kj - motionZeroKJ()));
   // The graph's own offset and tilt on the fields line — see graphFieldsStart.
-  // Applied into the smoothed array, so the line and its marker cannot end up
-  // reading from two different versions of the same number.
   if (graphFieldsStart || graphFieldsDelta) {
-    series.fields = series.fields.map((v, i) =>
-      v + graphFieldsStart + progressTrace[i].p * graphFieldsDelta);
+    fieldsPts.forEach((pt, n) => {
+      const q = n === 0 ? 0 : n > STEPS + 1 ? 1 : (n - 1) / STEPS;
+      pt.y -= gH * (graphFieldsStart + q * graphFieldsDelta);
+    });
   }
 
-  // Has the reaction actually reached its far end? Only then is there a
-  // products shelf to draw — see inside `stroke`.
-  const done = progressTrace.length > 0 &&
-               progressTrace[progressTrace.length - 1].p >= 1 - 1e-6;
-
-  const stroke = (key, col, glow, lw, blur, alpha) => {
-    const pts = progressTrace.map((s, i) => ({ x: px(s.p), y: py(series[key][i]) }));
-    // THE REACTANTS SHELF, ALWAYS. Flat, at the height of the first landmark:
-    // the reactants really were sitting there before anything happened, so
-    // there is something true to draw.
-    //
-    // THE PRODUCTS SHELF, ONLY ONCE THERE ARE PRODUCTS. Drawing it from the
-    // leading end of a run still in progress was a line claiming the reaction
-    // had finished and levelled off, which it had not — and it ran the line
-    // out to the frame so the whole right-hand side was full of a result that
-    // did not exist yet. Past the leading end there is nothing to say, so
-    // nothing is drawn and the panel is simply empty until the reaction gets
-    // there.
-    if (pts.length) {
-      pts.unshift({ x: pxL, y: pts[0].y });
-      if (done) pts.push({ x: pxR, y: pts[pts.length - 1].y });
-    }
+  const stroke = (pts, col, glow, lw, blur, alpha) => {
     graphCtx.save();
     graphCtx.globalAlpha = alpha;
     graphCtx.shadowBlur = LIGHT ? 0 : blur;
@@ -6765,29 +7078,45 @@ function drawEnergyGraph() {
     graphCtx.lineJoin = 'round';
     graphCtx.lineCap = 'round';
     graphCtx.beginPath();
-    if (pts.length === 1) graphCtx.arc(pts[0].x, pts[0].y, lw / 2, 0, Math.PI * 2);
-    else splineThrough(graphCtx, pts);
+    graphCtx.moveTo(pts[0].x, pts[0].y);
+    for (let n = 1; n < pts.length; n++) graphCtx.lineTo(pts[n].x, pts[n].y);
     graphCtx.stroke();
     graphCtx.restore();
   };
   // Fields underneath, so the motion line stays the one that reads first.
-  stroke('fields', fieldsCol, fieldsCol, 6, 20, 0.22);
-  stroke('fields', fieldsCol, fieldsCol, 2, 8,  0.75);
-  stroke('motion', motionCol, motionGlow, 8, 28, 0.25);
-  stroke('motion', motionCol, motionGlow, 3, 10, 0.55);
-  stroke('motion', motionCol, motionGlow, 1.5, 0, 1.0);
+  stroke(fieldsPts, fieldsCol, fieldsCol, 6, 20, 0.22);
+  stroke(fieldsPts, fieldsCol, fieldsCol, 2, 8,  0.75);
+  stroke(motionPts, motionCol, motionGlow, 8, 28, 0.25);
+  stroke(motionPts, motionCol, motionGlow, 3, 10, 0.55);
+  stroke(motionPts, motionCol, motionGlow, 1.5, 0, 1.0);
 
-  // WHERE THE REACTION IS NOW, which is not always the far end of the line. A
-  // water that breaks again walks the marker back down a curve that stays put.
+  // WHERE THE REACTION IS NOW: a dashed line down the panel, with a marker on
+  // each curve. The curve no longer grows, so this is the only thing on the
+  // graph that moves, and it has to be unmistakable. It goes BACKWARDS when a
+  // product is knocked apart again, which it could not do while the line was a
+  // record of the furthest the run had been.
   const mx = px(progressNow);
-  for (const [key, col, glow] of [['fields', fieldsCol, fieldsCol],
-                                  ['motion', motionCol, motionGlow]]) {
-    const y = py(traceAt(series[key], progressNow));
+  graphCtx.save();
+  graphCtx.setLineDash([4, 4]);
+  graphCtx.strokeStyle = LIGHT ? 'rgba(0,0,0,0.65)' : 'rgba(210,240,255,0.75)';
+  graphCtx.lineWidth = 1.5;
+  graphCtx.shadowBlur = LIGHT ? 0 : 8;
+  graphCtx.shadowColor = 'rgba(160,220,255,0.7)';
+  graphCtx.beginPath(); graphCtx.moveTo(mx, TOP); graphCtx.lineTo(mx, AXIS);
+  graphCtx.stroke();
+  graphCtx.restore();
+
+  // The markers read the MEASURED energy, not the predicted curve, so the
+  // moment the world departs from the diagram — a hot bond holding energy the
+  // curve knows nothing about — the dot sits off the line and says so.
+  for (const [y, col, glow] of [
+    [pyF(fieldsKJ() - fieldsZeroKJ), fieldsCol, fieldsCol],
+    [pyM(motionKJ() - motionZeroKJ()), motionCol, motionGlow]]) {
     graphCtx.save();
     graphCtx.shadowBlur = LIGHT ? 0 : 10;
     graphCtx.shadowColor = glow;
     graphCtx.fillStyle = col;
-    graphCtx.beginPath(); graphCtx.arc(mx, y, 3.2, 0, Math.PI * 2); graphCtx.fill();
+    graphCtx.beginPath(); graphCtx.arc(mx, y, 3.6, 0, Math.PI * 2); graphCtx.fill();
     graphCtx.restore();
   }
 }
@@ -6858,11 +7187,13 @@ function barChartSpec() {
       const fb = fieldsBar(noData ? 0 : Math.max(0, fieldsKJ() - fieldsZeroKJ - fa.lo));
       fb.max = Math.max(1, fa.hi - fa.lo);
       fb.axisLo = fa.lo;
-      return [
-        { label: 'Energy of Motion', value: noData ? 0 : Math.max(0, motionKJ() - mZero),
-          color: MOTION_COLOR, glow: MOTION_GLOW },
-        fb,
-      ];
+      const ma = motionAxisRange();
+      const mb = { label: 'Energy of Motion',
+                   value: noData ? 0 : Math.max(0, motionKJ() - mZero - ma.lo),
+                   color: MOTION_COLOR, glow: MOTION_GLOW };
+      mb.max = Math.max(1, ma.hi - ma.lo);
+      mb.axisLo = ma.lo;
+      return [mb, fb];
     })(),
     // Full scale is anchored at spawn from the hottest this world can get, NOT
     // from the temperature it is at — see anchorBarScale. So the two bars no
@@ -7061,7 +7392,7 @@ function updateEnergyNote() {
   const el = document.getElementById('energyPctNote');
   if (!el) return;
   el.textContent = productBondTarget()
-    ? 'Energy along the reaction \u2014 each point set the first time the reaction reached it'
+    ? 'The whole reaction, worked out from the bonds before it runs \u2014 the dashed line is where it has got to'
     : 'Energy along the reaction \u2014 this one has no product half modelled yet, so it ends at the peak';
 }
 
@@ -7242,18 +7573,40 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
 // caught. A press plays the last one; a second press while it is running sets
 // it looping, which is the "over and over" — press again to stop.
 function syncReplayBtn() {
+  const on = !!(replayOn && followOn && !bondTab.on && !sandbox.on);
   const btn = document.getElementById('replayBtn');
-  if (!btn) return;
-  btn.classList.toggle('visible', !!(replayOn && followOn && !bondTab.on && !sandbox.on));
-  btn.disabled = !replay.clip;
-  btn.classList.toggle('looping', replay.loop);
-  btn.innerHTML = replay.loop ? 'STOP<br>REPLAY' : 'REPLAY<br>AGAIN';
+  if (btn) {
+    btn.classList.toggle('visible', on);
+    btn.disabled = !replay.clip;
+    btn.classList.toggle('looping', replay.loop);
+    btn.innerHTML = replay.loop ? 'STOP<br>REPLAY' : 'REPLAY<br>AGAIN';
+  }
+  const reel = document.getElementById('reelBtn');
+  if (reel) {
+    reel.disabled = !on || !replay.clips.length;
+    reel.classList.toggle('active', replay.reel);
+    reel.textContent = replay.reel ? 'STOP' : 'ALL ' + (replay.clips.length || '');
+  }
+  const box = document.getElementById('replayOnBox');
+  if (box && box.checked !== replayOn) box.checked = replayOn;
+  const row = document.getElementById('replayRow');
+  if (row) row.style.opacity = followOn ? '' : '0.45';
 }
 
 document.getElementById('replayBtn').addEventListener('click', () => {
   if (!replay.clip) return;
   if (replay.playing) { replay.loop = !replay.loop; syncReplayBtn(); return; }
   replayAgain();
+});
+
+document.getElementById('reelBtn').addEventListener('click', toggleReel);
+
+const replayOnBox = document.getElementById('replayOnBox');
+replayOnBox.checked = replayOn;
+replayOnBox.addEventListener('change', () => {
+  replayOn = replayOnBox.checked;
+  if (!replayOn && replay.playing) stopReplay();
+  syncReplayBtn();
 });
 
 // ─── Dev panel — type "dev" anywhere to open ─────────────────────────────────
@@ -7314,6 +7667,19 @@ document.getElementById('replayBtn').addEventListener('click', () => {
     '<div style="opacity:0.45;font-size:10px;">how long it runs normally before ' +
       'another moment may interrupt. The button ignores it</div>' +
     row('devFollowGlow', 'Followed: glow',     0, 2,    0.05, followGlow,   '#ffd84d') +
+    '<label style="display:flex;align-items:center;gap:7px;margin:9px 0 2px;cursor:pointer;">' +
+      '<input type="checkbox" id="devMotionSpan" checked style="margin:0">' +
+      '<span>Motion line spans speeds</span>' +
+    '</label>' +
+    '<div style="opacity:0.45;font-size:10px;margin-left:21px;">on: the frame ' +
+      'holds Low and High at once, so turning up the heat lifts the whole line. ' +
+      'Off: it fits this run, so the dip fills the panel but a speed change ' +
+      'moves nothing. It cannot be both</div>' +
+    row('devAlignTau',  'Turn settles in',  0.05, 1,   0.01, alignTau,  '#ffd84d') +
+    row('devAlignLead', 'Turn starts at',   1,    4,   0.1,  alignLead, '#ffd84d') +
+    '<div style="opacity:0.45;font-size:10px;">how long a molecule takes to ' +
+      'come round to face its partner, and how far out it starts. It eases in ' +
+      'and out of its tumble either way</div>' +
     row('devFollowPad', 'Followed: headroom', 0, 0.6, 0.01, followAxisPad, '#ffd84d') +
     '<div style="opacity:0.45;font-size:10px;">how bright the followed atom ' +
       'burns, and how much room is left above and below its curve</div>' +
@@ -7629,6 +7995,11 @@ document.getElementById('replayBtn').addEventListener('click', () => {
     if (!replayOn && replay.playing) stopReplay();
     syncReplayBtn();
   });
+  // Two switches on one variable drift apart the moment either moves, so the
+  // dev one mirrors the one in VISUALS rather than being a second opinion.
+  const mirrorReplay = () => { replayCb.checked = replayOn; };
+  document.getElementById('replayOnBox').addEventListener('change', mirrorReplay);
+  mirrorReplay();
   bind('devReplayRate', v => replayRate = v, false,
        v => Math.round(v * 100) + '% speed');
   bind('devReplayZoom', v => replayZoom = v, false, v => v.toFixed(1) + '\u00d7');
@@ -7636,6 +8007,11 @@ document.getElementById('replayBtn').addEventListener('click', () => {
        v => v > 0 ? v.toFixed(1) + ' s' : 'every moment');
   bind('devFollowGlow', v => followGlow = v, false,
        v => v > 0 ? Math.round(v * 100) + '%' : 'off');
+  const spanCb = panel.querySelector('#devMotionSpan');
+  spanCb.checked = motionAxisSpansSpeeds;
+  spanCb.addEventListener('change', () => { motionAxisSpansSpeeds = spanCb.checked; });
+  bind('devAlignTau',  v => alignTau = v,  false, v => v.toFixed(2) + ' s');
+  bind('devAlignLead', v => alignLead = v, false, v => v.toFixed(1) + '\u00d7 the pull');
   bind('devFollowPad', v => followAxisPad = v, false,
        v => v > 0 ? Math.round(v * 100) + '%' : 'tight');
   bind('devTakes',  v => reactantTakes = v, false,
@@ -8737,7 +9113,8 @@ function drawBondTab() {
     const at = [A, B][e.side];
     const r  = shellRadius(at.el, e.shell, z);
     const ang = e.ang + bondTab.spin;
-    const [wx, wy] = shellWobbleAt(e.ang * 3.1 + e.side * 1.9 + e.shell, r);
+    const [wx, wy] = shellWobbleAt(e.ang * 3.1 + e.side * 1.9 + e.shell, r,
+                                   e.inner ? null : at.el);
     drawElectronDot(ctx, at.x + Math.cos(ang) * r + wx, at.y + Math.sin(ang) * r + wy,
                     e.inner ? INNER_E_COLOUR : elemEInk(at.el), e.inner);
   }
@@ -9497,7 +9874,7 @@ function sbDrawValenceElectrons(c, A, bonds) {
       const ang = mine.length
         ? facing + (lone === 1 ? 0 : (q / (lone - 1) - 0.5) * arc)
         : facing + q * Math.PI * 2 * 0.6180339887498949;
-      const [wx, wy] = shellWobbleAt(ang * 3.1 + i, r);
+      const [wx, wy] = shellWobbleAt(ang * 3.1 + i, r, p.el);
       drawElectronDot(c, p.x + Math.cos(ang) * r + wx, p.y + Math.sin(ang) * r + wy,
                       elemEInk(p.el), false, SHELL_DOT_R);
     }
@@ -10156,6 +10533,7 @@ sbSyncAddButtons();
 // one path into that state rather than a second copy of it here. The markup's
 // `active` class on the ONE BOND button is corrected by that same call.
 applyTab('reactions');
+syncReplayBtn();
 updateGraphBtn();
 updateEnergyNote();
 document.getElementById('energyBar').classList.add('visible');
