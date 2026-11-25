@@ -8179,6 +8179,19 @@ replayOnBox.addEventListener('change', () => {
       'color:#ffd84d;font-weight:700;margin-top:10px;">Active</div>' +
     '<div style="opacity:0.45;font-size:10px;margin-bottom:2px;">still being ' +
       'turned. Below the line is settled tuning.</div>' +
+    // FIRST IN ACTIVE because it is the one switch that changes what the whole
+    // sim is modelling — whether a hit's energy stacks in the bond or has to
+    // carry it in one go — so everything below is read against where this sits.
+    '<label style="display:flex;justify-content:space-between;align-items:center;margin:9px 0 3px;">' +
+      '<span>Bond storage</span>' +
+      '<select id="devVibMode" style="background:#141822;color:#cfe3ff;border:1px solid #2a3344;' +
+        'border-radius:4px;font:inherit;font-size:11px;padding:1px 3px;max-width:118px;">' +
+        Object.keys(VIB_MODES).map(k =>
+          '<option value="' + k + '"' + (k === vibMode ? ' selected' : '') + '>' +
+          VIB_MODES[k] + '</option>').join('') +
+      '</select>' +
+    '</label>' +
+    '<div id="devVibModeNote" style="opacity:0.45;font-size:10px;"></div>' +
     '<label style="display:flex;align-items:center;gap:7px;margin:9px 0 2px;cursor:pointer;">' +
       '<input type="checkbox" id="devFollow" style="margin:0">' +
       '<span>Follow one atom</span>' +
@@ -8270,16 +8283,6 @@ replayOnBox.addEventListener('change', () => {
     '<div style="opacity:0.45;font-size:10px;">the only motion in the shells ' +
       'view — each electron drifting about its seat, not lapping the ring. ' +
       'At 0 a paused scene looks switched off rather than held</div>' +
-    '<label style="display:flex;justify-content:space-between;align-items:center;margin:9px 0 3px;">' +
-      '<span>Bond storage</span>' +
-      '<select id="devVibMode" style="background:#141822;color:#cfe3ff;border:1px solid #2a3344;' +
-        'border-radius:4px;font:inherit;font-size:11px;padding:1px 3px;max-width:118px;">' +
-        Object.keys(VIB_MODES).map(k =>
-          '<option value="' + k + '"' + (k === vibMode ? ' selected' : '') + '>' +
-          VIB_MODES[k] + '</option>').join('') +
-      '</select>' +
-    '</label>' +
-    '<div id="devVibModeNote" style="opacity:0.45;font-size:10px;"></div>' +
     '<label style="display:flex;align-items:center;gap:7px;margin:9px 0 2px;cursor:pointer;">' +
       '<input type="checkbox" id="devStrong" checked style="margin:0">' +
       '<span>Strong products</span>' +

@@ -959,7 +959,10 @@ That is the entire separation between Low and High, and it is why no
 #### Bond storage: three ways, on one dev control
 
 The stack above is a modelling **choice**, and the other two choices are worth
-being able to see beside it. Dev panel, in **ACTIVE**, as `vibMode`:
+being able to see beside it. Dev panel, first control in **ACTIVE** and so
+first in the panel, as `vibMode` — it is there because it changes what the sim
+is *modelling*, not how the model is tuned, so every dial below it is read
+against where this one sits:
 
 | setting | stacks? | colour ramp | bar chart | breaks on |
 |---|---|---|---|---|
@@ -4103,12 +4106,12 @@ gold above a gold rule, holding the handful still being turned:
 
 | control | why it is here |
 |---|---|
+| Bond storage | **first in the panel.** Whether hits stack at all, and whether the colour says so |
 | Attractive reach | how far out the pull acts — visible, not faster |
 | View zoom | the camera — see **The camera** |
 | H₂ / O₂ / He / CH₄ molecules | density, which is the clock on the whole run |
 | Shell drift, Drift speed, Shell shake | the only motion in a resting atom |
 | Bond pair glow | lifting a shared pair clear of its own field lobe |
-| Bond storage | whether hits stack at all, and whether the colour says so |
 | New bond stays pink | the join flash, below |
 | Last reactants go easier | the kinetic nudge, below |
 | Collision scatter, Speed wander, Drift damping | what stops the gas moving as one shoal |
