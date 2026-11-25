@@ -4838,6 +4838,77 @@ watch the curve appear rather than the picture being replaced.
 
 `activationGuess` is the dev slider on where that line sits.
 
+### The asteroids box
+
+`toroidWorld`, a dev checkbox in ACTIVE: off the right edge and on at the left.
+A torus has no walls, which changes two things about the physics and one about
+the picture.
+
+**Collisions take the shortest way round.** A molecule at x=10 and one at
+x=w−10 are 20 apart, not w−20. Both places that measure a distance between two
+bodies needed exactly one line for it, because both already compute a single
+centre-to-centre delta and work from that: `collidePair`'s `cdx/cdy` and
+`stepRecombination`'s site delta. `wrapDelta` is the whole of minimum-image
+here.
+
+**A join across the seam had to be unwrapped first.** The new molecule goes at
+the mass-weighted average of the two, and the average of 5 and w−5 is the middle
+of the box — the opposite side of the world from where the join is happening.
+So `joinBodies` takes the copy of `b` nearest `a`, measures everything from
+that, and wraps the finished molecule back.
+
+**A molecule on a seam is drawn on both sides.** `bodyGhosts` returns the copies
+of the box a body reaches into — always just `(0,0)` with walls, or off the
+torus — and the atoms, the shells, the electrons, the nucleons and the field
+lobes are all drawn once per copy. The ghosts join the *same* layer-sorted list,
+so a carbon's ghost still comes out above an oxygen's. Measured with a molecule
+parked 2 px from the right seam: luminance **221 on the right and 141 on the
+left** in the asteroids box, against **221 and 5** with walls.
+
+#### With no walls, nothing removes the drift
+
+This is the part worth knowing before switching it on. **Walls are external** —
+they flip momentum, and that is the only thing in the sim that ever removed a
+net drift. Collisions conserve it exactly. So a gas with any net momentum keeps
+it forever and the whole scene slides across the box together.
+
+Measured over 60 s at High, net momentum as a share of summed |momentum| (the
+random floor at 6 bodies is 0.408):
+
+| | net drift |
+|---|---|
+| walls, damping on | 0.427 — at the floor |
+| **asteroids, damping off** | **0.994** — the entire gas moving as one |
+| asteroids, damping on | **0.027** |
+
+So the thing that answers it already existed: `dedriftWorld` pulls the net
+momentum towards zero and hands its energy straight back as speed, and
+`collisionScatter` is the stochastic half that keeps the pieces from
+re-correlating. Together they take it to **0.027**, further below the random
+floor than the walled box manages, because there are no walls re-injecting
+momentum for them to fight. Nothing new was needed and nothing random was
+invented: a conserved quantity is removed exactly, which is why `totalKJ` drift
+stays **0** in the asteroids box too.
+
+#### The replay moves the world, not the camera
+
+A box with no edges can be slid anywhere without changing anything about it. So
+on the torus the clip is **shifted to put the moment in the middle of the box**
+and the camera sits at the centre, rather than being pinned near a seam it would
+then be looking over. Measured: the followed atom lands **0 px** off centre at
+the moment, and the close-up's viewport is 653×282 inside a 1241×536 box,
+spanning 294 to 947 — clear of both seams, so nothing is cut off.
+
+The shift is applied to throwaway copies at draw time, so the ring buffer the
+clip was built from is never touched.
+
+Also: the collision pass can nudge a body a pixel back over an edge after the
+move wrapped it — measured 5 times in a 60 s run. It is wrapped again after the
+pass, which takes that to 0.
+
+Both reactions still complete in the asteroids box (water 13 s) with `totalKJ`
+drift exactly 0.
+
 ### What it opens on
 
 Four defaults moved together, and they are a set: the sim opens on

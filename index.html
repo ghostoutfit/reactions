@@ -1807,14 +1807,19 @@ function bondSegments() {
     // two, so a hit shows immediately and a bond that has been worked on stays
     // coloured between hits.
     const load = Math.min(1, Math.max(b.flare, vibLoad(b)));
-    const at = bodyAtoms(b);
-    for (const bd of b.bonds) {
-      const [i, k] = bd;
-      segs.push({
-        x1: at[i].x, y1: at[i].y, x2: at[k].x, y2: at[k].y,
-        mag: bondEnergyOf(b, bd) / BOND_ENERGY_MAX * bright,
-        squeeze, load,
-      });
+    // One copy per box the molecule shows up in, so a bond on the seam glows on
+    // both sides exactly as its atoms are drawn on both sides. A copy that
+    // lands outside the buffer is clipped there and costs nothing.
+    for (const [gx, gy] of bodyGhosts(b)) {
+      const at = bodyAtoms(b, gx, gy);
+      for (const bd of b.bonds) {
+        const [i, k] = bd;
+        segs.push({
+          x1: at[i].x, y1: at[i].y, x2: at[k].x, y2: at[k].y,
+          mag: bondEnergyOf(b, bd) / BOND_ENERGY_MAX * bright,
+          squeeze, load,
+        });
+      }
     }
   }
   return segs;
@@ -2029,7 +2034,8 @@ function drawSpaceFilling() {
   // Nuclei first: the sphere layer lands on top of them, so what shows through
   // is exactly 1 - sphereOpacity of each. That is the "slightly visible" part.
   for (const b of world.bodies)
-    for (const p of bodyAtoms(b)) drawNucleus(ctx, p.x, p.y);
+    for (const [gx, gy] of bodyGhosts(b))
+      for (const p of bodyAtoms(b, gx, gy)) drawNucleus(ctx, p.x, p.y);
 
   if (_sphereLayer.width !== canvas.width || _sphereLayer.height !== canvas.height) {
     _sphereLayer.width = canvas.width; _sphereLayer.height = canvas.height;
@@ -2038,8 +2044,10 @@ function drawSpaceFilling() {
   _sphereCtx.clearRect(0, 0, _sphereLayer.width, _sphereLayer.height);
   _sphereCtx.setTransform(ctx.getTransform());     // match the world's transform
   const runsFor = [];
-  for (const b of world.bodies) {
-    const atoms = bodyAtoms(b);
+  const ghosted = world.bodies.flatMap(b =>
+    bodyGhosts(b).map(([gx, gy]) => ({ b, gx, gy })));
+  for (const { b, gx, gy } of ghosted) {
+    const atoms = bodyAtoms(b, gx, gy);
     const circles = atomCircles(atoms);
     const runs = silhouetteRuns(circles);
     runsFor.push(runs);
@@ -2689,9 +2697,38 @@ function logAction(msg) {
 // Molecules are rigid bodies: they translate, spin, and bounce elastically off
 // one another and off the four walls.
 //
-// (This was a wrap-around "asteroids" box until walls replaced it. The wrap
-// helpers it needed — wrapDelta for minimum-image collisions, wrapOffsets for
-// drawing a body on both sides of an edge — are gone; git has them.)
+// (This was a wrap-around "asteroids" box until walls replaced it, and the wrap
+// is BACK as a dev toggle — see `toroidWorld`. The two ideas live side by side
+// now rather than one having replaced the other.)
+
+// ─── THE ASTEROIDS BOX ───────────────────────────────────────────────────────
+//
+// Off the right edge and on at the left. A torus has no walls, which changes
+// two things about the physics and one about the picture:
+//
+//   COLLISIONS need the MINIMUM IMAGE — the shortest of the nine copies of the
+//   separation, because a molecule at x=10 and one at x=w-10 are 20 apart, not
+//   w-20. Both places that measure a distance between two bodies take one line
+//   for it, because both already compute a single centre-to-centre delta and
+//   work from that.
+//
+//   MOMENTUM IS NOW CONSERVED. Walls are external: they flip momentum, and that
+//   is the only thing in the sim that ever removed a net drift. Without them a
+//   gas that starts with any net momentum keeps it forever and the whole scene
+//   slides. `dedriftWorld` already existed for a related reason and is what
+//   answers this — see the note there.
+//
+//   A MOLECULE CAN STRADDLE AN EDGE, and half of it has to be drawn on the
+//   other side or it looks like it is being eaten.
+let toroidWorld = false;
+
+// The shortest signed delta across a periodic axis.
+function wrapDelta(d, span) {
+  if (!toroidWorld || !(span > 0)) return d;
+  if (d >  span / 2) return d - span;
+  if (d < -span / 2) return d + span;
+  return d;
+}
 // 'shells'  — a band at each occupied shell radius, the electrons as dots on it
 // 'space'   — space-filling
 //
@@ -2982,6 +3019,26 @@ function makeBody(els, x, y, heading, speed, spin, nominal = speed) {
 // makeBody returns before the bonds list exists on the object it is building,
 // so the valence shell is attached here, once the body is complete.
 function withElectrons(b) { buildElectrons(b); return b; }
+
+// THE COPIES OF THE BOX A BODY SHOWS UP IN. On the torus a molecule sitting on
+// an edge is half outside the box, and the half that is outside belongs on the
+// other side — otherwise it looks like it is being eaten. Returns the offsets
+// to draw it at, always including (0,0), and only ever more than one for a body
+// close enough to an edge to cross it.
+const NO_GHOSTS = [[0, 0]];
+function bodyGhosts(b) {
+  if (!toroidWorld) return NO_GHOSTS;
+  const r = b.radius + ATOM_RADIUS;      // a little slack for halos and lobes
+  const xs = [0], ys = [0];
+  if (b.x - r < 0)       xs.push(world.w);
+  if (b.x + r > world.w) xs.push(-world.w);
+  if (b.y - r < 0)       ys.push(world.h);
+  if (b.y + r > world.h) ys.push(-world.h);
+  if (xs.length === 1 && ys.length === 1) return NO_GHOSTS;
+  const out = [];
+  for (const x of xs) for (const y of ys) out.push([x, y]);
+  return out;
+}
 
 function bodyAtoms(b, dx = 0, dy = 0) {
   const ca = Math.cos(b.angle), sa = Math.sin(b.angle);
@@ -3359,7 +3416,13 @@ function stepWorld(dt) {
       b.form = Math.max(0, b.form - dt / Math.max(0.01, b.formSec));
       applyForm(b);
     }
-    collideWalls(b);
+    if (toroidWorld) {
+      // Nothing to bounce off: the box is its own neighbour on all four sides.
+      b.x = ((b.x % world.w) + world.w) % world.w;
+      b.y = ((b.y % world.h) + world.h) % world.h;
+    } else {
+      collideWalls(b);
+    }
     // Strong water's flash is a FLASH. An ordinary bond's flare fades
     // exponentially, which is right when the colour is also reporting the
     // energy the bond took in — the two tail off together. A strong water took
@@ -3413,6 +3476,14 @@ function stepWorld(dt) {
   // Anything the collisions pulled apart is replaced here, after the pass —
   // never inside it, where splicing world.bodies would shift the loop's indices
   // out from under it and let a pair be missed or tested twice.
+  // The collision pass can push a body a pixel or two back over an edge after
+  // the move wrapped it. Measured, 5 times in a 60 s run — rare, harmless for a
+  // frame, and free to tidy here.
+  if (toroidWorld) for (const b of world.bodies) {
+    b.x = ((b.x % world.w) + world.w) % world.w;
+    b.y = ((b.y % world.h) + world.h) % world.h;
+  }
+
   stepDissociation();
   // And the other direction: atoms that have found each other again. After the
   // dissociation pass, for the same reason — it splices world.bodies too.
@@ -3593,7 +3664,9 @@ function collideWalls(b) {
 }
 
 function collidePair(A, B) {
-  const cdx = B.x - A.x, cdy = B.y - A.y;
+  // The whole pair is measured from this one delta, so wrapping it here is the
+  // whole of minimum-image collision on the torus.
+  const cdx = wrapDelta(B.x - A.x, world.w), cdy = wrapDelta(B.y - A.y, world.h);
   if (Math.hypot(cdx, cdy) > A.radius + B.radius) return;   // broad phase
 
   const ca = Math.cos(A.angle), sa = Math.sin(A.angle);
@@ -4970,20 +5043,28 @@ function joinBodies(a, b, els) {
   const M = a.mass + b.mass;
   const cvx = (a.mass * a.vx + b.mass * b.vx) / M;
   const cvy = (a.mass * a.vy + b.mass * b.vy) / M;
-  const cx  = (a.mass * a.x  + b.mass * b.x)  / M;
-  const cy  = (a.mass * a.y  + b.mass * b.y)  / M;
+  // UNWRAPPED FIRST, on the torus. A pair meeting across the seam has one body
+  // at x=5 and the other at x=w-5, and the mass-weighted average of those two
+  // numbers is the middle of the box — the opposite side of the world from
+  // where the join is actually happening. So b is taken at the copy of itself
+  // that is nearest a, every position below is measured from that, and the
+  // finished molecule is wrapped back at the end.
+  const bx = a.x + wrapDelta(b.x - a.x, world.w);
+  const by = a.y + wrapDelta(b.y - a.y, world.h);
+  const cx  = (a.mass * a.x  + b.mass * bx) / M;
+  const cy  = (a.mass * a.y  + b.mass * by) / M;
 
   const nb = withElectrons(makeBody(els, cx, cy, 0, 0, 0, speciesSpeed(els)));
   nb.vx = cvx; nb.vy = cvy;
 
   // Put it where its atoms already are, and let the rest of the way be animated.
   const src = [];
-  for (const s of [a, b]) {
+  for (const [s, sx, sy] of [[a, a.x, a.y], [b, bx, by]]) {
     const sc = Math.cos(s.angle), ss = Math.sin(s.angle);
     for (const at of s.atoms) {
       src.push({ el: at.el, uid: at.uid,
-                 x: s.x + at.lx * sc - at.ly * ss,
-                 y: s.y + at.lx * ss + at.ly * sc });
+                 x: sx + at.lx * sc - at.ly * ss,
+                 y: sy + at.lx * ss + at.ly * sc });
     }
   }
   const fit = bestPlacement(nb, src);
@@ -5065,6 +5146,11 @@ function joinBodies(a, b, els) {
   nb.flare = Math.max(a.flare, b.flare, 1);     // it lights up as it forms
   nb.flash = joinFlashSec;                      // ...and STAYS lit, long enough to see
 
+  if (toroidWorld) {
+    nb.x = ((nb.x % world.w) + world.w) % world.w;
+    nb.y = ((nb.y % world.h) + world.h) % world.h;
+  }
+
   world.bodies.splice(Math.max(ia, ib), 1);
   world.bodies.splice(Math.min(ia, ib), 1, nb);
   joinCount++;
@@ -5110,7 +5196,7 @@ function stepRecombination(dt) {
       const [x1, y1] = siteWorldPos(B[i], si);
       const [x2, y2] = siteWorldPos(B[k], sk);
       const touch = B[i].atoms[si].r + B[k].atoms[sk].r;
-      let dx = x2 - x1, dy = y2 - y1;
+      let dx = wrapDelta(x2 - x1, world.w), dy = wrapDelta(y2 - y1, world.h);
       const d = Math.hypot(dx, dy) || 1e-6;
       // IT SEES IT COMING. The turn starts further out than the pull does, so a
       // molecule has time to come round gently instead of being asked to do the
@@ -5600,13 +5686,19 @@ function drawWorld() {
     // molecules those oxygens can belong to a different body than the carbon
     // does. `byLayer` is stable, so every atom that is not carbon stays in the
     // order it was already drawn in.
-    const P = byLayer(world.bodies.flatMap(b => bodyAtoms(b)));
+    //
+    // On the torus a body on an edge is drawn in every copy of the box it
+    // reaches into — see bodyGhosts — and the ghosts join the SAME sorted list,
+    // so a carbon's ghost still comes out above an oxygen's.
+    const P = byLayer(world.bodies.flatMap(b =>
+      bodyGhosts(b).flatMap(([gx, gy]) => bodyAtoms(b, gx, gy))));
     for (const p of P) {
       drawAtomBody(ctx, p.x, p.y, p.el, valenceRadius(p.el));
       drawAtomShells(ctx, p);
     }
     for (const p of P) drawInnerElectrons(ctx, p);
-    for (const b of world.bodies) drawElectronsAsDots(b);
+    for (const b of world.bodies)
+      for (const [gx, gy] of bodyGhosts(b)) drawElectronsAsDots(b, ctx, gx, gy);
     for (const p of P) drawNucleons(ctx, p.x, p.y, p.el, shellWobble, WORLD_NUCLEON_R);
   }
 
@@ -5749,7 +5841,7 @@ function drawInnerElectrons(c, p) {
   }
 }
 
-function drawElectronsAsDots(b, dc = ctx) {
+function drawElectronsAsDots(b, dc = ctx, gx = 0, gy = 0) {
   if (!b.electrons) return;
   const ca = Math.cos(b.angle), sa = Math.sin(b.angle);
   for (const e of b.electrons) {
@@ -5789,7 +5881,7 @@ function drawElectronsAsDots(b, dc = ctx) {
       lx = at.lx + r * Math.cos(ang) + wx;
       ly = at.ly + r * Math.sin(ang) + wy;
     }
-    drawElectronDot(dc, b.x + lx * ca - ly * sa, b.y + lx * sa + ly * ca,
+    drawElectronDot(dc, b.x + gx + lx * ca - ly * sa, b.y + gy + lx * sa + ly * ca,
                     elemEInk(e.el), false, SHELL_DOT_R,
                     e.kind === 'bond' ? bondDotGain : 1);
   }
@@ -6737,7 +6829,18 @@ function startReplay(frames, eventAt) {
   // replayCamAt. Falls back to the last frame if the moment is somehow not in
   // the clip, which cannot happen while the post-roll is what builds it.
   const at = frames.find(f => f.t >= eventAt) || frames[frames.length - 1];
-  replay.clip = { frames: frames.slice(), eventAt, at: { x: at.cam.x, y: at.cam.y } };
+  // ON THE TORUS, MOVE THE WORLD RATHER THAN THE CAMERA. A box with no edges
+  // can be slid anywhere without changing anything about it, so the clip is
+  // shifted to put the moment in the middle of the box. The close-up then sits
+  // in the middle of a box it is entirely inside, and nothing is cut off at a
+  // seam the camera happens to be looking over — which is the one thing a
+  // pinned camera near an edge cannot avoid when the edges are real.
+  const shift = toroidWorld
+    ? { x: world.w / 2 - at.cam.x, y: world.h / 2 - at.cam.y }
+    : null;
+  replay.clip = { frames: frames.slice(), eventAt, shift,
+                  at: shift ? { x: world.w / 2, y: world.h / 2 }
+                            : { x: at.cam.x, y: at.cam.y } };
   // KEPT, ALL OF THEM, so the run can be played back as a reel. Bounded, because
   // a long run at High is a lot of frames and each one holds every body in the
   // world; the oldest goes first, which is also the order you would stop caring.
@@ -6864,6 +6967,18 @@ function tweenBodies(A, B, u) {
   return out;
 }
 
+// Slide a recorded frame round the torus. The copies are shallow — only the
+// position moves — and they are thrown away with the frame, so the ring buffer
+// the clip was built from is never touched.
+function shiftBodies(list, shift) {
+  return list.map(b => {
+    const c = Object.assign({}, b);
+    c.x = ((b.x + shift.x) % world.w + world.w) % world.w;
+    c.y = ((b.y + shift.y) % world.h + world.h) % world.h;
+    return c;
+  });
+}
+
 function stepReplay(dtWall) {
   const clip = replay.clip;
   if (!clip) { stopReplay(); return; }
@@ -6894,7 +7009,9 @@ function stepReplay(dtWall) {
   if (b !== a && b.t > a.t) u = Math.max(0, Math.min(1, (replay.clock - a.t) / (b.t - a.t)));
 
   const live = world.bodies;
-  world.bodies = u > 0 ? tweenBodies(a.bodies, b.bodies, u) : a.bodies;
+  let shown = u > 0 ? tweenBodies(a.bodies, b.bodies, u) : a.bodies;
+  if (clip.shift) shown = shiftBodies(shown, clip.shift);
+  world.bodies = shown;
   // Recomputed each frame but from the SAME point, so the shot is still and
   // the clamp still answers to the zoom slider while a clip is looping.
   replayCam = replayCamAt(clip.at);
@@ -7878,6 +7995,15 @@ replayOnBox.addEventListener('change', () => {
       'another moment may interrupt. The button ignores it</div>' +
     row('devFollowGlow', 'Followed: glow',     0, 2,    0.05, followGlow,   '#ffd84d') +
     '<label style="display:flex;align-items:center;gap:7px;margin:9px 0 2px;cursor:pointer;">' +
+      '<input type="checkbox" id="devToroid" style="margin:0">' +
+      '<span>Asteroids box (no walls)</span>' +
+    '</label>' +
+    '<div style="opacity:0.45;font-size:10px;margin-left:21px;">off the right ' +
+      'edge and on at the left. Collisions take the shortest way round and a ' +
+      'molecule on a seam is drawn on both sides. With no walls to flip it, net ' +
+      'momentum is conserved \u2014 DRIFT DAMPING is what stops the whole gas ' +
+      'sliding</div>' +
+    '<label style="display:flex;align-items:center;gap:7px;margin:9px 0 2px;cursor:pointer;">' +
       '<input type="checkbox" id="devMotionSpan" style="margin:0">' +
       '<span>Motion line spans speeds</span>' +
     '</label>' +
@@ -8225,6 +8351,14 @@ replayOnBox.addEventListener('change', () => {
   bind('devActivation', v => activationGuess = v, false, v => v.toFixed(2) + '\u00d7');
   bind('devFollowGlow', v => followGlow = v, false,
        v => v > 0 ? Math.round(v * 100) + '%' : 'off');
+  const toroidCb = panel.querySelector('#devToroid');
+  toroidCb.checked = toroidWorld;
+  toroidCb.addEventListener('change', () => {
+    toroidWorld = toroidCb.checked;
+    // Anything sitting in a wall when the walls go away is simply inside the
+    // box now, so nothing has to be moved; wrapping happens on the next step.
+    logAction('Asteroids box ' + (toroidWorld ? 'on' : 'off'));
+  });
   const spanCb = panel.querySelector('#devMotionSpan');
   spanCb.checked = motionAxisSpansSpeeds;
   spanCb.addEventListener('change', () => { motionAxisSpansSpeeds = spanCb.checked; });
