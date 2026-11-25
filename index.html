@@ -1569,20 +1569,27 @@ function setFieldRamp(name) {
 let BOND_FIELD_WIDTH = 0.22;   // own copy of FIELD_WIDTH
 let BOND_FIELD_GAIN  = 0.90;   // own copy of FIELD_GAIN
 
-// THE SANDBOX'S FREE-PAIR LOBE IS MUCH NARROWER THAN A BOND'S. A lobe's width
-// is a fraction of its own LENGTH, which is right for a bond — they are all
-// about one bond long — and wrong for a pair that can be the width of the tab
-// apart and would paint a blob to match. At the bond's own 0.22 even six loose
-// atoms came out as one saturated pink mass filling the space between them:
-// every pair was in there and not one of them could be told apart. Narrow,
-// each pair is a RIBBON from one atom to the other, so fifteen pairs read as
-// fifteen, and the brightest places are where several overlap — which is also
-// the truth about where the energy is.
+// THE SANDBOX'S FREE-PAIR LOBE, as a share of the gap it spans. A bond's 0.22
+// is right for a bond, because bonds are all about one bond long; a free pair
+// can be the width of the tab apart and paints a blob to match.
+//
+// 0.125 is the width asked for and it is a real trade, not a tuning preference:
+//
+//   WIDE is right for ONE pair. Two loose atoms get the big generous glow One
+//   Bond shows at the end of its drag, which is the same claim about the same
+//   energy and should look the same.
+//   NARROW is the only way MANY pairs stay legible. Fifteen wide lobes sum and
+//   clamp into one saturated sheet filling the hull of the atoms — every pair
+//   is in there and not one can be told apart. At 0.03 each pair is a ribbon
+//   and fifteen read as fifteen.
+//
+// There is no setting that does both: it is geometry, not a bug. `devFreeWidth`
+// is in ACTIVE to move between the two readings.
 //
 // It lives up here, away from the Sandbox code that uses it, because the dev
 // panel builds itself before that section runs and reading a `let` early is a
 // ReferenceError, not an undefined. See `sbFreeFieldSegs`.
-let sbFreeWidth = 0.03;
+let sbFreeWidth = 0.125;
 const BOND_COLORMAP  = new Uint8Array(LOAD_BINS * 256 * 4);
 
 // A different taper of opacity, and the reason this is separate at all.
@@ -10546,12 +10553,12 @@ function sbTotalEnergy() {
 // chain and quietly said the other pairs did not exist.
 //
 // It costs n(n-1)/2 lobes, the only pass here whose work grows as the square
-// of the scene, and each lobe is as wide as the gap it spans — so with the
-// ordinary field resolution a dozen loose atoms would be rasterising most of
-// the canvas sixty-odd times a frame. SB_FREE_SCALE is the answer: this field
-// is a handful of enormous soft blobs with no detail in them anywhere, so it
-// is rendered at a twelfth of a pixel per pixel and the upscale is free. See
-// `opts.scale` in drawFieldHeatmap.
+// of the scene, and each lobe is as wide as the gap it spans — so at the
+// ordinary field resolution a dozen loose atoms would rasterise most of the
+// canvas sixty-odd times a frame. `sbFreeScale` is the answer: this field has
+// no fine detail in it anywhere, so it gets a buffer of its own at a fraction
+// of a pixel per pixel and the upscale is free. See `opts.scale` in
+// drawFieldHeatmap, the only caller that passes it.
 //
 // AN ATOM IN A MOLECULE IS NOT IN THIS. Its field is drawn where its bonds
 // are, relative to the atoms it is bonded to, because that is what its energy
@@ -10560,15 +10567,29 @@ function sbTotalEnergy() {
 // Off by default: the tab opens as the scene you built, and this is the extra
 // reading rather than the first one.
 let sbFreeFields = false;
-// Field pixels per canvas pixel for this pass. Higher than you would expect
-// for a pass that can draw 171 lobes, and affordable for exactly the reason
-// they are narrow: almost every pixel in a ribbon's bounding box fails the
-// perpendicular cull immediately. Measured at 171 pairs: 0.7 ms at 0.085,
-// 3.7 at 0.25, 8.5 at 0.4 — against 17 ms for the WIDE lobes at 0.085. A
-// ribbon is thin, so it is the one thing here that actually needs the pixels:
-// at 0.085 a 10 px sigma came out under a buffer pixel across and the ribbons
-// drew dashed.
-const SB_FREE_SCALE = 0.28;
+// Field pixels per canvas pixel for this pass, DERIVED FROM THE WIDTH rather
+// than fixed, because the two pull in opposite directions and the slider has
+// to stay usable across its whole range:
+//
+//   A NARROW ribbon needs pixels. At 0.085 a 10 px sigma fell under one buffer
+//   pixel across and the ribbons drew dashed.
+//   A WIDE lobe needs none — there is no detail in it anywhere — and cannot
+//   afford them: it covers far more of the buffer, and the cost of this pass
+//   is already the only one here that grows as the SQUARE of the scene.
+//   Measured at 171 pairs, 0.03 wide cost 22 ms a frame and 0.125 wide cost
+//   65 ms, at one fixed resolution.
+//
+// Holding `scale x width` constant keeps a lobe about the same number of
+// buffer pixels across whatever the width is. That does not make the cost
+// flat — a narrow ribbon still has a bounding box to walk, and measured at
+// 171 pairs the range runs 26 / 13.6 / 8.3 / 5.9 ms at widths 0.03 / 0.07 /
+// 0.125 / 0.22 — but it stops the wide end running away: 0.125 was 65 ms at
+// the fixed resolution and is 8.3 here. The constant is the pair those two
+// numbers were first fitted to, 0.28 x 0.03.
+const SB_FREE_DETAIL = 0.0084;
+function sbFreeScale() {
+  return Math.max(0.03, Math.min(0.4, SB_FREE_DETAIL / Math.max(0.005, sbFreeWidth)));
+}
 
 // The lobe is narrower than a bond's — `sbFreeWidth`, declared up with the
 // other field tuning because the dev panel reads it before this line runs.
@@ -10828,7 +10849,7 @@ function drawSandbox() {
   const A = sandbox.atoms;
 
   // The free-atom field goes down FIRST and in a pass of its own, at its own
-  // much lower resolution (see SB_FREE_SCALE). Its own pass because one buffer
+  // much lower resolution (see sbFreeScale). Its own pass because one buffer
   // cannot be two resolutions, and first because the bonds are the detail: a
   // bond lobe is a few tens of pixels across and has to stay crisp on top of
   // whatever wash is behind it.
@@ -10836,7 +10857,7 @@ function drawSandbox() {
     const free = sbFreeFieldSegs();
     if (free.length) {
       drawFieldHeatmap(ctx, free, W, H, { width: sbFreeWidth,
-        gain: BOND_FIELD_GAIN, colormap: BOND_COLORMAP, scale: SB_FREE_SCALE });
+        gain: BOND_FIELD_GAIN, colormap: BOND_COLORMAP, scale: sbFreeScale() });
     }
   }
 

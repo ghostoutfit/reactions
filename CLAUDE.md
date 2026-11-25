@@ -5392,25 +5392,29 @@ pairs did not exist.
 
 Two things make all-pairs work, and it does not work without either:
 
-- **A much narrower lobe.** A lobe's width is a fraction of its own LENGTH,
-  which is right for a bond — they are all about one bond long — and wrong for
-  a pair that can be the width of the tab apart. At the bond's own `0.22` even
-  six loose atoms came out as one saturated pink mass: every pair was in there
-  and not one could be told apart. At `sbFreeWidth = 0.03` each pair is a
-  ribbon and fifteen pairs read as fifteen.
+- **A width of its own.** A lobe's width is a fraction of its own LENGTH,
+  which is right for a bond — bonds are all about one bond long — and wrong for
+  a pair that can be the width of the tab apart. `sbFreeWidth` ships at
+  **0.125**, a little over half a bond's 0.22.
 - **Its own pass, at its own resolution.** `opts.scale` in `drawFieldHeatmap`
-  exists for this one caller. Narrow ribbons are *cheap* — almost every pixel
-  in a ribbon's bounding box fails the perpendicular cull at once — so the
-  resolution can go UP rather than down: 171 pairs cost 0.7 ms at 0.085, 3.7 at
-  0.25, 8.5 at 0.4, against **17 ms** for the wide lobes at 0.085. It ships at
-  **0.28**, because a thin ribbon is the one thing here that needs the pixels:
-  at 0.085 a 10 px sigma fell under one buffer pixel and the ribbons drew
-  dashed.
+  exists for this one caller, and `sbFreeScale()` *derives* it from the width
+  instead of fixing it, because the two pull opposite ways. A narrow ribbon
+  needs pixels: at 0.085 a 10 px sigma fell under one buffer pixel across and
+  the ribbons drew dashed. A wide lobe needs none and cannot afford them: it
+  covers far more of the buffer, in the one pass here whose work grows as the
+  **square** of the scene. Holding `scale x width` constant does not flatten
+  the cost — measured at 171 pairs it runs 26 / 13.6 / 8.3 / 5.9 ms at widths
+  0.03 / 0.07 / 0.125 / 0.22 — but it stops the wide end running away: 0.125
+  was **65 ms** at a fixed resolution and is **8.3** derived.
 
-With two atoms it is One Bond's picture exactly. With six it is a complete
-graph in pink. With nineteen (171 pairs, 6.2 ms) it saturates into a sheet —
-which is what every pair at maximum sums to, and is the honest answer rather
-than a bug. `devFreeWidth` is in ACTIVE for tuning that.
+**Wide and legible is a real trade, not a tuning preference.** Wide is right
+for ONE pair: two loose atoms get the big generous glow One Bond shows at the
+end of its drag, which is the same claim about the same energy and should look
+the same. Narrow is the only way MANY pairs stay legible: at 0.03 six atoms
+read as fifteen distinct ribbons — a complete graph in pink — and at 0.125 the
+same six sum and clamp into one saturated sheet filling their hull. No setting
+does both; it is geometry. `devFreeWidth` is in ACTIVE to move between the two
+readings.
 
 An atom **inside a molecule is not in this**. Its field is drawn where its
 bonds are, relative to the atoms it is bonded to, because that is what its
