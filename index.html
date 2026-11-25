@@ -623,6 +623,19 @@
     letter-spacing: 0.02em;
     line-height: 1.3;
   }
+  /* Same fixed width as the graph toggle beside it, and the same two lines, so
+     the pair is one block that cannot resize whichever state either is in. */
+  #replayBtn {
+    flex: 0 0 auto;
+    width: 96px;
+    font-size: 12px;
+    letter-spacing: 0.5px;
+    padding: 6px 4px;
+    display: none;
+  }
+  #replayBtn.visible { display: block; }
+  #replayBtn:disabled { opacity: 0.35; cursor: default; }
+  #replayBtn.looping { box-shadow: 0 0 0 1px rgba(255,216,77,0.8), 0 0 10px rgba(255,216,77,0.5); }
   #energyGraphToggle {
     border: 1px solid var(--accent2);
     border-radius: 8px;
@@ -970,6 +983,7 @@
         <div id="energyPctNote">Motion and fields, relative to the energy at the start</div>
       </div>
       <div id="energyBarButtons">
+        <button id="replayBtn" class="btn">REPLAY<br>AGAIN</button>
         <button id="energyGraphToggle" class="btn">HIDE LINE<br>GRAPH</button>
         <img src="images/logo-placeholder.png" alt="logo" style="height:60px;width:auto;opacity:0;display:block;border-radius:4px;flex-shrink:0;">
       </div>
@@ -1811,7 +1825,7 @@ function drawFieldHeatmap(destCtx, segsIn, boxW, boxH, opts) {
   // zoomed-out world would allocate a buffer four times the area to be blitted
   // down into the same strip of screen — paying for resolution the display
   // cannot show.
-  const scale = (FIELD_SCALE[_quality] || 0.2) * (boxW ? 1 : sceneZoom);
+  const scale = (FIELD_SCALE[_quality] || 0.2) * (boxW ? 1 : drawZoom());
   const w = Math.max(1, Math.ceil((boxW || world.w) * scale));
   const h = Math.max(1, Math.ceil((boxH || world.h) * scale));
   ensureFieldBuffers(w, h);
@@ -2580,13 +2594,13 @@ const SPECIES = {
 // `sceneZoom` 0.5 gave the box four times the area. See `productBondTarget`:
 // the progress graph's target is derived from the amount rather than written
 // down beside it, because two numbers that have to agree eventually do not.
-let reactantAmount = 7;
+let reactantAmount = 3;
 const REACTANT_AMOUNT_MAX = 8;
 // The per-species dev dials still exist underneath, and they can make a world
 // the amount slider never would — an unbalanced one, on purpose. Their ceiling
 // is the most any balanced world needs: 8 units of water is 16 H2.
 const COMPOSITION_MAX = REACTANT_AMOUNT_MAX * 2;
-const COMPOSITION_DEFAULT = { H2: 2 * 7, O2: 1 * 7, He: 0, CH4: 0 };
+const COMPOSITION_DEFAULT = { H2: 2 * 3, O2: 1 * 3, He: 0, CH4: 0 };
 const composition = { ...COMPOSITION_DEFAULT };
 
 // ─── Reactions ────────────────────────────────────────────────────────────────
@@ -3154,6 +3168,7 @@ function spawnWorld() {
   // goes back to the reaction's own graph rather than silently following
   // whatever happens to be handed the same uid later.
   followUid = 0;
+  forgetReplay();
   world.bodies = [];
   world.breaking.length = 0;
   world.time = 0;
@@ -5446,7 +5461,7 @@ function drawWalls() {
   ctx.strokeStyle = LIGHT ? 'rgba(0,0,0,0.22)' : 'rgba(150,190,255,0.16)';
   // One SCREEN pixel. The scene is drawn through the zoom, so a lineWidth of 1
   // would come out at the zoom's width — a hairline that dithers in and out.
-  ctx.lineWidth = 1 / sceneZoom;
+  ctx.lineWidth = 1 / drawZoom();
   ctx.strokeRect(0.5, 0.5, world.w - 1, world.h - 1);
   ctx.restore();
 }
@@ -5460,7 +5475,26 @@ function drawWorld() {
   // screen px — it lines the box up with the toolbar — so it comes before the
   // zoom, and everything inside is a world length from here on.
   ctx.translate(0, world.top);
-  ctx.scale(sceneZoom, sceneZoom);
+  // THE REPLAY'S CLOSE-UP IS THE SAME CAMERA, MOVED. The ordinary view is a
+  // scale about the box's top-left; the replay is a scale about the followed
+  // atom, put in the middle of the visible band. Everything inside is a world
+  // length either way, so no drawing function below here knows which it is.
+  if (replayCam) {
+    const z = sceneZoom * replayZoom;
+    // CLIPPED TO THE BAND, which the ordinary view never needed: at the scene
+    // zoom everything is inside the walls by construction, and at the close-up
+    // the parts of the scene outside the viewport land on the toolbar and the
+    // bar panel. Set in screen pixels, before the zoom, because the band is a
+    // piece of the canvas and not a piece of the world.
+    ctx.beginPath();
+    ctx.rect(0, 0, sceneW(), world.h * sceneZoom);
+    ctx.clip();
+    ctx.translate(sceneW() / 2, (world.h * sceneZoom) / 2);
+    ctx.scale(z, z);
+    ctx.translate(-replayCam.x, -replayCam.y);
+  } else {
+    ctx.scale(sceneZoom, sceneZoom);
+  }
 
   drawWalls();
   if (document.getElementById('showFields').checked) drawFieldHeatmap(ctx);
@@ -5673,6 +5707,11 @@ function worldLoop(now) {
     return;
   }
 
+  // THE SIM HOLDS WHILE THE CLIP RUNS. Nothing steps, nothing is recorded, and
+  // the world is exactly where it was when the replay ends — the clip is a
+  // recording, so there is nothing for the physics to catch up on.
+  if (replay.playing) { stepReplay(rawDt); drawBarChart(); return; }
+
   stepTemperature(rawDt);
   if (running) {
     // Sub-step so fast molecules cannot pass through one another in one frame
@@ -5689,6 +5728,11 @@ function worldLoop(now) {
   stepElectrons(dt);
   shellPhase  += shellSpin * dt;
   shellWobble += dt;
+  // After the step, so a recorded frame is the world as it ended up, and
+  // before the draw, so the replay a moment triggers starts on the next frame
+  // rather than a frame late.
+  if (running) recordReplay(dt);
+  if (replay.playing) { stepReplay(0); drawBarChart(); return; }
   drawWorld();
   drawBarChart();
 }
@@ -5972,9 +6016,9 @@ function splineThrough(ctx, pts) {
 // and the marker JUMPS there the moment a bond forms or goes. There is nothing
 // in between to draw, because for one atom there is nothing in between: it is
 // bonded or it is not.
-let followOn    = false;   // the dev toggle
+let followOn    = true;    // the dev toggle — ships ON
 let followUid   = 0;       // which atom, by its own uid; 0 = none picked
-let followDim   = 0.62;    // how far the rest of the world is pushed back
+let followGlow  = 1;       // how brightly the followed atom is lit
 let followAxisKJ = 0;      // 0 = the whole per-atom axis — see atomAxisTop()
 
 function reactionsOn() { return !bondTab.on && !sandbox.on; }
@@ -6137,20 +6181,202 @@ function atomAxisTop() {
   return followAxisKJ > 0 ? followAxisKJ : atomAxisFullKJ;
 }
 
+// ─── THE REPLAY ──────────────────────────────────────────────────────────────
+//
+// The moment the followed atom joins something or comes apart from it is the
+// moment the whole feature is for, and at High it is over in two frames. So it
+// is taken again, slowly and close up, the way a game shows you the goal: the
+// sim holds, the clip runs at a quarter speed zoomed in on the atom, and then
+// everything carries straight on from where it was.
+//
+// IT IS A RECORDING, NOT A RE-SIMULATION. Nothing here can rewind the physics —
+// collisions are resolved in place and the scatter and the speed band both draw
+// random numbers — so a ring buffer of frames is kept while an atom is being
+// followed and the clip is played back out of it. Playback therefore cannot
+// disagree with what happened, because it IS what happened.
+//
+// A frame is a shallow clone of every body, with its atoms cloned too because
+// `applyForm` mutates their local coordinates while a bond closes. `els`,
+// `bonds` and `electrons` are shared rather than copied: the first two are
+// replaced wholesale when a body changes rather than edited, and the electrons
+// are a picture that may as well go on living. Recording only happens while an
+// atom is actually being followed, which is what keeps it free the rest of the
+// time.
+let replayOn       = true;    // the dev toggle
+let replayRate     = 0.25;    // how fast the clip runs, x real time
+let replayZoom     = 2.4;     // x the scene zoom, while it plays
+let replayCooldown = 2.5;     // s of play before another one may trigger
+const REPLAY_PRE  = 0.7;      // s of clip before the moment
+const REPLAY_POST = 0.35;     // ...and after it
+
+const replay = {
+  frames: [],       // the ring: { t, cam, bodies }
+  t: 0,             // the recording clock
+  eventAt: null,    // when the moment happened, while the post-roll is running
+  clip: null,       // what the button replays
+  playing: false,
+  clock: 0,
+  loop: false,      // the button's own mode: run it again and again
+  holdUntil: 0,     // no new replay before here — see the cooldown
+  partners: null,   // who the followed atom shared a body with last frame
+};
+
+// The camera during playback, in world coordinates, or null for the ordinary
+// view. Everything that draws a world length reads the zoom through
+// `drawZoom()`, so the close-up costs the renderer nothing.
+let replayCam = null;
+function drawZoom() { return replayCam ? sceneZoom * replayZoom : sceneZoom; }
+
+function replayFrameOf() {
+  const t = followTarget();
+  if (!t) return null;
+  return {
+    t: replay.t,
+    cam: { x: t.x, y: t.y },
+    bodies: world.bodies.map(b => {
+      const c = Object.assign({}, b);
+      c.atoms = b.atoms.map(a => Object.assign({}, a));
+      return c;
+    }),
+  };
+}
+
+// WHO THE ATOM IS IN A BODY WITH. Not who it is BONDED to: a water finishing
+// around an OH does not change that hydrogen's own bond at all, and "combines
+// with other atoms" plainly includes it. The body's membership catches a join,
+// a peel and a shatter with one test and no special cases.
+function replayPartnersOf(t) {
+  return t.body.atoms.map(a => a.uid).sort().join(',');
+}
+
+function recordReplay(dt) {
+  if (!replayOn || !followOn || replay.playing) { replay.partners = null; return; }
+  const t = followTarget();
+  if (!t) { replay.frames.length = 0; replay.partners = null; return; }
+
+  replay.t += dt;
+  const f = replayFrameOf();
+  if (f) replay.frames.push(f);
+  // Keep only what a clip can use. The post-roll needs the window to reach a
+  // little past the moment, so the ring is the whole clip long, not just PRE.
+  const keep = REPLAY_PRE + REPLAY_POST + 0.1;
+  while (replay.frames.length > 1 && replay.t - replay.frames[0].t > keep) {
+    replay.frames.shift();
+  }
+
+  const now = replayPartnersOf(t);
+  const was = replay.partners;
+  replay.partners = now;
+
+  // POST-ROLL. The moment is only half the clip; a replay that stops dead on
+  // the frame the bond changed shows you the approach and not the result.
+  if (replay.eventAt !== null) {
+    if (replay.t - replay.eventAt >= REPLAY_POST) {
+      const at = replay.eventAt;
+      replay.eventAt = null;
+      startReplay(replay.frames.filter(x => x.t >= at - REPLAY_PRE), at);
+    }
+    return;
+  }
+  if (was === null || now === was) return;
+  if (replay.t < replay.holdUntil) return;   // one moment at a time
+  replay.eventAt = replay.t;
+}
+
+function startReplay(frames, eventAt) {
+  if (!frames || frames.length < 2) return;
+  replay.clip = { frames: frames.slice(), eventAt };
+  replay.playing = true;
+  replay.clock = frames[0].t;
+  // The button is dead until there is something to replay, and this is the one
+  // moment that stops being true.
+  syncReplayBtn();
+}
+
+// The button, and the loop. Replaying by hand does not touch the cooldown —
+// that is there to stop the sim replaying itself every two seconds, and a
+// press is not the sim doing anything.
+function replayAgain() {
+  if (!replay.clip) return;
+  replay.playing = true;
+  replay.clock = replay.clip.frames[0].t;
+  syncReplayBtn();
+}
+
+// A CLIP BELONGS TO ONE ATOM IN ONE WORLD. Respawning, or picking a different
+// atom, leaves a clip full of bodies that no longer exist and a uid that is not
+// in any of them — which is not an empty replay, it is a replay of somebody
+// else, with the atom graph quietly falling back to the world's because the
+// atom it wants is nowhere in the frame. Measured exactly that before this
+// existed: a clip of uids 63-89 played against a world holding 227-281.
+function forgetReplay() {
+  replay.frames.length = 0;
+  replay.t = 0;
+  replay.eventAt = null;
+  replay.clip = null;
+  replay.playing = false;
+  replay.loop = false;
+  replay.holdUntil = 0;
+  replay.partners = null;
+  replayCam = null;
+  if (typeof syncReplayBtn === 'function') syncReplayBtn();
+}
+
+function stopReplay() {
+  replay.playing = false;
+  replay.loop = false;
+  replayCam = null;
+  replay.holdUntil = replay.t + replayCooldown;
+  syncReplayBtn();
+}
+
+// Where the camera should sit: on the atom, but kept inside the walls, because
+// a close-up that wanders off the box is mostly background.
+function replayCamAt(f) {
+  const z = sceneZoom * replayZoom;
+  const vw = sceneW() / z, vh = (world.h * sceneZoom) / z;
+  const clamp = (v, half, span) =>
+    span <= half * 2 ? span / 2 : Math.max(half, Math.min(span - half, v));
+  return { x: clamp(f.cam.x, vw / 2, world.w),
+           y: clamp(f.cam.y, vh / 2, world.h) };
+}
+
+function stepReplay(dtWall) {
+  const clip = replay.clip;
+  if (!clip) { stopReplay(); return; }
+  const frames = clip.frames;
+  const end = frames[frames.length - 1].t;
+  replay.clock += dtWall * Math.max(0.02, replayRate);
+  if (replay.clock > end) {
+    if (replay.loop) replay.clock = frames[0].t;
+    else { stopReplay(); return; }
+  }
+  // The nearest recorded frame, not an interpolated one: the bodies are whole
+  // objects with bonds and electrons, and there is no honest way to blend two
+  // of them across the frame a molecule stopped being two molecules.
+  let f = frames[0];
+  for (const g of frames) { if (g.t <= replay.clock) f = g; else break; }
+
+  const live = world.bodies;
+  world.bodies = f.bodies;
+  replayCam = replayCamAt(f);
+  drawWorld();
+  replayCam = null;
+  world.bodies = live;
+}
+
 // ── The atom's own graph ────────────────────────────────────────────────────
 function drawAtomGraph(t) {
   const body = t.body, i = t.i, el = body.atoms[i].el;
   const E    = atomFieldsKJ(body, i);
-  const KE   = atomMotionKJ(body, i);
   const p    = followProgress(t);
   const E0   = reactantLevelKJ(el);
   const E1   = productLevelKJ(el, body.els);
   const name = el + ' in ' + formulaOf(body.els);
 
   const G = drawGraphFrame(name.toUpperCase() + '  ·  ' + Math.round(E) +
-                           ' IN FIELDS  ·  ' + Math.round(KE) + ' IN MOTION');
-  const { W, TOP, AXIS, gH, px, pxL, pxR, LIGHT,
-          dimCol, motionCol, fieldsCol, motionGlow } = G;
+                           ' kJ/mol IN FIELDS');
+  const { W, TOP, AXIS, gH, px, pxL, pxR, LIGHT, dimCol, fieldsCol } = G;
 
   const top = Math.max(1, atomAxisTop());
   const py  = (kj) => TOP + gH * (1 - clamp01(kj / top));
@@ -6182,28 +6408,18 @@ function drawAtomGraph(t) {
     }
   }
 
-  // THE KINETIC ENERGY IS A LEVEL, NOT A CURVE. It has no reaction coordinate —
-  // an atom's speed says nothing about how bonded it is — so drawing it as a
-  // line across the panel is the honest shape: this is how much motion this
-  // atom has, right now, against the same axis as its fields. It is where the
-  // atom's energy is NOT in its bonds, which is the comparison worth having
-  // beside the curve.
-  const ky = py(KE);
-  graphCtx.save();
-  graphCtx.setLineDash([5, 4]);
-  graphCtx.globalAlpha = KE > top ? 0.35 : 0.9;   // off the top of the axis: say so
-  graphCtx.shadowBlur = LIGHT ? 0 : 10;
-  graphCtx.shadowColor = motionGlow;
-  graphCtx.strokeStyle = motionCol;
-  graphCtx.lineWidth = 1.5;
-  graphCtx.beginPath(); graphCtx.moveTo(pxL, ky); graphCtx.lineTo(pxR, ky);
-  graphCtx.stroke();
-  graphCtx.restore();
-
-  // WHERE THE ATOM IS. The fields marker rides the curve by construction — the
-  // height IS the energy the position was read from — and the motion marker
-  // sits above or below it on the same vertical, so the gap between them is the
-  // split for this one atom.
+  // NO MOTION LINE HERE. The world's graph carries both because the two share
+  // one total and you read one going up as the other comes down. One atom's
+  // kinetic energy shares nothing with its bonds — it has no reaction
+  // coordinate at all, so it could only ever be a level sitting flat across the
+  // panel — and beside a curve that means something, it read as a second
+  // reading rather than as a different kind of thing. This graph is the fields
+  // alone, going back and forth along the atom's own reaction coordinate, which
+  // is the one question it was built to answer. `atomMotionKJ` stays; it is a
+  // true per-atom number and the next thing that wants one will want it.
+  // WHERE THE ATOM IS. The marker rides the curve by construction: its height
+  // IS the energy its position was read from, so it cannot drift off the line
+  // it is supposed to be sitting on.
   const mx = px(p);
   graphCtx.save();
   graphCtx.setLineDash([2, 3]);
@@ -6213,15 +6429,12 @@ function drawAtomGraph(t) {
   graphCtx.stroke();
   graphCtx.restore();
 
-  for (const [y, col, glow] of [[py(E), fieldsCol, fieldsCol],
-                                [ky,    motionCol, motionGlow]]) {
-    graphCtx.save();
-    graphCtx.shadowBlur = LIGHT ? 0 : 10;
-    graphCtx.shadowColor = glow;
-    graphCtx.fillStyle = col;
-    graphCtx.beginPath(); graphCtx.arc(mx, y, 3.6, 0, Math.PI * 2); graphCtx.fill();
-    graphCtx.restore();
-  }
+  graphCtx.save();
+  graphCtx.shadowBlur = LIGHT ? 0 : 10;
+  graphCtx.shadowColor = fieldsCol;
+  graphCtx.fillStyle = fieldsCol;
+  graphCtx.beginPath(); graphCtx.arc(mx, py(E), 3.6, 0, Math.PI * 2); graphCtx.fill();
+  graphCtx.restore();
 }
 
 // ── Picking one, and showing which ─────────────────────────────────────────
@@ -6243,39 +6456,40 @@ function followPick(ev) {
   }
   // A click on nothing CLEARS it, which is the way back to the world's graph
   // without reaching for the dev panel.
-  followUid = best;
+  if (best !== followUid) { followUid = best; forgetReplay(); }
   ev.preventDefault();
 }
 
-// HIGHLIGHT, NOT A RING. The scene is already full of circles — valence shells,
-// shell bands, nuclei — and another one round the followed atom would read as
-// one more piece of the diagram. So the rest of the world is pushed back behind
-// a scrim in the scene's own colour and the atom is redrawn on top of it, at
-// full strength, with a pulsing halo in its own element colour. It is the only
-// thing in focus, which is what following one atom means.
+// HIGHLIGHT, NOT A RING AND NOT A DIM. The scene is already full of circles —
+// valence shells, shell bands, nuclei — so another one round the followed atom
+// would read as one more piece of the diagram. Pushing the rest of the world
+// behind a scrim was tried instead and it was worse: it darkened the thing the
+// tab is for in order to point at a corner of it.
+//
+// So nothing is taken away and the atom is simply given MORE: a pulsing halo in
+// its own element colour, drawn under it so it reads as light coming off the
+// atom rather than a disc stuck on top, and then the atom redrawn over that at
+// full strength. Its own accumulator drives the pulse, so it keeps going while
+// the sim is paused — the same reason the shell drift has one.
 //
 // Drawn inside the world transform, after everything else, so no drawing
 // function has to know this feature exists.
 function drawFollowHighlight() {
   const t = followTarget();
-  if (!t) return;
-  const [br, bg, bb] = sceneBgRgb();
-  ctx.save();
-  ctx.fillStyle = 'rgba(' + br + ',' + bg + ',' + bb + ',' + followDim.toFixed(3) + ')';
-  ctx.fillRect(0, 0, world.w, world.h);
-  ctx.restore();
+  if (!t || followGlow <= 0) return;
 
   const vr = valenceRadius(t.el);
   const e  = ELEMENTS[t.el] || ELEMENTS.H;
-  // Its own accumulator, so the pulse keeps going while the sim is paused — the
-  // same reason the shell drift has one.
-  const pulse = 0.55 + 0.45 * Math.sin(shellWobble * 2.1);
+  const pulse = 0.65 + 0.35 * Math.sin(shellWobble * 2.1);
+  const R = vr * (1.6 + 1.1 * followGlow);
   ctx.save();
-  const g = ctx.createRadialGradient(t.x, t.y, vr * 0.5, t.x, t.y, vr * 2.1);
-  g.addColorStop(0, 'rgba(' + e.rgb + ',' + (0.42 * pulse).toFixed(3) + ')');
-  g.addColorStop(1, 'rgba(' + e.rgb + ',0)');
+  ctx.globalCompositeOperation = 'lighter';   // light added, never matter hidden
+  const g = ctx.createRadialGradient(t.x, t.y, vr * 0.35, t.x, t.y, R);
+  g.addColorStop(0,    'rgba(' + e.rgb + ',' + (0.55 * followGlow * pulse).toFixed(3) + ')');
+  g.addColorStop(0.45, 'rgba(' + e.rgb + ',' + (0.22 * followGlow * pulse).toFixed(3) + ')');
+  g.addColorStop(1,    'rgba(' + e.rgb + ',0)');
   ctx.fillStyle = g;
-  ctx.beginPath(); ctx.arc(t.x, t.y, vr * 2.1, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(t.x, t.y, R, 0, Math.PI * 2); ctx.fill();
   ctx.restore();
 
   drawAtomBody(ctx, t.x, t.y, t.el, vr);
@@ -6380,6 +6594,11 @@ function drawEnergyGraph() {
   // two scales and there is one panel to answer it in, so the atom's reading
   // replaces the world's rather than being squeezed in beside it.
   const followed = followTarget();
+  // The key beside the panel names both lines. With one atom's graph up there
+  // is only one line, so the motion entry would be naming something that is not
+  // on screen.
+  const mKey = document.querySelector('#energyGraphKey .graph-key-motion');
+  if (mKey) mKey.style.display = followed ? 'none' : '';
   if (followed) { drawAtomGraph(followed); return; }
 
   const G = drawGraphFrame('REACTION PROGRESS');
@@ -6886,6 +7105,26 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   setGraphShown(!graphShown);
 });
 
+// THE BUTTON IS ONLY THERE WHEN IT CAN DO SOMETHING. It appears with FOLLOW ONE
+// ATOM, since a clip is a clip of the followed atom and there is nothing to
+// replay without one, and it is disabled until a moment has actually been
+// caught. A press plays the last one; a second press while it is running sets
+// it looping, which is the "over and over" — press again to stop.
+function syncReplayBtn() {
+  const btn = document.getElementById('replayBtn');
+  if (!btn) return;
+  btn.classList.toggle('visible', !!(replayOn && followOn && !bondTab.on && !sandbox.on));
+  btn.disabled = !replay.clip;
+  btn.classList.toggle('looping', replay.loop);
+  btn.innerHTML = replay.loop ? 'STOP<br>REPLAY' : 'REPLAY<br>AGAIN';
+}
+
+document.getElementById('replayBtn').addEventListener('click', () => {
+  if (!replay.clip) return;
+  if (replay.playing) { replay.loop = !replay.loop; syncReplayBtn(); return; }
+  replayAgain();
+});
+
 // ─── Dev panel — type "dev" anywhere to open ─────────────────────────────────
 // Composition is here rather than in the toolbar because the toolbar's layout is
 // tight; promote it whenever these stop being experiment knobs.
@@ -6929,32 +7168,32 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
       '<input type="checkbox" id="devFollow" style="margin:0">' +
       '<span>Follow one atom</span>' +
     '</label>' +
-    '<div style="opacity:0.45;font-size:10px;margin-left:21px;">click an atom in ' +
-      'the world and the line graph becomes ITS graph — where that one atom ' +
-      'sits between reactant and product, read off the energy in its own bonds, ' +
-      'with its kinetic energy as a level beside it. Click empty space to let ' +
-      'it go. The rest of the world dims; there is no ring, there are enough ' +
-      'circles out there already</div>' +
-    row('devFollowDim',  'Followed: rest dims', 0, 0.9, 0.02, followDim, '#ffd84d') +
-    row('devFollowAxis', 'Followed: axis top',  0, 2000, 50, followAxisKJ, '#ffd84d') +
-    '<div style="opacity:0.45;font-size:10px;">an atom carries far more motion ' +
-      'than its bonds are worth, so on an honest axis the fields curve lives in ' +
-      'the bottom fifth. Pull the top down to magnify it and let the motion ' +
-      'line run off above. 0 is the honest axis</div>' +
-    row('devTakes',  'Reactant takes in', 0.05, 1, 0.05, reactantTakes,  '#ffd84d') +
-    row('devPace',   'Judged by own pace', 0, 1, 0.05, reactantRelative, '#ffd84d') +
-    '<div style="opacity:0.45;font-size:10px;">a REACTANT’s breakability ' +
-      'against speed, and they only work as a pair. ONE HIT caps what a single ' +
-      'hit\u2019s dose reaches the bond \u2014 a reactant is hit about 15 times ' +
-      'a second at High and almost every one of those is well under the ' +
-      'threshold, so breaking is accumulation and halving what is taken in ' +
-      'halves how fast the stack fills. That is WHICH temperature starts ' +
-      'breaking. HOLDS FOR is its own \u00d7 on the vibration hold: the stack ' +
-      'sits at takes \u00d7 hits-per-second \u00d7 hold, and hits-per-second goes ' +
-      'as the speed while a dose goes as its square, so a shorter hold brings ' +
-      'the three temperatures together and a longer one spreads them apart. ' +
-      'That is how SHARP it is. Energy the bond does not take goes back to the ' +
-      'motion, so neither dial moves the books. Both 1 are off</div>' +
+    '<div style="opacity:0.45;font-size:10px;margin-left:21px;">click an atom; ' +
+      'the line graph becomes its graph. Click empty space to drop it</div>' +
+    '<label style="display:flex;align-items:center;gap:7px;margin:9px 0 2px;cursor:pointer;">' +
+      '<input type="checkbox" id="devReplay" style="margin:0">' +
+      '<span>Replay the moment</span>' +
+    '</label>' +
+    '<div style="opacity:0.45;font-size:10px;margin-left:21px;">when the followed ' +
+      'atom joins or breaks, that moment runs again slowly and close up. REPLAY ' +
+      'AGAIN repeats it; press it mid-replay to loop</div>' +
+    row('devReplayRate', 'Replay speed',    0.05, 1,   0.05, replayRate,     '#ffd84d') +
+    row('devReplayZoom', 'Replay zoom',     1,    5,   0.1,  replayZoom,     '#ffd84d') +
+    row('devReplayHold', 'Replay cooldown', 0,    15,  0.5,  replayCooldown, '#ffd84d') +
+    '<div style="opacity:0.45;font-size:10px;">how long it runs normally before ' +
+      'another moment may interrupt. The button ignores it</div>' +
+    row('devFollowGlow', 'Followed: glow',     0, 2,    0.05, followGlow,   '#ffd84d') +
+    row('devFollowAxis', 'Followed: axis top', 0, 2000, 50,   followAxisKJ, '#ffd84d') +
+    '<div style="opacity:0.45;font-size:10px;">how bright the followed atom ' +
+      'burns, and the top of its graph. 0 axis = the true scale</div>' +
+    row('devTakes', 'Reactant takes in',  0.05, 1, 0.05, reactantTakes,    '#ffd84d') +
+    row('devPace',  'Judged by own pace', 0,    1, 0.05, reactantRelative, '#ffd84d') +
+    '<div style="opacity:0.45;font-size:10px;">how hard a hit counts for a ' +
+      'REACTANT. TAKES IN is the share of each hit its bond keeps \u2014 lower ' +
+      'breaks slower. OWN PACE judges the hit against how fast that molecule ' +
+      'normally moves: at 0 a High hit counts 9\u00d7 a Low one and everything ' +
+      'breaks at once; turn it up and the three temperatures become three ' +
+      'rates. Neither moves the energy books</div>' +
     row('devRecombRange', 'Attractive reach', 1.2, 8, 0.1, recombRange, '#ffd84d') +
     '<div style="opacity:0.45;font-size:10px;">how far out two atoms that could ' +
       'bond start pulling on each other, in contact widths. Wider does not ' +
@@ -7214,7 +7453,9 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
     // Switching it off lets the atom go, so turning it back on does not resume
     // following something chosen minutes ago in a world that has moved on.
     if (!followOn) followUid = 0;
+    forgetReplay();
     canvas.style.cursor = followOn && reactionsOn() ? 'crosshair' : '';
+    syncReplayBtn();
   });
   bind('devJoinFlash', v => joinFlashSec = v, false,
        v => v > 0 ? v.toFixed(1) + ' s' : 'off');
@@ -7241,7 +7482,20 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
        v => v > 0 ? Math.round(v * 100) + '%' : 'raw steps');
   bind('devRecombPull', v => recombPull  = v, false, v => Math.round(v) + ' px/s²');
   bind('devRecombRange', v => recombRange = v, false, v => v.toFixed(1) + '× natural');
-  bind('devFollowDim',  v => followDim = v, false, v => Math.round(v * 100) + '%');
+  const replayCb = panel.querySelector('#devReplay');
+  replayCb.checked = replayOn;
+  replayCb.addEventListener('change', () => {
+    replayOn = replayCb.checked;
+    if (!replayOn && replay.playing) stopReplay();
+    syncReplayBtn();
+  });
+  bind('devReplayRate', v => replayRate = v, false,
+       v => Math.round(v * 100) + '% speed');
+  bind('devReplayZoom', v => replayZoom = v, false, v => v.toFixed(1) + '\u00d7');
+  bind('devReplayHold', v => replayCooldown = v, false,
+       v => v > 0 ? v.toFixed(1) + ' s' : 'every moment');
+  bind('devFollowGlow', v => followGlow = v, false,
+       v => v > 0 ? Math.round(v * 100) + '%' : 'off');
   bind('devFollowAxis', v => followAxisKJ = v, false,
        v => v > 0 ? Math.round(v) + ' kJ/mol' : 'honest');
   bind('devTakes',  v => reactantTakes = v, false,
@@ -8517,6 +8771,7 @@ function applyTab(tab) {
   }
   syncWorldBox();
   syncSnapPanel();
+  syncReplayBtn();
   drawBarChart();
   logAction('Switched to ' + tab.toUpperCase() + ' tab');
 }
@@ -9748,11 +10003,14 @@ for (const [id, , build] of SB_ADDABLE) {
   if (cv) sbThumb(cv, build());
 }
 sbSyncAddButtons();
-// The sim opens on One Bond. It is the one that explains what a bond IS, and
-// the Reactions tab is easier to read once you have pulled one apart by hand.
+// The sim opens on REACTIONS. It opened on One Bond for a long stretch, on the
+// argument that a world of bonds is easier to read once you have pulled one
+// apart by hand; the opposite argument won, which is that the thing this sim is
+// is a reaction, and the tab that shows one should be the tab you land on.
 // applyTab does the whole switch — rows, energy bar, world box — so there is
-// one path into that state rather than a second copy of it here.
-applyTab('bond');
+// one path into that state rather than a second copy of it here. The markup's
+// `active` class on the ONE BOND button is corrected by that same call.
+applyTab('reactions');
 updateGraphBtn();
 updateEnergyNote();
 document.getElementById('energyBar').classList.add('visible');

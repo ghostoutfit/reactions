@@ -4109,6 +4109,7 @@ gold above a gold rule, holding the handful still being turned:
 | Strong products | ships ON; here only so it can be compared |
 | Bond capacity, Vibration hold | together, whether the scene comes apart |
 | Follow one atom, and its two dials | one atom's own reaction coordinate — see **Follow one atom** |
+| Replay the moment, and its three dials | the slow-motion close-up — see **The replay** |
 | Reactant takes in, Judged by own pace | whether the temperatures are three rates or a cliff |
 
 **Each of these lives there and nowhere else.** The rows were *moved* out of
@@ -4198,11 +4199,16 @@ one O-H bond either way. The jump it makes is 0.5 → 1 when the OH forms, and
 the water finishing changes nothing about this atom — which is the honest
 per-atom reading and worth knowing before it looks like a bug.
 
-**The kinetic energy is a level, not a curve.** An atom's speed says nothing
-about how bonded it is, so it has no reaction coordinate and is drawn as a
-dashed line across the panel at its current height, with the marker on the same
-vertical as the fields marker. The gap between the two is the split for that one
-atom.
+**Fields only — there is no motion line here.** The world's graph carries both
+because the two share one total and you read one going up as the other comes
+down. One atom's kinetic energy shares nothing with its bonds and has no
+reaction coordinate at all, so it could only ever be a level sitting flat across
+the panel, and beside a curve that means something it read as a second reading
+rather than as a different kind of thing. The panel is the fields going back and
+forth along the atom's own coordinate, which is the question it was built to
+answer. `atomMotionKJ` stays — it is a true per-atom number and the next thing
+that wants one will want it — and the key's motion entry is hidden while an atom
+is followed, so it cannot name a line that is not there.
 
 #### Atoms needed names
 
@@ -4231,15 +4237,113 @@ against a bond discount of 100–500), so on an honest axis the fields curve liv
 in the bottom fifth. **Followed: axis top** pulls the ceiling down to magnify it
 and lets the motion line run off above; 0 is the honest axis.
 
-**The highlight is not a ring.** The scene is already full of circles — valence
-shells, shell bands, nuclei — and one more would read as another piece of the
-diagram. Instead the rest of the world goes behind a scrim in the scene's own
-colour and the atom is redrawn on top at full strength with a pulsing halo in
-its element colour, driven by `shellWobble` so it keeps going while paused.
-Measured against an identical atom elsewhere in the same frame:
-**rgb(229,88,139) against rgb(82,25,51)**, about 2.8x. Drawn inside the world
-transform after everything else, so no drawing function knows the feature
-exists.
+**The highlight is not a ring, and not a dim either.** The scene is already full
+of circles — valence shells, shell bands, nuclei — so one more would read as
+another piece of the diagram. Pushing the rest of the world behind a **scrim**
+was built and measured (2.8x contrast against an identical atom in the same
+frame) and then taken out, because it darkened the thing the tab is for in order
+to point at a corner of it.
+
+So nothing is taken away and the atom is simply given more: a pulsing halo in
+its own element colour, composited with `lighter` so it is light added rather
+than matter hidden, drawn under the atom and the atom redrawn over it at full
+strength. `shellWobble` drives the pulse, so it keeps going while the sim is
+paused. Drawn inside the world transform after everything else, so no drawing
+function knows the feature exists. **Followed: glow** is the dev slider.
+
+### The replay
+
+The moment the followed atom joins something or comes apart from it is what the
+whole feature is for, and at High it is over in two frames. So it is taken
+again: the sim holds, the moment runs at a quarter speed zoomed in on the atom,
+and then everything carries straight on from where it was. Dev toggle **Replay
+the moment**, under FOLLOW ONE ATOM, which it needs.
+
+**It is a recording, not a re-simulation.** Nothing here can rewind the physics
+— collisions are resolved in place, and the scatter and the speed band both draw
+random numbers — so a ring buffer of frames is kept while an atom is being
+followed and the clip is played back out of it. Playback therefore cannot
+disagree with what happened, because it **is** what happened.
+
+A frame is a shallow clone of every body, with its **atoms cloned too** because
+`applyForm` mutates their local coordinates while a bond closes. `els`, `bonds`
+and `electrons` are shared rather than copied: the first two are replaced
+wholesale when a body changes rather than edited, and the electrons are a
+picture that may as well go on living. Recording only happens while an atom is
+actually being followed, which is what keeps it free the rest of the time.
+
+```javascript
+const REPLAY_PRE = 0.7, REPLAY_POST = 0.35;   // s of clip either side
+let replayRate = 0.25, replayZoom = 2.4, replayCooldown = 2.5;
+```
+
+**The post-roll is half the point.** A replay that stops dead on the frame the
+bond changed shows you the approach and not the result, so the moment is marked
+and recording continues for `REPLAY_POST` before playback starts. The wait is
+about a third of a second and reads as instant.
+
+**The trigger is the body's membership, not the atom's own bonds.** A water
+finishing around an OH does not change that hydrogen's bond at all, and
+"combines with other atoms" plainly includes it. Comparing the sorted uids of
+the atoms sharing the followed atom's body catches a join, a peel and a shatter
+with one test and no special cases.
+
+**The close-up is the same camera, moved.** The ordinary view is a scale about
+the box's top-left; the replay is a scale about the followed atom, put in the
+middle of the visible band. Everything inside is a world length either way, so
+no drawing function below the transform knows which it is — `drawZoom()` is the
+one thing that has to, for the wall's stroke width and the field buffer's
+resolution. Verified: scale **1.92** = 0.8 x 2.4, with the atom landing within a
+pixel of the band's centre.
+
+**It has to be clipped to the band**, which the ordinary view never needed —
+at the scene zoom everything is inside the walls by construction, and at the
+close-up the rest of the scene lands on the toolbar and the bar panel. Set in
+screen pixels before the zoom, because the band is a piece of the canvas and not
+a piece of the world.
+
+**A clip belongs to one atom in one world.** Respawning or picking a different
+atom leaves a clip full of bodies that no longer exist and a uid that is in none
+of them — which is not an empty replay, it is a replay of somebody else, with
+the atom graph quietly falling back to the world's because the atom it wants is
+nowhere in the frame. Measured exactly that before `forgetReplay` existed: a
+clip of uids 63–89 played against a world holding 227–281.
+
+**The cooldown is not optional.** At High the followed atom can change hands
+every couple of seconds, and a sim that replays itself that often is a sim you
+cannot watch. It is how long the world runs normally before another moment may
+interrupt, and **pressing the button never touches it** — that is there to stop
+the sim interrupting itself, and a press is not the sim doing anything. The cost
+is that a break and the join right after it are usually not both shown; the
+slider is where that is traded.
+
+**REPLAY AGAIN** sits on the energy bar beside HIDE LINE GRAPH, the same fixed
+96 px and the same two lines, so the pair is one block that cannot resize. It
+appears with FOLLOW ONE ATOM and is disabled until a moment has been caught. A
+press replays the last one; a press *while it is running* sets it looping, which
+is the "over and over", and a third press stops it.
+
+Measured over a 60 s water run at High: **2 replays** caught, 506 frames of
+playback for about 2.1 s of clip (a quarter speed, as asked), the followed uid
+present in **every frame of every clip**, the reaction still completing to six
+waters, and `totalKJ` drift exactly **0** — the sim is paused while a clip runs,
+so there is nothing for the physics to catch up on.
+
+### What it opens on
+
+Three defaults moved together, and they are a set: the sim opens on
+**REACTIONS**, at **x3**, with **FOLLOW ONE ATOM on**.
+
+It opened on One Bond for a long stretch, on the argument that a world of bonds
+is easier to read once you have pulled one apart by hand. The opposite argument
+won: the thing this sim *is* is a reaction, and the tab that shows one should be
+the tab you land on. `applyTab('reactions')` at init does the whole switch, so
+the markup's `active` class on ONE BOND is corrected by the same call rather
+than being a second copy of the state.
+
+x3 is 6 H2 + 3 O2, **18 atoms against x7's 42**. A world you can follow one atom
+through wants to be a world you can see one atom in; the density arguments under
+**The camera** still apply and the AMOUNT slider is still the clock.
 
 ### Breakability against speed: it was a cliff, not three rates
 
