@@ -4713,6 +4713,38 @@ separately is how 51% and 50% end up side by side claiming to be a whole. That
 only applies while they share a scale — with *Motion line spans speeds* on they
 are two readings on two axes, and each is rounded on its own.
 
+### ...and the flat line still shows the heat
+
+Tying motion's offset to `totalKJ` outright held the line in exactly the same
+place at Low as at Med, which hides the one thing the temperature buttons do.
+The flat line before a reaction starts should sit **higher when the world is
+hotter**, because it is.
+
+```javascript
+let motionHeatShow = 0.10;    // the share of a temperature change that lifts it
+```
+
+The offset follows only part of the change. The SHAPE is untouched at any
+setting, because only `totalKJ` enters there and `totalKJ` does not vary along
+the axis — so the dip stays exactly as deep as the hump, measured **0.568 at
+both Med and High**.
+
+**0.10 is what fits.** The flat line already sits at 0.68 of the panel with the
+reactants' fields under it, so there is 0.32 of headroom and the whole Low-to-
+High rise has to live in it. Measured: 0.25 put High at **1.42**, clean off the
+top; 0.10 lands **0.68 / 0.81 / 0.97**. The Low-to-Med difference is a modest
+eighth of the panel, and that is the honest most this frame has room for while
+the dip is still the size of the hump.
+
+**The percentages had to stop being the drawn fractions.** They worked only
+while the motion line was pinned so the pair summed to one on the panel; the
+moment the line can lift, a drawn fraction is a share of nothing. Motion and
+fields ARE the whole of the energy the world holds, so the numbers are now their
+shares of the sum of the two, in kJ/mol — true however the lines are drawn,
+incapable of passing 100%, and still rounded once with the other taken from it.
+Measured across the three temperatures: **39/61, 72/28, 83/17**, summing to 100
+at each.
+
 ### A cold world draws a flat line
 
 Below the temperature that can break a reactant bond, the diagram was a lie by

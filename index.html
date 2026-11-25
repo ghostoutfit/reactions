@@ -6364,6 +6364,14 @@ let followAxisPad = 0.15;          // x the span, at each end
 //   p = 0.5   every atom loose               free
 //   p = 1     every product bond made        free - (what the products hold)
 let motionAxisSpansSpeeds = false;  // see motionAxisRange — the either/or
+// 0.10 is what FITS. The flat line already sits at 0.68 of the panel with the
+// reactants' fields under it, so there is 0.32 of headroom and the whole Low to
+// High rise has to live in it: measured, 0.25 put High at 1.42 — clean off the
+// top — and 0.10 lands Low 0.68, Med 0.80, High 0.98. The Low/Med difference is
+// a modest eighth of the panel, and that is the honest most this frame has room
+// for while the dip is still the same size as the hump.
+let motionHeatShow = 0.10;          // how much of a temperature change lifts the line
+let curveTotalRefKJ = 0;            // the total this world spawned with
 let curveTotalLoKJ  = 0;   // the run's total at LOW, for the motion frame
 let curveTotalHiKJ  = 0;   // ...and at HIGH
 let curveFreeKJ     = 0;   // SB_FREE_ATOM x every atom in the world
@@ -6431,6 +6439,7 @@ function anchorCurve() {
   // already the hot one, anchored a line earlier by `anchorBarScale`.
   curveTotalHiKJ = barFullKJ;
   curveTotalLoKJ = fieldsKJ() + motionAtTemp(TEMP_LOW);
+  curveTotalRefKJ = totalKJ;     // where the motion line sits before any heating
 }
 
 // ─── IS THE WORLD HOT ENOUGH FOR ANY OF THIS TO HAPPEN? ──────────────────────
@@ -6521,7 +6530,20 @@ function motionAxisRange() {
   if (!motionAxisSpansSpeeds) {
     const fa = fieldsAxisRange();
     const span = Math.max(1, fa.hi - fa.lo);
-    const lo = (totalKJ - z - fieldsZeroKJ) - span - fa.lo;
+    // ...AND IT STILL HAS TO SHOW THE HEAT GOING IN. Tying the offset to
+    // `totalKJ` outright held the motion line in exactly the same place at
+    // Low as at Med, which hides the one thing the temperature buttons do:
+    // the flat line before a reaction starts should sit HIGHER when the world
+    // is hotter, because it is.
+    //
+    // So the offset follows only part of the change. `motionHeatShow` is the
+    // part: 0 is fully compensated and the line never moves, 1 is raw and Low
+    // to Med alone is a whole panel height (measured, the two differ by about
+    // 7,800 kJ/mol against a fields span of 7,200). The SHAPE is untouched at
+    // any setting, because only `totalKJ` enters here and `totalKJ` does not
+    // vary along the axis — so the dip stays exactly as deep as the hump.
+    const lift = (totalKJ - curveTotalRefKJ) * motionHeatShow;
+    const lo = (totalKJ - lift - z - fieldsZeroKJ) - span - fa.lo;
     return { lo, hi: lo + span };
   }
 
@@ -7500,16 +7522,18 @@ function updateEnergyPct() {
   const el = document.getElementById('energyPctMotion');
   const fl = document.getElementById('energyPctFields');
   if (!el && !fl) return;
-  const fa = fieldsAxisRange(), ma = motionAxisRange();
-  const cl = (v) => Math.max(0, Math.min(1, v));
-  const f = cl((fieldsKJ() - fieldsZeroKJ - fa.lo) / Math.max(1, fa.hi - fa.lo));
-  const m = cl((motionKJ() - motionZeroKJ() - ma.lo) / Math.max(1, ma.hi - ma.lo));
-  // Only a shared scale makes them two halves of one thing; on separate scales
-  // they are two readings and each is rounded on its own.
-  const sum = f + m;
-  const fPct = Math.round(f * 100);
-  const mPct = (!motionAxisSpansSpeeds && Math.abs(sum - 1) < 1e-6)
-    ? 100 - fPct : Math.round(m * 100);
+  // THE TRUE SHARES, in kJ/mol, not the drawn ones. They were the drawn
+  // fractions, which worked only while the motion line was pinned so the pair
+  // summed to one on the panel — and the moment the line is allowed to lift
+  // with the temperature, a drawn fraction stops being a share of anything.
+  // Motion and fields ARE the whole of the energy this world holds, so their
+  // shares of the sum of the two are what the numbers have always wanted to
+  // be, they cannot pass 100%, and they are true however the lines are drawn.
+  const fKJ = Math.max(0, fieldsKJ());
+  const mKJ = Math.max(0, motionKJ());
+  const tot = Math.max(1e-6, fKJ + mKJ);
+  const fPct = Math.round(fKJ / tot * 100);
+  const mPct = 100 - fPct;   // rounded once, the other taken from it
   if (el) el.textContent = mPct + '%';
   if (fl) fl.textContent = fPct + '%';
 }
@@ -7828,6 +7852,10 @@ replayOnBox.addEventListener('change', () => {
     '<div style="opacity:0.45;font-size:10px;">how long a molecule takes to ' +
       'come round to face its partner, and how far out it starts. It eases in ' +
       'and out of its tumble either way</div>' +
+    row('devHeatShow', 'Heat lifts motion', 0, 1, 0.05, motionHeatShow, '#ffd84d') +
+    '<div style="opacity:0.45;font-size:10px;">how far the motion line rises ' +
+      'when you turn the heat up. 0 holds it still; 1 is raw, and Low to Med ' +
+      'alone is a whole panel. The dip keeps its size either way</div>' +
     row('devFollowPad', 'Followed: headroom', 0, 0.6, 0.01, followAxisPad, '#ffd84d') +
     '<div style="opacity:0.45;font-size:10px;">how bright the followed atom ' +
       'burns, and how much room is left above and below its curve</div>' +
@@ -8163,6 +8191,8 @@ replayOnBox.addEventListener('change', () => {
   spanCb.addEventListener('change', () => { motionAxisSpansSpeeds = spanCb.checked; });
   bind('devAlignTau',  v => alignTau = v,  false, v => v.toFixed(2) + ' s');
   bind('devAlignLead', v => alignLead = v, false, v => v.toFixed(1) + '\u00d7 the pull');
+  bind('devHeatShow', v => motionHeatShow = v, false,
+       v => v > 0 ? Math.round(v * 100) + '%' : 'held still');
   bind('devFollowPad', v => followAxisPad = v, false,
        v => v > 0 ? Math.round(v * 100) + '%' : 'tight');
   bind('devTakes',  v => reactantTakes = v, false,
