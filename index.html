@@ -5575,8 +5575,15 @@ const shellSpin = 0;      // rad/s round the ring — none
 // without watching them for a few seconds, which is exactly what a slider is
 // for and exactly what a constant buried here was not.
 let shellWobble = 0;
-let shellWobbleAmp = 0.075;   // x the shell radius
-let shellWobbleHz  = 0.62;
+let shellWobbleAmp = 0.15;    // x the shell radius — the slow DRIFT
+let shellWobbleHz  = 1.1;
+// ...and the SHAKE on top of it: a second, much faster term at a fraction of
+// the drift's amplitude. Two words, two things. The drift alone traces a slow
+// smooth Lissajous — the electron strolling round its seat — and at rest that
+// reads as a calm orbit rather than as a particle whose position is a
+// probability. The shake is what makes it unsettled rather than merely moving.
+let shellShake = 0.45;             // x the drift amplitude
+const SHELL_SHAKE_HZ = 5.3;        // rad/s, no round ratio to the drift
 
 // The Reactions shells view pulls its bonding electrons towards the middle of
 // the bond by `bondCentreHold`, the same number the One Bond tab holds its
@@ -5591,8 +5598,12 @@ let shellPhase = 0;       // kept so the draw path needs no special case
 // `seed` keeps every electron on its own schedule.
 function shellWobbleAt(seed, r) {
   const a = shellWobbleAmp * r;
-  return [a * Math.sin(shellWobble * shellWobbleHz + seed),
-          a * Math.cos(shellWobble * shellWobbleHz * 1.37 + seed * 2.3)];
+  const k = a * shellShake;
+  const t = shellWobble;
+  return [a * Math.sin(t * shellWobbleHz + seed) +
+          k * Math.sin(t * SHELL_SHAKE_HZ + seed * 3.1),
+          a * Math.cos(t * shellWobbleHz * 1.37 + seed * 2.3) +
+          k * Math.cos(t * SHELL_SHAKE_HZ * 1.19 + seed * 1.7)];
 }
 
 function drawAtomShells(c, p) {
@@ -6018,7 +6029,7 @@ function splineThrough(ctx, pts) {
 // bonded or it is not.
 let followOn    = true;    // the dev toggle — ships ON
 let followUid   = 0;       // which atom, by its own uid; 0 = none picked
-let followGlow  = 1;       // how brightly the followed atom is lit
+let followGlow  = 1.3;     // how brightly the followed atom is lit
 let followAxisKJ = 0;      // 0 = the whole per-atom axis — see atomAxisTop()
 
 function reactionsOn() { return !bondTab.on && !sandbox.on; }
@@ -6480,24 +6491,45 @@ function drawFollowHighlight() {
 
   const vr = valenceRadius(t.el);
   const e  = ELEMENTS[t.el] || ELEMENTS.H;
-  const pulse = 0.65 + 0.35 * Math.sin(shellWobble * 2.1);
-  const R = vr * (1.6 + 1.1 * followGlow);
+  const pulse = 0.72 + 0.28 * Math.sin(shellWobble * 2.1);
+  const g1 = followGlow * pulse;
+
+  // ONE: the halo, wide and soft, UNDER the atom, so the atom reads as the
+  // thing giving off the light rather than as a disc with a sticker on it.
+  const R = vr * (1.9 + 1.3 * followGlow);
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';   // light added, never matter hidden
-  const g = ctx.createRadialGradient(t.x, t.y, vr * 0.35, t.x, t.y, R);
-  g.addColorStop(0,    'rgba(' + e.rgb + ',' + (0.55 * followGlow * pulse).toFixed(3) + ')');
-  g.addColorStop(0.45, 'rgba(' + e.rgb + ',' + (0.22 * followGlow * pulse).toFixed(3) + ')');
+  const g = ctx.createRadialGradient(t.x, t.y, vr * 0.3, t.x, t.y, R);
+  g.addColorStop(0,    'rgba(' + e.rgb + ',' + (0.95 * g1).toFixed(3) + ')');
+  g.addColorStop(0.35, 'rgba(' + e.rgb + ',' + (0.45 * g1).toFixed(3) + ')');
+  g.addColorStop(0.7,  'rgba(' + e.rgb + ',' + (0.16 * g1).toFixed(3) + ')');
   g.addColorStop(1,    'rgba(' + e.rgb + ',0)');
   ctx.fillStyle = g;
   ctx.beginPath(); ctx.arc(t.x, t.y, R, 0, Math.PI * 2); ctx.fill();
   ctx.restore();
 
+  // TWO: the atom itself, at full strength, over its own halo.
   drawAtomBody(ctx, t.x, t.y, t.el, vr);
   if (viewMode !== 'space') {
     drawAtomShells(ctx, t);
     drawInnerElectrons(ctx, t);
   }
   drawNucleons(ctx, t.x, t.y, t.el, shellWobble, WORLD_NUCLEON_R);
+
+  // THREE: a last pass of light OVER the atom, tight and white-hot at the
+  // centre. The halo alone put the brightness in the space around the atom,
+  // where there is nothing to look at; this lifts the atom itself, which is the
+  // thing being pointed at. Still additive, so every shell, dot and nucleon
+  // drawn above is still there underneath it, just hotter.
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  const c = ctx.createRadialGradient(t.x, t.y, 0, t.x, t.y, vr * 1.05);
+  c.addColorStop(0,    'rgba(255,255,255,' + (0.42 * g1).toFixed(3) + ')');
+  c.addColorStop(0.5,  'rgba(' + e.rgb + ',' + (0.38 * g1).toFixed(3) + ')');
+  c.addColorStop(1,    'rgba(' + e.rgb + ',0)');
+  ctx.fillStyle = c;
+  ctx.beginPath(); ctx.arc(t.x, t.y, vr * 1.05, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
 }
 
 // THE FRAME, SHARED BY BOTH GRAPHS IN THIS PANEL.
@@ -7209,8 +7241,9 @@ document.getElementById('replayBtn').addEventListener('click', () => {
     row('devHe', 'He atoms',       0, COMPOSITION_MAX, 1, COMPOSITION_DEFAULT.He, '#ffd84d') +
     row('devCH4', 'CH₄ molecules', 0, COMPOSITION_MAX, 1,
         COMPOSITION_DEFAULT.CH4, '#ffd84d') +
-    row('devShWobA',  'Shell drift', 0, 0.3, 0.005, shellWobbleAmp, '#ffd84d') +
+    row('devShWobA',  'Shell drift', 0, 0.4, 0.005, shellWobbleAmp, '#ffd84d') +
     row('devShWobHz', 'Drift speed', 0, 3,   0.02,  shellWobbleHz,  '#ffd84d') +
+    row('devShShake', 'Shell shake', 0, 1.5, 0.05,  shellShake,     '#ffd84d') +
     '<div style="opacity:0.45;font-size:10px;">the only motion in the shells ' +
       'view — each electron drifting about its seat, not lapping the ring. ' +
       'At 0 a paused scene looks switched off rather than held</div>' +
@@ -7443,6 +7476,8 @@ document.getElementById('replayBtn').addEventListener('click', () => {
        v => v > 0 ? Math.round(v * 100) + '% of the shell' : 'still');
   bind('devShWobHz', v => shellWobbleHz = v, false,
        v => v > 0 ? v.toFixed(2) + '×' : 'frozen');
+  bind('devShShake', v => shellShake = v, false,
+       v => v > 0 ? Math.round(v * 100) + '% of the drift' : 'smooth');
   const strongCb = panel.querySelector('#devStrong');
   strongCb.checked = strongWater;
   strongCb.addEventListener('change', () => setStrongProducts(strongCb.checked));
@@ -10015,6 +10050,13 @@ updateGraphBtn();
 updateEnergyNote();
 document.getElementById('energyBar').classList.add('visible');
 spawnWorld();
+// IT OPENS MOVING, at Low. The world used to open paused, which meant the first
+// thing anyone saw was a still picture that had to be started before it was a
+// sim at all. Low is slow enough that opening in motion is still the calm
+// "before" the temperature buttons are there to break — nothing breaks at Low,
+// measured, however long it is left — so this costs the cold open nothing and
+// buys a page that is alive when it arrives.
+setRunning(true);
 startWorldLoop();        // the loop draws even while paused, so the world is visible at rest
 
 // ── Bug report button ─────────────────────────────────────────────────────

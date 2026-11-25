@@ -4100,7 +4100,7 @@ gold above a gold rule, holding the handful still being turned:
 | Attractive reach | how far out the pull acts — visible, not faster |
 | View zoom | the camera — see **The camera** |
 | H₂ / O₂ / He / CH₄ molecules | density, which is the clock on the whole run |
-| Shell drift, Drift speed | the only motion in the default view |
+| Shell drift, Drift speed, Shell shake | the only motion in a resting atom |
 | Bond storage | whether hits stack at all, and whether the colour says so |
 | New bond stays pink | the join flash, below |
 | Last reactants go easier | the kinetic nudge, below |
@@ -4237,6 +4237,16 @@ against a bond discount of 100–500), so on an honest axis the fields curve liv
 in the bottom fifth. **Followed: axis top** pulls the ceiling down to magnify it
 and lets the motion line run off above; 0 is the honest axis.
 
+**It is lit in three passes, and it is meant to be the brightest thing on
+screen.** A wide soft halo UNDER the atom, so the atom reads as the thing giving
+off the light rather than as a disc with a sticker on it; the atom itself drawn
+at full strength over that; and then a tight white-hot core OVER the atom. The
+third pass is what the first two were missing — a halo alone puts the brightness
+in the space AROUND the atom, where there is nothing to look at. All of it is
+`lighter`, so every shell, dot and nucleon is still there underneath, just
+hotter. Measured against an identical H in the same frame: **2.0x the luminance
+at the centre and 3.0x out at the halo**.
+
 **The highlight is not a ring, and not a dim either.** The scene is already full
 of circles — valence shells, shell bands, nuclei — so one more would read as
 another piece of the diagram. Pushing the rest of the world behind a **scrim**
@@ -4331,8 +4341,8 @@ so there is nothing for the physics to catch up on.
 
 ### What it opens on
 
-Three defaults moved together, and they are a set: the sim opens on
-**REACTIONS**, at **x3**, with **FOLLOW ONE ATOM on**.
+Four defaults moved together, and they are a set: the sim opens on
+**REACTIONS**, at **x3**, with **FOLLOW ONE ATOM on**, and **already running**.
 
 It opened on One Bond for a long stretch, on the argument that a world of bonds
 is easier to read once you have pulled one apart by hand. The opposite argument
@@ -4344,6 +4354,43 @@ than being a second copy of the state.
 x3 is 6 H2 + 3 O2, **18 atoms against x7's 42**. A world you can follow one atom
 through wants to be a world you can see one atom in; the density arguments under
 **The camera** still apply and the AMOUNT slider is still the clock.
+
+**It opens MOVING**, where it used to open paused — so the first thing anyone
+saw was a still picture that had to be started before it was a sim at all. This
+costs the cold open nothing, because Low is still the calm "before" the
+temperature buttons exist to break: measured, **180 s at Low with 0 breaks, 0
+joins, every reactant intact and `totalKJ` drift 0**, at a mean body speed of
+282 px/s. The argument under **Temperature** — that the student should cause the
+breaking rather than arrive into it — is untouched; all that changed is that the
+calm is now visibly calm rather than frozen.
+
+### The electrons shake as well as wiggle
+
+```javascript
+let shellWobbleAmp = 0.15;     // x the shell radius — the slow DRIFT
+let shellWobbleHz  = 1.1;
+let shellShake     = 0.45;     // x that amplitude — the fast SHAKE on top
+const SHELL_SHAKE_HZ = 5.3;    // rad/s, no round ratio to the drift
+```
+
+Two words, two things. The drift alone traced a slow smooth Lissajous — the
+electron strolling round its seat — and at rest that reads as a calm little
+orbit rather than as a particle whose position is a probability. The shake is a
+second, much faster term at a fraction of the drift's amplitude, and it is what
+makes an atom at rest look unsettled rather than merely moving.
+
+Measured on a 38.1 px shell, over 30 s:
+
+| | furthest from its seat | distance travelled |
+|---|---|---|
+| before (0.075 / 0.62, no shake) | 4.0 px | 2.0 px/s |
+| drift only (0.15 / 1.1) | 8.1 px | 7.3 px/s |
+| **as shipped** (+ 45% shake) | **11.1 px** | **15.5 px/s** |
+
+The split is the point: the shake adds only 3 px of reach and more than doubles
+the distance covered. Reach is the wiggle, pace is the shake, and they are
+separate sliders because they are separate things to look at. Shared with the
+One Bond tab, which wants the same unsettledness for the same reason.
 
 ### Breakability against speed: it was a cliff, not three rates
 
