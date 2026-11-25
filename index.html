@@ -1568,6 +1568,21 @@ function setFieldRamp(name) {
 // these are shared.
 let BOND_FIELD_WIDTH = 0.22;   // own copy of FIELD_WIDTH
 let BOND_FIELD_GAIN  = 0.90;   // own copy of FIELD_GAIN
+
+// THE SANDBOX'S FREE-PAIR LOBE IS MUCH NARROWER THAN A BOND'S. A lobe's width
+// is a fraction of its own LENGTH, which is right for a bond — they are all
+// about one bond long — and wrong for a pair that can be the width of the tab
+// apart and would paint a blob to match. At the bond's own 0.22 even six loose
+// atoms came out as one saturated pink mass filling the space between them:
+// every pair was in there and not one of them could be told apart. Narrow,
+// each pair is a RIBBON from one atom to the other, so fifteen pairs read as
+// fifteen, and the brightest places are where several overlap — which is also
+// the truth about where the energy is.
+//
+// It lives up here, away from the Sandbox code that uses it, because the dev
+// panel builds itself before that section runs and reading a `let` early is a
+// ReferenceError, not an undefined. See `sbFreeFieldSegs`.
+let sbFreeWidth = 0.03;
 const BOND_COLORMAP  = new Uint8Array(LOAD_BINS * 256 * 4);
 
 // A different taper of opacity, and the reason this is separate at all.
@@ -1964,8 +1979,14 @@ function drawFieldHeatmap(destCtx, segsIn, boxW, boxH, opts) {
   // hi-res for the frames it steps, but a clip starts and ends on frames that
   // are not inside that swap, and a buffer that changes size mid-clip is a
   // visible softening on the first frame of every replay.
+  // `opts.scale` overrides all of that. One caller uses it: the Sandbox's
+  // free-atom field, which is the smoothest thing drawn anywhere here — a few
+  // enormous soft blobs — and so needs the fewest pixels of anything. It is
+  // also the only pass whose cost grows as the SQUARE of what is on screen, so
+  // it is the one place where buying resolution back is worth real money.
   const view = (replayCam && !boxW) ? replayView() : null;
-  const scale = (view ? FIELD_SCALE['hi-res'] * replayDetail
+  const scale = (opts && opts.scale) ||
+                (view ? FIELD_SCALE['hi-res'] * replayDetail
                       : (FIELD_SCALE[_quality] || 0.2))
               * (boxW ? 1 : drawZoom());
   const bw = view ? view.w : (boxW || world.w);
@@ -3280,7 +3301,14 @@ function bodyGhosts(b) {
 // and cold, or pink and short. With BOND STORAGE on 'hidden' the load is the
 // collision flare alone, so a hit still shows and the hidden accumulation stays
 // hidden — the stretch keeps that secret exactly as the ramp does.
-let bondStretchMax = 0.12;      // share of its own length, at load 1
+// 0.30 of its own length at full load, and it is meant to be OBVIOUS. The
+// first value here was 0.12, which looked right next to a cold molecule and
+// was invisible in play: measured, a hit's peak load is about 0.7 at every
+// temperature (median 0.73 / 0.71 / 0.65 at Low / Med / High over 200 events),
+// so 0.12 was spending its range on a stretch of 8% that lasted the 0.3 s of
+// the flare's decay. At 0.30 the same ordinary hit opens the bond by a fifth
+// and the hard ones by a third.
+let bondStretchMax = 0.30;      // share of its own length, at load 1
 
 function bondDrawLoad(b) { return Math.min(1, Math.max(b.flare, vibLoad(b))); }
 
@@ -8641,7 +8669,12 @@ replayOnBox.addEventListener('change', () => {
       'product cannot break and cannot take energy into its fields. Ships ON ' +
       '\u2014 measured, a finished world holds 100% of the time with it and 68% ' +
       'without. The switch is here only so the two can be compared</div>' +
-    row('devStretch', 'Hit stretches bond', 0, 0.4, 0.01, bondStretchMax, '#ffd84d') +
+    row('devStretch', 'Hit stretches bond', 0, 0.8, 0.01, bondStretchMax, '#ffd84d') +
+    row('devFreeWidth', 'Free-pair ribbon', 0.01, 0.25, 0.005, sbFreeWidth, '#ffd84d') +
+    '<div style="opacity:0.45;font-size:10px;">Sandbox, SHOW ENERGY IN UNBONDED ' +
+      'ATOMS: how wide each pair’s lobe is as a share of the gap it spans. ' +
+      'A bond’s is 0.22; at anything like that the pairs merge into one ' +
+      'pink mass instead of reading as pairs</div>' +
     '<div style="opacity:0.45;font-size:10px;">how far a fully loaded bond is ' +
       'DRAWN apart, as a share of its own length. Tracks the same load as the ' +
       'colour, so it grows on the hit and settles back as the energy drains. ' +
@@ -8889,6 +8922,7 @@ replayOnBox.addEventListener('change', () => {
   bind('devBreakH', v => breakEnergy = v, false, v => v.toFixed(2));
   bind('devColFull', v => colourFull = v, false, v => Math.round(v * 100) + '% of cap');
   bind('devStretch', v => bondStretchMax = v, false, v => Math.round(v * 100) + '%');
+  bind('devFreeWidth', v => sbFreeWidth = v, false, v => v.toFixed(3));
   bind('devVibTau', v => VIB_TAU     = v, false, v => v.toFixed(1) + ' s');
   bind('devVibGlow', v => VIB_GLOW   = v, false, v => v.toFixed(2));
   bind('devBarZero', v => { barZeroAt = v; anchorBarScale(); }, false,
@@ -10505,14 +10539,19 @@ function sbTotalEnergy() {
 // storing the most it ever will. Pull a bond past breaking in One Bond and you
 // get one of these; the Sandbox just has more than one pair of atoms in it.
 //
-// WHICH PAIRS. Every unbonded atom is joined to its NEAREST unbonded
-// neighbour, and a pair that chooses each other draws one lobe between them,
-// not two. All pairs would be the literal reading and it is unusable: the
-// count goes up as the square, every lobe is as wide as the gap it spans, and
-// six loose atoms white out the screen with fifteen overlapping maxima. The
-// nearest neighbour is the pair that would actually bond if they came
-// together, so it is the one worth drawing — and with two atoms in the scene
-// it is One Bond's picture exactly.
+// EVERY PAIR, not a chosen few. Each unbonded atom is joined to every other
+// unbonded atom, because each of those pairs really is holding that energy and
+// picking a favourite would be drawing a different, smaller claim. An earlier
+// version joined each atom only to its nearest neighbour, which read as a
+// chain and quietly said the other pairs did not exist.
+//
+// It costs n(n-1)/2 lobes, the only pass here whose work grows as the square
+// of the scene, and each lobe is as wide as the gap it spans — so with the
+// ordinary field resolution a dozen loose atoms would be rasterising most of
+// the canvas sixty-odd times a frame. SB_FREE_SCALE is the answer: this field
+// is a handful of enormous soft blobs with no detail in them anywhere, so it
+// is rendered at a twelfth of a pixel per pixel and the upscale is free. See
+// `opts.scale` in drawFieldHeatmap.
 //
 // AN ATOM IN A MOLECULE IS NOT IN THIS. Its field is drawn where its bonds
 // are, relative to the atoms it is bonded to, because that is what its energy
@@ -10521,6 +10560,18 @@ function sbTotalEnergy() {
 // Off by default: the tab opens as the scene you built, and this is the extra
 // reading rather than the first one.
 let sbFreeFields = false;
+// Field pixels per canvas pixel for this pass. Higher than you would expect
+// for a pass that can draw 171 lobes, and affordable for exactly the reason
+// they are narrow: almost every pixel in a ribbon's bounding box fails the
+// perpendicular cull immediately. Measured at 171 pairs: 0.7 ms at 0.085,
+// 3.7 at 0.25, 8.5 at 0.4 — against 17 ms for the WIDE lobes at 0.085. A
+// ribbon is thin, so it is the one thing here that actually needs the pixels:
+// at 0.085 a 10 px sigma came out under a buffer pixel across and the ribbons
+// drew dashed.
+const SB_FREE_SCALE = 0.28;
+
+// The lobe is narrower than a bond's — `sbFreeWidth`, declared up with the
+// other field tuning because the dev panel reads it before this line runs.
 
 function sbFreeFieldSegs() {
   const A = sandbox.atoms;
@@ -10530,29 +10581,21 @@ function sbFreeFieldSegs() {
   for (let i = 0; i < A.length; i++) if (!bonded[i]) free.push(i);
   if (free.length < 2) return [];          // nothing to be apart FROM
 
-  // Nearest unbonded neighbour for each, then one lobe per distinct pair.
-  const segs = [], drawn = new Set();
-  for (const i of free) {
-    let best = -1, bestD = Infinity;
-    for (const k of free) {
-      if (k === i) continue;
-      const d = Math.hypot(A[k].x - A[i].x, A[k].y - A[i].y);
-      if (d < bestD) { bestD = d; best = k; }
+  const segs = [];
+  for (let a = 0; a < free.length; a++) {
+    for (let b = a + 1; b < free.length; b++) {
+      const i = free[a], k = free[b];
+      segs.push({
+        x1: A[i].x, y1: A[i].y, x2: A[k].x, y2: A[k].y,
+        // The top of the ramp. `bondShownMag` of the deepest well is 1 by
+        // construction, and One Bond's strongest pair reaches exactly this at
+        // the end of its drag — so "the most it can hold" is one brightness
+        // across both tabs.
+        mag: BOND_FIELD_GAIN * BOND_FIELD_BOOST,
+        squeeze: BOND_FIELD_SQUEEZE,
+        load: 1,        // full pink: nothing is holding more than this
+      });
     }
-    if (best < 0) continue;
-    const key = Math.min(i, best) + ':' + Math.max(i, best);
-    if (drawn.has(key)) continue;
-    drawn.add(key);
-    segs.push({
-      x1: A[i].x, y1: A[i].y, x2: A[best].x, y2: A[best].y,
-      // The top of the ramp. `bondShownMag` of the deepest well is 1 by
-      // construction, and One Bond's strongest pair reaches exactly this at
-      // the end of its drag — so "the most it can hold" is one brightness
-      // across both tabs.
-      mag: BOND_FIELD_GAIN * BOND_FIELD_BOOST,
-      squeeze: BOND_FIELD_SQUEEZE,
-      load: 1,        // full pink: nothing is holding more than this
-    });
   }
   return segs;
 }
@@ -10784,9 +10827,21 @@ function drawSandbox() {
   ctx.fillRect(0, 0, W, H);
   const A = sandbox.atoms;
 
-  // One lobe per bond, through the same heatmap everything else uses — plus,
-  // with SHOW ENERGY IN UNBONDED ATOMS on, one round lobe per unbonded atom.
-  if (sandbox.bonds.length || (sbFreeFields && A.length)) {
+  // The free-atom field goes down FIRST and in a pass of its own, at its own
+  // much lower resolution (see SB_FREE_SCALE). Its own pass because one buffer
+  // cannot be two resolutions, and first because the bonds are the detail: a
+  // bond lobe is a few tens of pixels across and has to stay crisp on top of
+  // whatever wash is behind it.
+  if (sbFreeFields && A.length) {
+    const free = sbFreeFieldSegs();
+    if (free.length) {
+      drawFieldHeatmap(ctx, free, W, H, { width: sbFreeWidth,
+        gain: BOND_FIELD_GAIN, colormap: BOND_COLORMAP, scale: SB_FREE_SCALE });
+    }
+  }
+
+  // One lobe per bond, through the same heatmap everything else uses.
+  if (sandbox.bonds.length) {
     const segs = sandbox.bonds.map(b => ({
       x1: A[b.i].x, y1: A[b.i].y, x2: A[b.k].x, y2: A[b.k].y,
       // Through bondShownMag, the same compressed depth scale the One Bond tab
@@ -10800,7 +10855,6 @@ function drawSandbox() {
       squeeze: BOND_FIELD_SQUEEZE,
       load: b.work,
     }));
-    if (sbFreeFields) segs.push(...sbFreeFieldSegs());
     drawFieldHeatmap(ctx, segs, W, H,
       { width: BOND_FIELD_WIDTH, gain: BOND_FIELD_GAIN, colormap: BOND_COLORMAP });
   }
@@ -11536,7 +11590,7 @@ function sbUpdateReadout() {
       : !sbFreeFields
         ? free + (free === 1 ? ' atom is' : ' atoms are') + ' counted but not drawn'
       : free === 1 ? 'one loose atom, with nothing to be apart from'
-      : free + ' loose atoms, each joined to its nearest';
+      : free + ' loose atoms, every pair of them (' + (free * (free - 1) / 2) + ')';
   }
 }
 

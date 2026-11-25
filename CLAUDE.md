@@ -5384,13 +5384,33 @@ at the top of the scale and full pink**, because a pair too far apart to be
 bonded is storing the most it ever will. Pull a bond past breaking in One Bond
 and you get one of these; the Sandbox just has more than one pair in it.
 
-**Which pairs.** Every unbonded atom is joined to its **nearest unbonded
-neighbour**, and a pair that chooses each other draws one lobe, not two. All
-pairs is the literal reading and it is unusable: the count goes up as the
-square, every lobe is as wide as the gap it spans, and six loose atoms white
-out the screen under fifteen overlapping maxima. The nearest neighbour is the
-pair that would actually bond if they came together, so it is the one worth
-drawing — and with two atoms in the scene it is One Bond's picture exactly.
+**Every pair, not a chosen few.** Each unbonded atom is joined to every other
+one, because each of those pairs really is holding that energy and picking a
+favourite draws a different, smaller claim. An earlier version joined each atom
+only to its nearest neighbour; it read as a chain and quietly said the other
+pairs did not exist.
+
+Two things make all-pairs work, and it does not work without either:
+
+- **A much narrower lobe.** A lobe's width is a fraction of its own LENGTH,
+  which is right for a bond — they are all about one bond long — and wrong for
+  a pair that can be the width of the tab apart. At the bond's own `0.22` even
+  six loose atoms came out as one saturated pink mass: every pair was in there
+  and not one could be told apart. At `sbFreeWidth = 0.03` each pair is a
+  ribbon and fifteen pairs read as fifteen.
+- **Its own pass, at its own resolution.** `opts.scale` in `drawFieldHeatmap`
+  exists for this one caller. Narrow ribbons are *cheap* — almost every pixel
+  in a ribbon's bounding box fails the perpendicular cull at once — so the
+  resolution can go UP rather than down: 171 pairs cost 0.7 ms at 0.085, 3.7 at
+  0.25, 8.5 at 0.4, against **17 ms** for the wide lobes at 0.085. It ships at
+  **0.28**, because a thin ribbon is the one thing here that needs the pixels:
+  at 0.085 a 10 px sigma fell under one buffer pixel and the ribbons drew
+  dashed.
+
+With two atoms it is One Bond's picture exactly. With six it is a complete
+graph in pink. With nineteen (171 pairs, 6.2 ms) it saturates into a sheet —
+which is what every pair at maximum sums to, and is the honest answer rather
+than a bug. `devFreeWidth` is in ACTIVE for tuning that.
 
 An atom **inside a molecule is not in this**. Its field is drawn where its
 bonds are, relative to the atoms it is bonded to, because that is what its
@@ -5446,8 +5466,16 @@ comes out at exactly **12%** at load 1, and the mass centre stays at (0, 0) —
 so a stretching molecule neither drifts nor wobbles about the point it spins
 on. It is also what a hot molecule actually does: breathe.
 
-`bondStretchMax` is in ACTIVE at **0.12**. The settle is the flare's own decay:
-12% → 4.9% at 300 ms → 0.5% at 1.1 s.
+`bondStretchMax` is in ACTIVE at **0.30**, and it is meant to be obvious. It
+shipped at 0.12 first, which looked right beside a cold molecule and was
+invisible in play: a hit's peak load is about **0.7 at every temperature**
+(median 0.73 / 0.71 / 0.65 at Low / Med / High over 200 events), so 0.12 was
+spending its range on a stretch of 8% lasting the 0.3 s of the flare's decay.
+At 0.30 the same ordinary hit opens the bond by a fifth and a hard one by a
+third. Measured live at High with nothing forced, the drawn stretch runs
+p50 4.2% / p90 18.9% / p99 28.6% and tops out at exactly 30.0% — the median is
+low because most frames are *between* hits, not during one. **There is no
+clamp anywhere below that 30%.**
 
 ## Asteroids is the default
 
