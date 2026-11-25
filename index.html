@@ -5299,8 +5299,6 @@ function anchorBarScale() {
   const fieldsNow = fieldsKJ();
   barFullKJ = Math.max(1, fieldsNow + motionAtTemp(TEMP_HIGH));
   barMotionZeroKJ = Math.max(0, barZeroAt * motionAtTemp(TEMP_LOW));
-  // The per-atom twin of the same axis — see atomAxisTop.
-  atomAxisFullKJ = Math.max(SB_FREE_ATOM * 1.1, barFullKJ / Math.max(1, atomCount()));
 }
 
 function motionZeroKJ() { return barMotionZeroKJ; }
@@ -5575,15 +5573,29 @@ const shellSpin = 0;      // rad/s round the ring — none
 // without watching them for a few seconds, which is exactly what a slider is
 // for and exactly what a constant buried here was not.
 let shellWobble = 0;
-let shellWobbleAmp = 0.15;    // x the shell radius — the slow DRIFT
-let shellWobbleHz  = 1.1;
+let shellWobbleAmp = 0.12;    // x the shell radius — the slow DRIFT
+let shellWobbleHz  = 1.75;
 // ...and the SHAKE on top of it: a second, much faster term at a fraction of
 // the drift's amplitude. Two words, two things. The drift alone traces a slow
 // smooth Lissajous — the electron strolling round its seat — and at rest that
 // reads as a calm orbit rather than as a particle whose position is a
 // probability. The shake is what makes it unsettled rather than merely moving.
 let shellShake = 0.45;             // x the drift amplitude
-const SHELL_SHAKE_HZ = 5.3;        // rad/s, no round ratio to the drift
+
+// A BONDING PAIR HAS TO WIN AGAINST THE LOBE IT SITS IN.
+//
+// The shared pair sits at the middle of the bond, which is exactly where the
+// field lobe is brightest, so the one dot the Lewis reading is made of was the
+// one competing hardest for its pixels. `gain` lifts the bonding electrons and
+// leaves the lone pairs where they were: they sit out on the shell with nothing
+// behind them and need no help, and raising everything equally would only move
+// the whole picture up and keep the contrast exactly where it was.
+//
+// It buys BOTH alpha and a bigger core, because against a bright background
+// alpha alone saturates — past about 1 the halo has nowhere left to go and only
+// the solid middle still reads.
+let bondDotGain = 1.8;
+const SHELL_SHAKE_HZ = 8.5;        // rad/s, no round ratio to the drift
 
 // The Reactions shells view pulls its bonding electrons towards the middle of
 // the bond by `bondCentreHold`, the same number the One Bond tab holds its
@@ -5674,7 +5686,8 @@ function drawElectronsAsDots(b, dc = ctx) {
       ly = at.ly + r * Math.sin(ang) + wy;
     }
     drawElectronDot(dc, b.x + lx * ca - ly * sa, b.y + lx * sa + ly * ca,
-                    elemEInk(e.el), false, SHELL_DOT_R);
+                    elemEInk(e.el), false, SHELL_DOT_R,
+                    e.kind === 'bond' ? bondDotGain : 1);
   }
 }
 
@@ -6030,7 +6043,7 @@ function splineThrough(ctx, pts) {
 let followOn    = true;    // the dev toggle — ships ON
 let followUid   = 0;       // which atom, by its own uid; 0 = none picked
 let followGlow  = 1.3;     // how brightly the followed atom is lit
-let followAxisKJ = 0;      // 0 = the whole per-atom axis — see atomAxisTop()
+
 
 function reactionsOn() { return !bondTab.on && !sandbox.on; }
 
@@ -6180,16 +6193,52 @@ function followProgress(t) {
 
 // THE AXIS IS FIXED FOR THE RUN, and it is the per-atom twin of the bar chart's
 // — `barFullKJ` shared out over the atoms in the scene — so switching
-// temperature moves the lines and not the frame, for the same reason the bars
-// stopped rescaling. Anchored beside the bar scale, from the same numbers.
-let atomAxisFullKJ = 1;
-function atomCount() { return world.bodies.reduce((a, b) => a + b.els.length, 0); }
-// Motion dwarfs fields per atom — about 1,400 kJ/mol against the 100-500 a bond
-// discount comes to — so the fields curve lives in the bottom fifth of an
-// honest axis. `followAxisKJ` is the knob for that: pull it down to magnify the
-// fields curve and let the motion line run off the top. 0 is the honest axis.
-function atomAxisTop() {
-  return followAxisKJ > 0 ? followAxisKJ : atomAxisFullKJ;
+// THE AXIS FITS THE CURVE, with a little room either side.
+//
+// It used to be the per-atom twin of the bar chart's — `barFullKJ` shared out
+// over the atoms — which was the right answer while the panel also carried this
+// atom's MOTION, about 1,400 kJ/mol against the 100-500 a bond discount comes
+// to. With the motion line gone there is nothing left on the panel that needs
+// that much room, and an axis sized for it left the whole curve squashed into
+// the bottom fifth of the frame.
+//
+// So the range is taken from the curve itself: its three anchor points and
+// wherever the atom is now, padded by `followAxisPad` of the span. The anchors
+// are FIXED for a given element in a given reaction — where it starts, free at
+// the peak, where it ends up — so the axis does not move while the atom walks
+// between them, and the reading stays a reading rather than a frame that
+// breathes. Including the live value only ever expands it, and only in the one
+// case that can exceed a free atom: stored vibration being shown.
+let followAxisPad = 0.15;          // x the span, at each end
+
+// ONE SCALE FOR ENERGY IN FIELDS, used by the line graph and by the bar.
+//
+// The fields bar was drawn against the run's whole total — motion included —
+// and motion is most of it, so at Low the fields bar filled about a seventh of
+// the chart and the fields LINE was a nearly flat thing along the bottom of the
+// panel. Neither was wrong and neither was legible.
+//
+// So fields gets an axis of its own, fitted to the curve it actually draws:
+// the lowest and highest the run has been, padded. The LINE and the BAR read
+// the same numbers off the same range, so a bar half way up and a line half way
+// up mean the same thing — which is the whole reason to share it.
+//
+// THE CONSEQUENCE, and it is a real one: the two bars no longer share a scale,
+// so they no longer sum to the chart and you can no longer read one going up as
+// the other comes down. The panel says so under its title.
+function fieldsAxisRange() {
+  if (!progressTrace.length) return { lo: 0, hi: 1 };
+  const v = smoothedSeries('fKJ');
+  return atomAxisRange([Math.min(...v), Math.max(...v),
+                        Math.max(0, fieldsKJ() - fieldsZeroKJ)]);
+}
+
+function atomAxisRange(vals) {
+  const v = vals.filter(x => x != null && isFinite(x));
+  if (!v.length) return { lo: 0, hi: SB_FREE_ATOM };
+  let lo = Math.min(...v), hi = Math.max(...v);
+  const pad = Math.max(1, (hi - lo)) * Math.max(0, followAxisPad);
+  return { lo: lo - pad, hi: hi + pad };
 }
 
 // ─── THE REPLAY ──────────────────────────────────────────────────────────────
@@ -6215,7 +6264,7 @@ function atomAxisTop() {
 // time.
 let replayOn       = true;    // the dev toggle
 let replayRate     = 0.25;    // how fast the clip runs, x real time
-let replayZoom     = 2.4;     // x the scene zoom, while it plays
+let replayZoom     = 1.9;     // x the scene zoom, while it plays
 let replayCooldown = 2.5;     // s of play before another one may trigger
 const REPLAY_PRE  = 0.7;      // s of clip before the moment
 const REPLAY_POST = 0.35;     // ...and after it
@@ -6296,7 +6345,11 @@ function recordReplay(dt) {
 
 function startReplay(frames, eventAt) {
   if (!frames || frames.length < 2) return;
-  replay.clip = { frames: frames.slice(), eventAt };
+  // Where the atom is ON the frame it happens, not where it is now — see
+  // replayCamAt. Falls back to the last frame if the moment is somehow not in
+  // the clip, which cannot happen while the post-roll is what builds it.
+  const at = frames.find(f => f.t >= eventAt) || frames[frames.length - 1];
+  replay.clip = { frames: frames.slice(), eventAt, at: { x: at.cam.x, y: at.cam.y } };
   replay.playing = true;
   replay.clock = frames[0].t;
   // The button is dead until there is something to replay, and this is the one
@@ -6341,15 +6394,26 @@ function stopReplay() {
   syncReplayBtn();
 }
 
-// Where the camera should sit: on the atom, but kept inside the walls, because
-// a close-up that wanders off the box is mostly background.
-function replayCamAt(f) {
+// THE CAMERA IS PINNED TO WHERE IT IS ABOUT TO HAPPEN, FROM THE FIRST FRAME.
+//
+// It tracked the followed atom first, and that is the wrong shot: a camera
+// locked to a thing is a camera in which that thing never moves, so the one
+// reading the clip exists to give — these two came together — was the only
+// thing on screen you could not see. Everything else swept past it instead.
+//
+// So the point is taken ONCE, from the frame the moment happens on, and held
+// for the whole clip. The pre-roll is then a still frame of the place it is
+// going to happen, with both particles flying into it. That is the shot.
+//
+// Kept inside the walls, because a close-up that wanders off the box is mostly
+// background.
+function replayCamAt(p) {
   const z = sceneZoom * replayZoom;
   const vw = sceneW() / z, vh = (world.h * sceneZoom) / z;
   const clamp = (v, half, span) =>
     span <= half * 2 ? span / 2 : Math.max(half, Math.min(span - half, v));
-  return { x: clamp(f.cam.x, vw / 2, world.w),
-           y: clamp(f.cam.y, vh / 2, world.h) };
+  return { x: clamp(p.x, vw / 2, world.w),
+           y: clamp(p.y, vh / 2, world.h) };
 }
 
 function stepReplay(dtWall) {
@@ -6370,7 +6434,9 @@ function stepReplay(dtWall) {
 
   const live = world.bodies;
   world.bodies = f.bodies;
-  replayCam = replayCamAt(f);
+  // Recomputed each frame but from the SAME point, so the shot is still and
+  // the clamp still answers to the zoom slider while a clip is looping.
+  replayCam = replayCamAt(clip.at);
   drawWorld();
   replayCam = null;
   world.bodies = live;
@@ -6383,14 +6449,17 @@ function drawAtomGraph(t) {
   const p    = followProgress(t);
   const E0   = reactantLevelKJ(el);
   const E1   = productLevelKJ(el, body.els);
-  const name = el + ' in ' + formulaOf(body.els);
+  // "H in H" is what a lone atom came out as, which reads as a mistake rather
+  // than as the thing it is.
+  const name = body.els.length > 1 ? el + ' in ' + formulaOf(body.els) : 'free ' + el;
 
   const G = drawGraphFrame(name.toUpperCase() + '  ·  ' + Math.round(E) +
                            ' kJ/mol IN FIELDS');
   const { W, TOP, AXIS, gH, px, pxL, pxR, LIGHT, dimCol, fieldsCol } = G;
 
-  const top = Math.max(1, atomAxisTop());
-  const py  = (kj) => TOP + gH * (1 - clamp01(kj / top));
+  const { lo, hi } = atomAxisRange([E0, SB_FREE_ATOM, E1, E]);
+  const span = Math.max(1, hi - lo);
+  const py = (kj) => TOP + gH * (1 - clamp01((kj - lo) / span));
 
   // THE ATOM'S OWN REACTION CURVE: its energy where it started, free at the
   // peak, and where it ends up. Three points, which is the whole of what one
@@ -6465,9 +6534,11 @@ function followPick(ev) {
       if (d < valenceRadius(a.el) && d < bestD) { bestD = d; best = b.atoms[a.i].uid; }
     }
   }
-  // A click on nothing CLEARS it, which is the way back to the world's graph
-  // without reaching for the dev panel.
-  if (best !== followUid) { followUid = best; forgetReplay(); }
+  // A click on nothing CLEARS it, and so does a click on the atom already
+  // selected — picking is a toggle, so the way back to the world's graph is the
+  // same gesture that got you here rather than a trip to the dev panel.
+  const next = (best && best === followUid) ? 0 : best;
+  if (next !== followUid) { followUid = next; forgetReplay(); }
   ev.preventDefault();
 }
 
@@ -6645,7 +6716,16 @@ function drawEnergyGraph() {
 
   // Smoothed once per draw, then shared by the lines and the markers so the
   // markers cannot drift off the curve they are supposed to be sitting on.
-  const series = { motion: smoothedSeries('motion'), fields: smoothedSeries('fields') };
+  // MOTION is a fraction of the bar's own chart, as it always was. FIELDS is
+  // read in kJ/mol off its own fitted axis — see fieldsAxisRange — so the line
+  // and the fields bar beside it say the same thing, and the curve uses the
+  // whole panel instead of lying along the bottom of it.
+  const fa = fieldsAxisRange();
+  const fSpan = Math.max(1, fa.hi - fa.lo);
+  const series = {
+    motion: smoothedSeries('motion'),
+    fields: smoothedSeries('fKJ').map(v => (v - fa.lo) / fSpan),
+  };
   // The graph's own offset and tilt on the fields line — see graphFieldsStart.
   // Applied into the smoothed array, so the line and its marker cannot end up
   // reading from two different versions of the same number.
@@ -6770,11 +6850,20 @@ function barChartSpec() {
   const noData = world.bodies.length === 0;
   const mZero  = motionZeroKJ();
   return {
-    bars: [
-      { label: 'Energy of Motion', value: noData ? 0 : Math.max(0, motionKJ() - mZero),
-        color: MOTION_COLOR, glow: MOTION_GLOW },
-      fieldsBar(noData ? 0 : Math.max(0, fieldsKJ() - fieldsZeroKJ)),
-    ],
+    bars: (() => {
+      // The fields bar is drawn on the LINE GRAPH's fields axis, so a bar half
+      // way up and a line half way up are the same reading. Its own max and
+      // zero, because that range is nothing like the run's total.
+      const fa = fieldsAxisRange();
+      const fb = fieldsBar(noData ? 0 : Math.max(0, fieldsKJ() - fieldsZeroKJ - fa.lo));
+      fb.max = Math.max(1, fa.hi - fa.lo);
+      fb.axisLo = fa.lo;
+      return [
+        { label: 'Energy of Motion', value: noData ? 0 : Math.max(0, motionKJ() - mZero),
+          color: MOTION_COLOR, glow: MOTION_GLOW },
+        fb,
+      ];
+    })(),
     // Full scale is anchored at spawn from the hottest this world can get, NOT
     // from the temperature it is at — see anchorBarScale. So the two bars no
     // longer fill the chart between them at Low or Med, and that gap is the
@@ -6784,10 +6873,11 @@ function barChartSpec() {
     // Say that the zero is raised, in fusion's own voice for its "not to scale"
     // line. A distorted axis that does not admit it is a lie; one that does is a
     // magnifying glass.
-    note: (!noData && (mZero > 0.5 || fieldsZeroKJ > 0.5))
-      ? 'zero raised ' + Math.round(mZero).toLocaleString() +
-        ' kJ/mol — this is the change, not the total'
-      : '',
+    // The two bars are on DIFFERENT scales now — fields on the line graph's
+    // fitted axis, motion on the run's total — so they no longer sum to the
+    // chart and the panel has to say so. A distorted axis that does not admit
+    // it is a lie; one that does is a magnifying glass.
+    note: noData ? '' : 'each bar on its own scale — fields matches the line graph',
     noData,
   };
 }
@@ -6849,7 +6939,13 @@ function drawBarChart() {
       c.font = '9px Inter, system-ui, sans-serif';
       c.textAlign = 'right';
       c.textBaseline = 'middle';
-      c.fillText(Math.round((i / 5) * maxVal).toLocaleString(), chartX - 5, py);
+      // Labelled for the FIELDS bar when it carries its own scale, because that
+      // is the axis the line graph is drawn on and the one worth reading off.
+      const scaled = bars.find(b => b.max);
+      const lab = scaled
+        ? (scaled.axisLo || 0) + (i / 5) * scaled.max
+        : (i / 5) * maxVal;
+      c.fillText(Math.round(lab).toLocaleString(), chartX - 5, py);
       c.restore();
     }
   }
@@ -6864,7 +6960,7 @@ function drawBarChart() {
   c.textAlign = 'center';
 
   bars.forEach((bar, i) => {
-    const barPx  = Math.max(0, Math.min(1, bar.value / maxVal)) * chartH;
+    const barPx  = Math.max(0, Math.min(1, bar.value / (bar.max || maxVal))) * chartH;
     const x      = groupX + i * barW + barW * 0.1;
     const bw     = barW * 0.8;
     const barTop = baseline - barPx;
@@ -7118,7 +7214,10 @@ document.getElementById('playbackSpeed').addEventListener('change', function () 
 // Energy graph show/hide. The key, the graph and the percentage appear together,
 // each via its own `.visible` class (they are display:none by default).
 const GRAPH_PARTS = ['energyGraphKey', 'energyGraphBox', 'energyPercents'];
-let graphShown = false;   // off by default — the sim is the thing to look at
+// ON by default. It was off on the argument that the sim is the thing to look
+// at; with the fields line now fitted to its own axis it is a reaction curve
+// rather than a flat thing along the bottom, and it is worth arriving to.
+let graphShown = true;
 
 function setGraphShown(on) {
   graphShown = on;
@@ -7215,9 +7314,9 @@ document.getElementById('replayBtn').addEventListener('click', () => {
     '<div style="opacity:0.45;font-size:10px;">how long it runs normally before ' +
       'another moment may interrupt. The button ignores it</div>' +
     row('devFollowGlow', 'Followed: glow',     0, 2,    0.05, followGlow,   '#ffd84d') +
-    row('devFollowAxis', 'Followed: axis top', 0, 2000, 50,   followAxisKJ, '#ffd84d') +
+    row('devFollowPad', 'Followed: headroom', 0, 0.6, 0.01, followAxisPad, '#ffd84d') +
     '<div style="opacity:0.45;font-size:10px;">how bright the followed atom ' +
-      'burns, and the top of its graph. 0 axis = the true scale</div>' +
+      'burns, and how much room is left above and below its curve</div>' +
     row('devTakes', 'Reactant takes in',  0.05, 1, 0.05, reactantTakes,    '#ffd84d') +
     row('devPace',  'Judged by own pace', 0,    1, 0.05, reactantRelative, '#ffd84d') +
     '<div style="opacity:0.45;font-size:10px;">how hard a hit counts for a ' +
@@ -7244,6 +7343,10 @@ document.getElementById('replayBtn').addEventListener('click', () => {
     row('devShWobA',  'Shell drift', 0, 0.4, 0.005, shellWobbleAmp, '#ffd84d') +
     row('devShWobHz', 'Drift speed', 0, 3,   0.02,  shellWobbleHz,  '#ffd84d') +
     row('devShShake', 'Shell shake', 0, 1.5, 0.05,  shellShake,     '#ffd84d') +
+    row('devBondDot', 'Bond pair glow', 1, 3, 0.1, bondDotGain, '#ffd84d') +
+    '<div style="opacity:0.45;font-size:10px;">a shared pair sits where the ' +
+      'field lobe is brightest. This lifts those dots clear of it; lone pairs ' +
+      'are left alone</div>' +
     '<div style="opacity:0.45;font-size:10px;">the only motion in the shells ' +
       'view — each electron drifting about its seat, not lapping the ring. ' +
       'At 0 a paused scene looks switched off rather than held</div>' +
@@ -7478,6 +7581,8 @@ document.getElementById('replayBtn').addEventListener('click', () => {
        v => v > 0 ? v.toFixed(2) + '×' : 'frozen');
   bind('devShShake', v => shellShake = v, false,
        v => v > 0 ? Math.round(v * 100) + '% of the drift' : 'smooth');
+  bind('devBondDot', v => bondDotGain = v, false,
+       v => v > 1 ? v.toFixed(1) + '×' : 'same as lone');
   const strongCb = panel.querySelector('#devStrong');
   strongCb.checked = strongWater;
   strongCb.addEventListener('change', () => setStrongProducts(strongCb.checked));
@@ -7531,8 +7636,8 @@ document.getElementById('replayBtn').addEventListener('click', () => {
        v => v > 0 ? v.toFixed(1) + ' s' : 'every moment');
   bind('devFollowGlow', v => followGlow = v, false,
        v => v > 0 ? Math.round(v * 100) + '%' : 'off');
-  bind('devFollowAxis', v => followAxisKJ = v, false,
-       v => v > 0 ? Math.round(v) + ' kJ/mol' : 'honest');
+  bind('devFollowPad', v => followAxisPad = v, false,
+       v => v > 0 ? Math.round(v * 100) + '%' : 'tight');
   bind('devTakes',  v => reactantTakes = v, false,
        v => v >= 1 ? 'all of it' : Math.round(v * 100) + '% of a hit');
   bind('devPace',   v => reactantRelative = v, false,
@@ -8517,17 +8622,20 @@ function stepBondDots() {
 
 // One glowing dot: soft halo, tinted core. Inner-shell electrons are dimmer,
 // the way bonds draws them.
-function drawElectronDot(c, x, y, hex, dim, R) {
+function drawElectronDot(c, x, y, hex, dim, R, gain) {
   const rgb = _rgbOf(hex);
+  const k = gain == null ? 1 : gain;
+  const a = (v) => Math.min(1, v * k).toFixed(3);
   R = R || BOND_DOT_GLOW;
   const g = c.createRadialGradient(x, y, 0, x, y, R);
-  g.addColorStop(0,    'rgba(' + rgb + ',' + (dim ? 0.26 : 0.55) + ')');
-  g.addColorStop(0.45, 'rgba(' + rgb + ',' + (dim ? 0.10 : 0.22) + ')');
+  g.addColorStop(0,    'rgba(' + rgb + ',' + a(dim ? 0.26 : 0.55) + ')');
+  g.addColorStop(0.45, 'rgba(' + rgb + ',' + a(dim ? 0.10 : 0.22) + ')');
   g.addColorStop(1,    'rgba(' + rgb + ',0)');
   c.fillStyle = g;
   c.beginPath(); c.arc(x, y, R, 0, Math.PI * 2); c.fill();
-  c.fillStyle = 'rgba(' + rgb + ',' + (dim ? 0.4 : 0.92) + ')';
-  c.beginPath(); c.arc(x, y, Math.max(1.5, R / 5.7), 0, Math.PI * 2); c.fill();
+  c.fillStyle = 'rgba(' + rgb + ',' + a(dim ? 0.4 : 0.92) + ')';
+  const core = Math.max(1.5, R / 5.7) * (1 + 0.35 * Math.max(0, k - 1));
+  c.beginPath(); c.arc(x, y, core, 0, Math.PI * 2); c.fill();
 }
 
 // The shell bands: a gradient ring peaking at each occupied shell radius. The
@@ -8638,7 +8746,8 @@ function drawBondTab() {
   // atom it came from, wherever on the bond it currently is — which is what
   // makes pulling them apart legible: you watch each one go home.
   for (const dot of bondTab.dots) {
-    drawElectronDot(ctx, dot.x, dot.y, ELEMENTS[[A, B][dot.side].el].rgb, false);
+    drawElectronDot(ctx, dot.x, dot.y, ELEMENTS[[A, B][dot.side].el].rgb, false,
+                    null, bondDotGain);
   }
 
   // A ring on each atom says "this is the handle". It is drawn at the GRAB
@@ -9363,7 +9472,8 @@ function sbDrawValenceElectrons(c, A, bonds) {
         const [wx, wy] = shellWobbleAt(b.i * 3.3 + b.k * 1.7 + pr * 5.9 + q * 2.1, spread);
         drawElectronDot(c, mx + ux * along + px * off + wx,
                              my + uy * along + py * off + wy,
-                        elemEInk(q ? pk.el : pi.el), false, SHELL_DOT_R);
+                        elemEInk(q ? pk.el : pi.el), false, SHELL_DOT_R,
+                        bondDotGain);
       }
     }
   }

@@ -4101,6 +4101,7 @@ gold above a gold rule, holding the handful still being turned:
 | View zoom | the camera — see **The camera** |
 | H₂ / O₂ / He / CH₄ molecules | density, which is the clock on the whole run |
 | Shell drift, Drift speed, Shell shake | the only motion in a resting atom |
+| Bond pair glow | lifting a shared pair clear of its own field lobe |
 | Bond storage | whether hits stack at all, and whether the colour says so |
 | New bond stays pink | the join flash, below |
 | Last reactants go easier | the kinetic nudge, below |
@@ -4339,6 +4340,107 @@ present in **every frame of every clip**, the reaction still completing to six
 waters, and `totalKJ` drift exactly **0** — the sim is paused while a clip runs,
 so there is nothing for the physics to catch up on.
 
+### The camera is pinned to where it is about to happen
+
+The replay tracked the followed atom first, and that is the wrong shot: **a
+camera locked to a thing is a camera in which that thing never moves**, so the
+one reading the clip exists to give — these two came together — was the only
+thing on screen you could not see. Everything else swept past it instead.
+
+So the point is taken **once**, from the frame the moment happens on, and held
+for the whole clip. The pre-roll is then a still frame of the place it is about
+to happen with the particles flying into it. Measured on a real clip: the camera
+pins to (649, 309), which is the atom's position at the event to the pixel, and
+the atom tracks **(−178, −126) → (462, 193) → (278, 195)** across the frame —
+in from off-screen, arriving dead centre at the moment, then away.
+
+`replayZoom` is **1.9**, down from 2.4, so everything in the close-up is about
+80% the size it was and more of the approach is in shot.
+
+### The electrons shake as well as wiggle
+
+```javascript
+let shellWobbleAmp = 0.12;     // x the shell radius — the slow DRIFT
+let shellWobbleHz  = 1.75;
+let shellShake     = 0.45;     // x that amplitude — the fast SHAKE on top
+const SHELL_SHAKE_HZ = 8.5;    // rad/s, no round ratio to the drift
+```
+
+Two words, two things. The drift alone traced a slow smooth Lissajous — the
+electron strolling round its seat — and at rest that reads as a calm little
+orbit rather than as a particle whose position is a probability. The shake is a
+second, much faster term at a fraction of the drift's amplitude, and it is what
+makes an atom at rest look unsettled rather than merely moving.
+
+Measured on a 38.1 px shell over 30 s:
+
+| | furthest from its seat | distance travelled |
+|---|---|---|
+| original (0.075 / 0.62, no shake) | 4.0 px | 2.0 px/s |
+| **as shipped** (0.12 / 1.75 / 45%) | **9.3 px** | **19.9 px/s** |
+
+The amplitude is deliberately **20% below** the first version that had a shake
+in it (0.15), while both rates went up — tighter and faster, which is the
+difference between an electron that is unsettled and one that is wandering.
+Reach is the wiggle, pace is the shake, and they are separate sliders because
+they are separate things to look at. Shared with the One Bond tab.
+
+### A bonding pair has to win against the lobe it sits in
+
+```javascript
+let bondDotGain = 1.8;      // ACTIVE: "Bond pair glow"
+```
+
+The shared pair sits at the middle of the bond, which is **exactly where the
+field lobe is brightest**, so the one dot the Lewis reading is made of was the
+one competing hardest for its pixels. The gain lifts the bonding electrons and
+leaves the lone pairs alone: those sit out on the shell with nothing behind them
+and need no help, and raising everything equally would only move the whole
+picture up and keep the contrast where it was.
+
+It buys **both alpha and a bigger core**, because against a bright background
+alpha alone saturates — past about 1 the halo has nowhere to go and only the
+solid middle still reads. Measured at the seat of an O=O's shared pair, the dot
+goes from **rgb(182,130,155)** — washed towards the lobe's pink — to
+**rgb(217,79,79)**, which is the oxygen's own red. The useful change is not
+brightness but *separation*: the dot stops being a lighter patch of lobe and
+starts being its own colour. Applied in all three places a bonding pair is
+drawn: Reactions, One Bond and the Sandbox.
+
+### One scale for energy in fields
+
+The fields bar was drawn against the run's whole total, motion included, and
+motion is most of it — so at Low the fields bar filled about a seventh of the
+chart and the fields *line* was a nearly flat thing along the bottom of the
+panel. Neither was wrong and neither was legible.
+
+So fields gets an axis of its own, fitted to the curve it actually draws: the
+lowest and highest the run has been, padded by `followAxisPad` at each end. The
+**line and the bar read the same numbers off the same range**, so a bar half way
+up and a line half way up mean the same thing — which is the whole reason to
+share it. Verified over a run, sampled every five seconds: the bar's fraction
+and the line's height agree **exactly** at every sample, and the bar now spans
+**12%–88%** of its chart where it used to barely move.
+
+The same fitting serves the followed atom's graph, from its own three anchor
+points, so the two versions of "energy in fields" are presented alike. Measured:
+the curve fills **77%** of the panel either way, against about 13% before.
+
+**The consequence is real and the panel says so.** The two bars no longer share
+a scale, so they no longer sum to the chart and you can no longer read one going
+up as the other comes down — the note under the title now reads *each bar on its
+own scale — fields matches the line graph*, and the y-axis figures are the
+fields bar's. That is a deliberate trade of one reading for another.
+
+**The axis follows the running maximum**, so whatever is currently the peak sits
+at the top of the padded range: mid-run, while the reaction is still climbing,
+the leading edge of the curve stays pinned near the top and the axis grows under
+it. Once the peak is passed the axis settles and everything reads normally.
+
+**The line graph now ships ON**, and clicking an atom that is already selected
+**lets it go** — picking is a toggle, so the way back to the world's graph is
+the same gesture that got you to the atom's.
+
 ### What it opens on
 
 Four defaults moved together, and they are a set: the sim opens on
@@ -4363,34 +4465,6 @@ joins, every reactant intact and `totalKJ` drift 0**, at a mean body speed of
 282 px/s. The argument under **Temperature** — that the student should cause the
 breaking rather than arrive into it — is untouched; all that changed is that the
 calm is now visibly calm rather than frozen.
-
-### The electrons shake as well as wiggle
-
-```javascript
-let shellWobbleAmp = 0.15;     // x the shell radius — the slow DRIFT
-let shellWobbleHz  = 1.1;
-let shellShake     = 0.45;     // x that amplitude — the fast SHAKE on top
-const SHELL_SHAKE_HZ = 5.3;    // rad/s, no round ratio to the drift
-```
-
-Two words, two things. The drift alone traced a slow smooth Lissajous — the
-electron strolling round its seat — and at rest that reads as a calm little
-orbit rather than as a particle whose position is a probability. The shake is a
-second, much faster term at a fraction of the drift's amplitude, and it is what
-makes an atom at rest look unsettled rather than merely moving.
-
-Measured on a 38.1 px shell, over 30 s:
-
-| | furthest from its seat | distance travelled |
-|---|---|---|
-| before (0.075 / 0.62, no shake) | 4.0 px | 2.0 px/s |
-| drift only (0.15 / 1.1) | 8.1 px | 7.3 px/s |
-| **as shipped** (+ 45% shake) | **11.1 px** | **15.5 px/s** |
-
-The split is the point: the shake adds only 3 px of reach and more than doubles
-the distance covered. Reach is the wiggle, pace is the shake, and they are
-separate sliders because they are separate things to look at. Shared with the
-One Bond tab, which wants the same unsettledness for the same reason.
 
 ### Breakability against speed: it was a cliff, not three rates
 
