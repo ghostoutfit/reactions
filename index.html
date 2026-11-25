@@ -5089,7 +5089,7 @@ function stepRecombination(dt) {
   }
 
   const B = world.bodies;
-  for (const b of B) { b.pullNear = false; b.pullWork = 0; }
+  for (const b of B) { b.pullNear = false; b.alignNear = false; b.pullWork = 0; }
   const joins = [];
   const seen = new Set();
   const reserved = oxygenReservedForCarbon();
@@ -5119,6 +5119,11 @@ function stepRecombination(dt) {
       const ux = dx / d, uy = dy / d;
       B[i].alignTo = alignTarget(B[i], Math.atan2(uy, ux));
       B[k].alignTo = alignTarget(B[k], Math.atan2(-uy, -ux));
+      // Its OWN flag. `pullNear` is set inside the pull range, and the sweep at
+      // the end of the pass clears `alignTo` on anything that is not pullNear —
+      // so with only that flag the early turn was set and wiped in the same
+      // frame and the whole lead did nothing at all.
+      B[i].alignNear = B[k].alignNear = true;
       // Past here is the PULL, which keeps its own range — widening that was
       // measured to do nothing (see "Widening the reach does nothing") and the
       // energy tally below is defined on it.
@@ -5212,7 +5217,7 @@ function stepRecombination(dt) {
   // back on the way out, so the entry distance goes with it and the next
   // approach starts from scratch. The tumble comes back at the same moment,
   // from the `spin` the alignment never touched.
-  for (const b of B) if (!b.pullNear) b.alignTo = null;
+  for (const b of B) if (!b.alignNear) b.alignTo = null;
   for (const key of pullEnter.keys()) if (!seen.has(key)) pullEnter.delete(key);
 
   for (const [a, b, els] of joins) joinBodies(a, b, els);
@@ -6513,11 +6518,20 @@ let replayCooldown = 0.8;     // s of play before another one may trigger
 const REPLAY_KEEP = 12;       // clips held for the reel
 const REPLAY_PRE  = 0.28;     // s of clip before the moment
 const REPLAY_POST = 0.35;     // ...and after it
+// A MOMENT CAN BE MORE THAN ONE EVENT. Measured on a followed hydrogen: it met
+// an oxygen to make an OH and that OH met its second hydrogen ONE FRAME LATER,
+// and the post-roll — which returns early, because it is busy finishing the
+// clip it has — never registered the second. So the replay showed the half of
+// the reaction that had just happened and not the water that was the point of
+// watching, which reads exactly like the atom never bonding at all. A run of
+// events now extends the same clip rather than being dropped.
+const REPLAY_RUN = 1.2;       // s a sequence may keep extending for
 
 const replay = {
   frames: [],       // the ring: { t, cam, bodies }
   t: 0,             // the recording clock
-  eventAt: null,    // when the moment happened, while the post-roll is running
+  eventAt: null,    // the LAST moment of the sequence being caught
+  eventStart: 0,    // ...and the first, which is where the clip begins
   clip: null,       // what the button replays
   clips: [],        // ...and every one so far, for the reel
   reel: false,      // cycling through them all
@@ -6565,9 +6579,9 @@ function recordReplay(dt) {
   replay.t += dt;
   const f = replayFrameOf();
   if (f) replay.frames.push(f);
-  // Keep only what a clip can use. The post-roll needs the window to reach a
-  // little past the moment, so the ring is the whole clip long, not just PRE.
-  const keep = REPLAY_PRE + REPLAY_POST + 0.1;
+  // Keep only what a clip can use — the lead-in, a sequence at its longest, and
+  // the post-roll after it.
+  const keep = REPLAY_PRE + REPLAY_RUN + REPLAY_POST + 0.1;
   while (replay.frames.length > 1 && replay.t - replay.frames[0].t > keep) {
     replay.frames.shift();
   }
@@ -6579,16 +6593,25 @@ function recordReplay(dt) {
   // POST-ROLL. The moment is only half the clip; a replay that stops dead on
   // the frame the bond changed shows you the approach and not the result.
   if (replay.eventAt !== null) {
+    // Still changing. An H meeting an O and that OH meeting its second H are
+    // one thing to watch, not two, and they can land a single frame apart — so
+    // the clip grows to hold the whole sequence and the camera settles on the
+    // LAST of them, which is where the atoms have converged.
+    if (was !== null && now !== was && replay.t - replay.eventStart < REPLAY_RUN) {
+      replay.eventAt = replay.t;
+      return;
+    }
     if (replay.t - replay.eventAt >= REPLAY_POST) {
-      const at = replay.eventAt;
+      const at = replay.eventAt, from = replay.eventStart;
       replay.eventAt = null;
-      startReplay(replay.frames.filter(x => x.t >= at - REPLAY_PRE), at);
+      startReplay(replay.frames.filter(x => x.t >= from - REPLAY_PRE), at);
     }
     return;
   }
   if (was === null || now === was) return;
   if (replay.t < replay.holdUntil) return;   // one moment at a time
   replay.eventAt = replay.t;
+  replay.eventStart = replay.t;
 }
 
 function startReplay(frames, eventAt) {
@@ -7044,27 +7067,28 @@ function drawEnergyGraph() {
   const pyF = (kj) => TOP + gH * (1 - Math.max(0, Math.min(1, (kj - fa.lo) / fSpan)));
   const pyM = (kj) => TOP + gH * (1 - Math.max(0, Math.min(1, (kj - ma.lo) / mSpan)));
 
-  // Sampled, not splined through three points: the curve has a corner at the
-  // peak — every atom free is a real cusp, where breaking stops and joining
-  // starts — and a spline would round it off into something the reaction does
-  // not do.
-  const STEPS = 48;
-  const build = (fn, py) => {
-    const pts = [{ x: pxL, y: py(fn(0)) }];
-    for (let n = 0; n <= STEPS; n++) {
-      const q = n / STEPS;
-      pts.push({ x: px(q), y: py(fn(q)) });
-    }
-    pts.push({ x: pxR, y: py(fn(1)) });
-    return pts;
-  };
+  // THROUGH THE THREE ANCHORS, ON A SPLINE — the same curve, drawn the same
+  // way, as the one an atom's own graph draws. Sampling the piecewise-linear
+  // prediction instead gave two straight runs meeting in a point, which is
+  // arithmetically what the model says and is not what a reaction curve looks
+  // like: the apex is where breaking hands over to joining, and a reaction
+  // rounds that corner because the last bonds to break and the first to form
+  // overlap in time. The monotone spline rounds it without overshooting, so the
+  // peak stays exactly at the middle and neither end moves.
+  const build = (fn, py) => [
+    { x: pxL,      y: py(fn(0))   },
+    { x: px(0),    y: py(fn(0))   },
+    { x: px(0.5),  y: py(fn(0.5)) },
+    { x: px(1),    y: py(fn(1))   },
+    { x: pxR,      y: py(fn(1))   },
+  ];
   const fieldsPts = build(curveFieldsKJ, kj => pyF(kj - fieldsZeroKJ));
   const motionPts = build(curveMotionKJ, kj => pyM(kj - motionZeroKJ()));
   // The graph's own offset and tilt on the fields line — see graphFieldsStart.
   if (graphFieldsStart || graphFieldsDelta) {
+    const atP = [0, 0, 0.5, 1, 1];
     fieldsPts.forEach((pt, n) => {
-      const q = n === 0 ? 0 : n > STEPS + 1 ? 1 : (n - 1) / STEPS;
-      pt.y -= gH * (graphFieldsStart + q * graphFieldsDelta);
+      pt.y -= gH * (graphFieldsStart + atP[n] * graphFieldsDelta);
     });
   }
 
@@ -7078,8 +7102,7 @@ function drawEnergyGraph() {
     graphCtx.lineJoin = 'round';
     graphCtx.lineCap = 'round';
     graphCtx.beginPath();
-    graphCtx.moveTo(pts[0].x, pts[0].y);
-    for (let n = 1; n < pts.length; n++) graphCtx.lineTo(pts[n].x, pts[n].y);
+    splineThrough(graphCtx, pts);
     graphCtx.stroke();
     graphCtx.restore();
   };

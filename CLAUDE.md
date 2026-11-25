@@ -4576,6 +4576,50 @@ Measured on a 38.1 px shell: reach **9.25 → 6.51 px** (70%) and distance cover
 inner shells are there to say the atom has an inside and have no business being
 the liveliest thing on screen. Applied in all three tabs.
 
+### It bonded all along — you could not see it happen
+
+Reported as "the selected hydrogen doesn't bond up with oxygen". It does, every
+time: three runs at High, followed from spawn, gave
+**H2 -> H -> OH -> H2O** in all three. The physics was never the problem. Two
+things were stopping it being *watchable*, and both were real.
+
+**A moment can be more than one event.** Measured on a followed hydrogen: it met
+an oxygen to make an OH, and that OH met its second hydrogen **one frame later**.
+The post-roll returns early — it is busy finishing the clip it already has — so
+the second join was never registered. The replay then showed the half of the
+reaction that had just happened and not the water that was the point of
+watching, which from the outside is indistinguishable from the atom never
+bonding at all. A run of events now **extends the same clip** rather than being
+dropped, up to `REPLAY_RUN`, and the camera settles on the LAST of them, which
+is where the atoms have converged. After: the water-forming join lands in a clip
+in **3 runs of 3**, where it was missed in 2 of 3.
+
+**The early turn was inert.** `alignLead` was added so a molecule starts coming
+round to face its partner before the pull begins — and it did nothing at all,
+because the sweep at the end of the pass clears `alignTo` on anything that is
+not `pullNear`, and `pullNear` is only set *inside* the pull range. The wider
+band set the target and the same frame wiped it. With its own `alignNear` flag,
+**416 of 748 turning frames now happen outside the pull range** — more than half
+the turn is done before the pull even starts, which is the whole of "see it
+coming".
+
+### Both graphs are the same curve
+
+The followed atom's graph splined through its three anchor points and came out
+round; the world's sampled the piecewise-linear prediction and came out as two
+straight runs meeting in a point. Arithmetically the straight version is what
+the model says — fields is exactly linear in progress on each half — but it is
+not what a reaction curve looks like, and the two panels disagreeing about that
+is worse than either answer.
+
+Both now spline through the same three anchors. The apex is where breaking hands
+over to joining, and a reaction rounds that corner because the last bonds to
+break and the first to form overlap in time. The monotone spline rounds it
+without overshooting, so the peak stays exactly at the middle and neither end
+moves. Measured on the drawn pixels, the second difference along the curve runs
+**2, 8, 7, 12, 1** on the world's and **1, 5, 12, 6, 9** on the atom's — both
+curves, neither a pair of straight runs.
+
 ### What it opens on
 
 Four defaults moved together, and they are a set: the sim opens on
