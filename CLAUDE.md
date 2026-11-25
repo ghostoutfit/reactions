@@ -4713,6 +4713,59 @@ separately is how 51% and 50% end up side by side claiming to be a whole. That
 only applies while they share a scale — with *Motion line spans speeds* on they
 are two readings on two axes, and each is rounded on its own.
 
+### A cold world draws a flat line
+
+Below the temperature that can break a reactant bond, the diagram was a lie by
+anticipation: a hump the world is never going to climb, a product shelf it is
+never going to reach, and the marker parked at the far left of a picture
+entirely about somewhere else. A cold world has **one state and one energy**,
+and the honest drawing of that is a flat line. The reaction coordinate only
+means something once the reaction can move along it.
+
+So both lines go flat at the reactants' own height until the world can start,
+and the followed atom's graph goes flat at the energy that atom is holding.
+Turn the heat up and the curve appears — that *is* the activation threshold
+being crossed, and the dashed marker then starts walking towards products.
+
+**The test is the biggest hit going, not the average one.** Breaking here is
+accumulation — a reactant at High takes about 15 hits a second with a median
+dose of 0.06 against a threshold of 1.32 — but what gets a bond over the line is
+the tail, and the stack is what lets a couple of those add up. So: can the
+hardest contact this temperature produces, taken as many times as the bond can
+hold, reach the threshold?
+
+```javascript
+const DOSE_PEAK_AT_T1 = 0.31;     // the one measured number in it
+(bondLevels + 1) x DOSE_PEAK_AT_T1 x T^2 x reactantTakes / T^(2 x reactantRelative)
+    >= breakThreshold x activationGuess
+```
+
+`DOSE_PEAK_AT_T1` was read off a High run — the biggest of 1,572 contacts was
+**2.78** — and divided back by the 9 that T=3 carries, since a dose goes as the
+square of the speed.
+
+**It agrees with the world**, which is the only test that matters. Predicted
+against what actually happened in 120 s:
+
+| | predicted | broke | first break |
+|---|---|---|---|
+| Low | **no** | no | — |
+| Med | **yes** | yes | 33.7 s |
+| High | **yes** | yes | 2.3 s |
+
+**Once anything has actually broken the graph stops guessing** — observation
+beats any estimate of it, so `breakCount > 0`, any progress, or the
+recombination latch all force the curve on regardless.
+
+The switch fires **during the ramp**, at `tempCurrent` ≈ 1.8, a tenth of a
+second after LOW → HIGH is pressed and *before* the first bond goes. So the
+curve appearing is what tells you the heat is now enough, rather than a thing
+you notice later. The atom graph's axis stays fitted to the whole curve while
+only the flat part is drawn, so the frame is the same before and after and you
+watch the curve appear rather than the picture being replaced.
+
+`activationGuess` is the dev slider on where that line sits.
+
 ### What it opens on
 
 Four defaults moved together, and they are a set: the sim opens on
