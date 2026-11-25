@@ -862,7 +862,7 @@
         <div class="slider-group" id="playbackSpeedRow">
           <span class="slider-icon"><img src="images/Turtle.png" style="height:0.85em;vertical-align:middle;display:block"></span>
           <div style="position:relative;display:inline-flex;align-items:center;">
-            <input type="range" id="playbackSpeed" min="0.1" max="2.05" step="0.05" value="1.0">
+            <input type="range" id="playbackSpeed" min="0.1" max="2.05" step="0.05" value="0.85">
             <div id="pbSpeedDefaultTick" style="position:absolute;top:-3px;height:calc(100% + 6px);transform:translateX(-50%);width:2px;background:rgba(26,110,255,0.55);border-radius:1px;pointer-events:none;"></div>
           </div>
           <span class="slider-icon"><img src="images/Rabbit.png" style="height:0.98em;vertical-align:middle;display:block;margin-top:-3px"></span>
@@ -875,12 +875,13 @@
              other things you watch rather than three screens down a dev panel.
              The button beside it plays every moment caught so far, round and
              round; pressing it again hands the world straight back. -->
-        <div style="display:flex;align-items:center;gap:8px;" id="replayRow">
+        <div style="display:flex;align-items:center;gap:7px;" id="replayRow">
           <label class="toggle-label" style="margin:0">
             <input type="checkbox" id="replayOnBox" checked>
-            <span class="field-label-electric">Replay joins &amp; breaks</span>
+            <span class="field-label-electric">Replay</span>
           </label>
-          <button id="reelBtn" class="btn" style="flex:0 0 auto;padding:3px 9px;font-size:11px;letter-spacing:0.4px;">ALL</button>
+          <button id="loopBtn" class="btn" style="flex:0 0 auto;padding:3px 8px;font-size:11px;letter-spacing:0.4px;white-space:nowrap;">LOCK</button>
+          <button id="reelBtn" class="btn" style="flex:0 0 auto;padding:3px 8px;font-size:11px;letter-spacing:0.4px;white-space:nowrap;">ALL</button>
         </div>
 
       </div>
@@ -1760,6 +1761,14 @@ let bondShownGamma = 0.404;
 function bondShownMag(D) { return Math.pow(D / BOND_SHOWN_MAX, bondShownGamma); }
 
 const FIELD_SCALE = { 'hi-res': 0.30, 'detailed': 0.20, 'simple': 0.12 };
+// THE REPLAY CAN AFFORD MORE. While a clip runs the physics is stopped dead —
+// no sub-steps, no collision pass, no electron walk — so the frame budget the
+// sim normally spends is sitting there unused, and the one thing on screen is a
+// close-up held still for the viewer to look at. That is exactly the picture
+// worth spending it on: the lobe between two atoms about to bond is the whole
+// subject of the shot, and at the ordinary buffer resolution it is being
+// magnified about twice before it is blitted.
+let replayDetail = 2.2;        // x the field buffer resolution, while replaying
 let FIELD_WIDTH = 0.30;     // lobe half-width as a fraction of the bond length
 // Lower is brighter: the accumulated value that maps to the top of the colormap.
 // A bond at rest peaks at its own energy over the strongest bond — 0.88 for H-H,
@@ -1836,7 +1845,8 @@ function drawFieldHeatmap(destCtx, segsIn, boxW, boxH, opts) {
   // zoomed-out world would allocate a buffer four times the area to be blitted
   // down into the same strip of screen — paying for resolution the display
   // cannot show.
-  const scale = (FIELD_SCALE[_quality] || 0.2) * (boxW ? 1 : drawZoom());
+  const scale = (FIELD_SCALE[_quality] || 0.2) * (boxW ? 1 : drawZoom())
+              * (replayCam && !boxW ? replayDetail : 1);
   const w = Math.max(1, Math.ceil((boxW || world.w) * scale));
   const h = Math.max(1, Math.ceil((boxH || world.h) * scale));
   ensureFieldBuffers(w, h);
@@ -5836,7 +5846,19 @@ function worldLoop(now) {
   // THE SIM HOLDS WHILE THE CLIP RUNS. Nothing steps, nothing is recorded, and
   // the world is exactly where it was when the replay ends — the clip is a
   // recording, so there is nothing for the physics to catch up on.
-  if (replay.playing) { stepReplay(rawDt); drawBarChart(); return; }
+  if (replay.playing) {
+    // THE HEAVIEST TIER, for the length of the clip. The physics is stopped, so
+    // the budget the sub-steps and the collision pass normally take is free,
+    // and the thing on screen is a close-up held still to be looked at. The
+    // tier is put straight back, so a machine that benchmarked into `simple`
+    // keeps `simple` the moment the clip ends.
+    const tier = _quality;
+    _quality = 'hi-res';
+    stepReplay(rawDt);
+    _quality = tier;
+    drawBarChart();
+    return;
+  }
 
   stepTemperature(rawDt);
   if (running) {
@@ -6349,7 +6371,7 @@ let followAxisPad = 0.15;          // x the span, at each end
 //   p = 0     every reactant bond intact     free - (what the reactants hold)
 //   p = 0.5   every atom loose               free
 //   p = 1     every product bond made        free - (what the products hold)
-let motionAxisSpansSpeeds = true;   // see motionAxisRange — the either/or
+let motionAxisSpansSpeeds = false;  // see motionAxisRange — the either/or
 let curveTotalLoKJ  = 0;   // the run's total at LOW, for the motion frame
 let curveTotalHiKJ  = 0;   // ...and at HIGH
 let curveFreeKJ     = 0;   // SB_FREE_ATOM x every atom in the world
@@ -6454,16 +6476,27 @@ function fieldsAxisRange() {
 function motionAxisRange() {
   if (!curveFreeKJ) return { lo: 0, hi: 1 };
   const z = motionZeroKJ();
-  // AN EITHER/OR, AND IT CANNOT BE BOTH. A frame that holds Low and High at
-  // once is a frame in which one run's dip is a fifth of the height; a frame
-  // fitted to the run fills the panel with the dip and then moves with the
-  // temperature, so the line sits in exactly the same place at Low as at High.
-  // Spanning the speeds is the default because watching the whole line lift
-  // when the heat goes up is the thing the mirror was asked for.
+  // THE DIP IS THE HUMP, THE SAME SIZE, BECAUSE IT IS THE SAME ENERGY.
+  //
+  // Motion is `totalKJ` less fields and the total is a constant, so every
+  // kJ/mol the hump climbs is a kJ/mol the dip falls — exactly, not roughly.
+  // Drawing them on the same SPAN is what makes that visible: the two lines
+  // then sum to one on the panel at every point, so the total you can see
+  // across the two of them never changes and the dip is congruent with the
+  // hump rather than a shallow sag under it.
+  //
+  // The offset is what positions it, and it follows `totalKJ` — which is why a
+  // temperature change no longer moves this line. It cannot: a line that moved
+  // while the other stayed would change the total on screen, which is the thing
+  // this is here to hold still. `motionAxisSpansSpeeds` is the other choice and
+  // the note on it says what it costs.
   if (!motionAxisSpansSpeeds) {
-    return atomAxisRange([0, 0.5, 1].map(p => Math.max(0, curveMotionKJ(p) - z))
-                         .concat([Math.max(0, motionKJ() - z)]));
+    const fa = fieldsAxisRange();
+    const span = Math.max(1, fa.hi - fa.lo);
+    const lo = (totalKJ - z - fieldsZeroKJ) - span - fa.lo;
+    return { lo, hi: lo + span };
   }
+
   const r = atomAxisRange([
     Math.max(0, curveTotalLoKJ - curveFreeKJ - z),
     Math.max(0, curveTotalHiKJ - Math.min(curveReactKJ, curveProductKJ) - z),
@@ -7227,11 +7260,14 @@ function barChartSpec() {
     // Say that the zero is raised, in fusion's own voice for its "not to scale"
     // line. A distorted axis that does not admit it is a lie; one that does is a
     // magnifying glass.
-    // The two bars are on DIFFERENT scales now — fields on the line graph's
-    // fitted axis, motion on the run's total — so they no longer sum to the
-    // chart and the panel has to say so. A distorted axis that does not admit
-    // it is a lie; one that does is a magnifying glass.
-    note: noData ? '' : 'each bar on its own scale — fields matches the line graph',
+    // With motion sharing fields' span the two bars add back up to the chart,
+    // and reading one going up as the other comes down works again — which is
+    // what the panel was for before fields was given a scale it could be read
+    // on. The note only has something to confess in the other mode.
+    note: noData ? ''
+      : (motionAxisSpansSpeeds
+          ? 'each bar on its own scale — fields matches the line graph'
+          : 'the two always add to the same total'),
     noData,
   };
 }
@@ -7293,9 +7329,12 @@ function drawBarChart() {
       c.font = '9px Inter, system-ui, sans-serif';
       c.textAlign = 'right';
       c.textBaseline = 'middle';
-      // Labelled for the FIELDS bar when it carries its own scale, because that
-      // is the axis the line graph is drawn on and the one worth reading off.
-      const scaled = bars.find(b => b.max);
+      // Labelled for the FIELDS bar, because that is the axis the line graph is
+      // drawn on and the one worth reading off. Both bars carry a `max` now and
+      // they share a span, so `find(b => b.max)` picked whichever came first —
+      // which is motion, whose offset is a different set of numbers entirely.
+      // `dashed` is the fields bar, here and on every tab.
+      const scaled = bars.find(b => b.dashed && b.max) || bars.find(b => b.max);
       const lab = scaled
         ? (scaled.axisLo || 0) + (i / 5) * scaled.max
         : (i / 5) * maxVal;
@@ -7549,7 +7588,10 @@ document.querySelectorAll('.awheel-item[data-view]').forEach(btn => {
 });
 
 // Playback-speed slider: blue tick at 1.0, snaps when released nearby
-const PBSPEED_DEFAULT = 1.0;
+// 15% towards the turtle. The world moves at the speed the physics says; this
+// is the one dial that is openly about how fast it is comfortable to WATCH, and
+// a scene you are following one atom through wants a little more time in it.
+const PBSPEED_DEFAULT = 0.85;
 const PBSPEED_SNAP = 0.10;
 (function _posPbSpeedTick() {
   const sl = document.getElementById('playbackSpeed');
@@ -7610,6 +7652,12 @@ function syncReplayBtn() {
     reel.classList.toggle('active', replay.reel);
     reel.textContent = replay.reel ? 'STOP' : 'ALL ' + (replay.clips.length || '');
   }
+  const loop = document.getElementById('loopBtn');
+  if (loop) {
+    loop.disabled = !on || !replay.clip;
+    loop.classList.toggle('active', replay.loop);
+    loop.textContent = replay.loop ? 'STOP' : 'LOCK';
+  }
   const box = document.getElementById('replayOnBox');
   if (box && box.checked !== replayOn) box.checked = replayOn;
   const row = document.getElementById('replayRow');
@@ -7623,6 +7671,18 @@ document.getElementById('replayBtn').addEventListener('click', () => {
 });
 
 document.getElementById('reelBtn').addEventListener('click', toggleReel);
+
+// LOCK holds the last moment on screen, round and round, so it can be watched
+// as many times as it takes. It is the loop that used to live only as a second
+// press of REPLAY AGAIN, which is a thing nobody would find.
+document.getElementById('loopBtn').addEventListener('click', () => {
+  if (replay.loop) { stopReplay(); return; }
+  if (!replay.clip) return;
+  replay.reel = false;
+  replay.loop = true;
+  if (!replay.playing) replayAgain();
+  syncReplayBtn();
+});
 
 const replayOnBox = document.getElementById('replayOnBox');
 replayOnBox.checked = replayOn;
@@ -7687,17 +7747,19 @@ replayOnBox.addEventListener('change', () => {
     row('devReplayRate', 'Replay speed',    0.05, 1,   0.05, replayRate,     '#ffd84d') +
     row('devReplayZoom', 'Replay zoom',     1,    5,   0.1,  replayZoom,     '#ffd84d') +
     row('devReplayHold', 'Replay cooldown', 0,    15,  0.5,  replayCooldown, '#ffd84d') +
+    row('devReplayDetail', 'Replay detail', 1,  4,   0.1,  replayDetail,   '#ffd84d') +
     '<div style="opacity:0.45;font-size:10px;">how long it runs normally before ' +
       'another moment may interrupt. The button ignores it</div>' +
     row('devFollowGlow', 'Followed: glow',     0, 2,    0.05, followGlow,   '#ffd84d') +
     '<label style="display:flex;align-items:center;gap:7px;margin:9px 0 2px;cursor:pointer;">' +
-      '<input type="checkbox" id="devMotionSpan" checked style="margin:0">' +
+      '<input type="checkbox" id="devMotionSpan" style="margin:0">' +
       '<span>Motion line spans speeds</span>' +
     '</label>' +
-    '<div style="opacity:0.45;font-size:10px;margin-left:21px;">on: the frame ' +
-      'holds Low and High at once, so turning up the heat lifts the whole line. ' +
-      'Off: it fits this run, so the dip fills the panel but a speed change ' +
-      'moves nothing. It cannot be both</div>' +
+    '<div style="opacity:0.45;font-size:10px;margin-left:21px;">off (shipped): ' +
+      'motion shares fields\u2019 scale, so the dip is exactly as big as the ' +
+      'hump and the two always add to the same total on screen. On: the frame ' +
+      'holds Low and High at once, so turning up the heat lifts the whole line ' +
+      '\u2014 but the dip shrinks to a fifth of it. It cannot be both</div>' +
     row('devAlignTau',  'Turn settles in',  0.05, 1,   0.01, alignTau,  '#ffd84d') +
     row('devAlignLead', 'Turn starts at',   1,    4,   0.1,  alignLead, '#ffd84d') +
     '<div style="opacity:0.45;font-size:10px;">how long a molecule takes to ' +
@@ -8028,6 +8090,8 @@ replayOnBox.addEventListener('change', () => {
   bind('devReplayZoom', v => replayZoom = v, false, v => v.toFixed(1) + '\u00d7');
   bind('devReplayHold', v => replayCooldown = v, false,
        v => v > 0 ? v.toFixed(1) + ' s' : 'every moment');
+  bind('devReplayDetail', v => replayDetail = v, false,
+       v => v > 1 ? v.toFixed(1) + '\u00d7 the field buffer' : 'same as the sim');
   bind('devFollowGlow', v => followGlow = v, false,
        v => v > 0 ? Math.round(v * 100) + '%' : 'off');
   const spanCb = panel.querySelector('#devMotionSpan');

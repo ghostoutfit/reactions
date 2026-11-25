@@ -4489,11 +4489,33 @@ it most needs not to do. Measured, the flat stretch before the reaction starts
 sits at **20% / 41% / 74%** of the panel at Low / Med / High, and returns to 20%
 coming back down.
 
-**It cannot be both**, and the dev panel says so with a switch. Spanning the
-speeds costs depth: the dip uses about a fifth of the frame where fields' hump
-uses three quarters, because the frame has to hold Low and High at once. *Motion
-line spans speeds* off fits the run instead — the dip fills the panel and a
-speed change moves nothing.
+**It cannot be both, and the dip won.** Spanning the speeds costs depth: the
+dip used about a fifth of the frame where fields' hump used three quarters,
+because the frame had to hold Low and High at once. What ships now is the other
+choice — **motion shares fields' span** — because motion is `totalKJ` less
+fields and the total is a constant, so every kJ/mol the hump climbs is a kJ/mol
+the dip falls, *exactly*, and drawing them on the same scale is what makes that
+visible.
+
+Measured: the two spans are identical to the last digit, the hump and the dip
+are both **0.568** of the panel, and the drawn pair sums to **1.000 at every
+point along the axis and at all three temperatures**. So the total you can see
+across the two lines never changes, which is the whole claim the picture is
+making.
+
+The offset follows `totalKJ`, which is why a temperature change no longer moves
+this line — it cannot, because a line that moved while the other stayed would
+change that total. *Motion line spans speeds* in the dev panel is the other
+choice and the note on it says what it costs.
+
+**The bars add up again.** With motion on fields' span the two bars sum to the
+chart, so reading one going up as the other comes down works for the first time
+since fields was given a scale of its own, and the panel's note says *the two
+always add to the same total* instead of confessing to two scales. The y-axis
+figures stay the **fields** bar's — both bars carry a `max` now and they share a
+span but not an offset, so `find(b => b.max)` picked motion, whose numbers are a
+different set entirely; the fields bar is the one the line graph is pinned to
+and `dashed` is what identifies it on every tab.
 
 ### The turn into position
 
@@ -4619,6 +4641,42 @@ without overshooting, so the peak stays exactly at the middle and neither end
 moves. Measured on the drawn pixels, the second difference along the curve runs
 **2, 8, 7, 12, 1** on the world's and **1, 5, 12, 6, 9** on the atom's — both
 curves, neither a pair of straight runs.
+
+### The replay gets the frame the sim is not using
+
+While a clip runs the physics is stopped dead — no sub-steps, no collision pass,
+no electron walk — so the budget those normally take is sitting there unused,
+and the one thing on screen is a close-up held still to be looked at. That is
+exactly the picture worth spending it on: the lobe between two atoms about to
+bond is the subject of the shot, and at the ordinary buffer resolution it was
+being magnified about twice before it was blitted.
+
+So for the length of a clip the renderer runs at the heaviest tier and the field
+buffer is multiplied by `replayDetail`. The tier is put straight back, so a
+machine that benchmarked into `simple` keeps `simple` the moment the clip ends.
+Measured: the buffer goes **298×127 to 1246×531**, 17.5× the pixels, and a
+replay frame costs **2.13 ms** against an ordinary frame's 0.48 and a budget of
+16.7.
+
+### LOCK and ALL
+
+The VISUALS row is **Replay · LOCK · ALL** — the label shortened from "Replay
+joins & breaks" so the two buttons fit beside it, measured at 167 px in a 322 px
+box with nothing overflowing.
+
+**LOCK** holds the last moment on screen, round and round, until it is pressed
+again. It is the loop that used to exist only as a *second press* of REPLAY
+AGAIN, which is a thing nobody would ever find. **ALL** plays every moment the
+run has caught, in order, wrapping.
+
+### The playback dial opens at 0.85
+
+15% towards the turtle. The world moves at the speed the physics says; this is
+the one dial that is openly about how fast it is comfortable to *watch*, and a
+scene you are following one atom through wants a little more time in it. The
+default lives in two places that must agree — `PBSPEED_DEFAULT` and the slider's
+`value` in the markup — because the tick that marks the default is positioned
+from the constant and the slider reads its own attribute on load.
 
 ### What it opens on
 
