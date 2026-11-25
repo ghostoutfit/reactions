@@ -940,6 +940,9 @@
         <button id="sbAddCO2" class="btn sb-add" title="Add a CO2">
           <canvas class="sb-thumb"></canvas><span>CO&#8322;</span>
         </button>
+        <button id="sbAddNH3" class="btn sb-add" title="Add an NH3">
+          <canvas class="sb-thumb"></canvas><span>NH&#8323;</span>
+        </button>
       </div>
       <div style="display:flex;flex-direction:column;gap:5px;justify-content:center;padding:8px 0;min-width:120px;">
         <span style="font-size:9px;letter-spacing:0.07em;text-transform:uppercase;opacity:0.5;">In the scene</span>
@@ -1075,6 +1078,12 @@ const ELEMENTS = {
   // darker than the background and the next one may want it; its dev slider
   // does not, because a control that moves nothing is worse than no control.
   C:  { label: 'C',  rgb: '255,238,0', rScale: 1.42, layer: 1 },   // #ffee00
+  // NITROGEN IS LIGHT BLUE, and it is the centre of an ammonia the way carbon
+  // is the centre of a methane, so it takes the same `layer`: three hydrogens
+  // overlap it and the sort is what keeps it reading as a nitrogen in front of
+  // them rather than a blend. Deliberately bluer and paler than helium's cyan,
+  // which is the only other cool colour in the table.
+  N:  { label: 'N',  rgb: '125,180,255', rScale: 1.29, layer: 1 },   // 1.55 A vdW
 };
 // The colour an element's shells and electrons are drawn in, which is its own
 // colour unless it is too dark to see itself by.
@@ -1627,7 +1636,15 @@ setFieldRamp(fieldRamp);
 // of it: deriving from this table and not from BOND_TYPES is what guarantees
 // that. (It was a literal 498 while that happened to be O=O's number, which is
 // exactly the kind of agreement that quietly stops being true.)
-const BOND_ENERGY = { 'H-H': 436, 'H-O': 463, 'O-O': 495, 'C-O': 358, 'C-H': 413 };
+const BOND_ENERGY = { 'H-H': 436, 'H-O': 463, 'O-O': 495, 'C-O': 358, 'C-H': 413,
+                      'H-N': 391 };
+// N≡N IS 941 AND IT IS NOT IN THE TABLE ABOVE, on purpose. This table is
+// where `BOND_ENERGY_MAX` comes from, and 941 would nearly double it —
+// re-denominating `kjPerSim` and every field brightness in Reactions for the
+// sake of one bond. The triple carries its own order instead (BOND_ORDER
+// says 3 for an N-N pair, exactly as it says 2 for an O-O), so every lookup
+// goes through `bondDFor` into BOND_TYPES and finds the 941 there. The same
+// division of labour the C=O's 799 already uses.
 const BOND_ENERGY_MAX = Math.max(...Object.values(BOND_ENERGY));   // 495, O=O
 
 // What a free atom carries on its own, kJ/mol, so that a pair fully apart reads
@@ -1648,6 +1665,22 @@ const H2O_ANGLE = 104.5 * Math.PI / 180;
 // (The generic ">= 3 neighbours share the circle evenly" rule in sbSnapMolecule
 // already produces exactly this, so there is no methane special case anywhere.)
 const CH4_ANGLE = Math.PI / 2;
+
+// AMMONIA'S FAN, AND THE GAP ITS LONE PAIR SITS IN.
+//
+// A real NH3 is trigonal pyramidal, three bonds at 107 degrees with the lone
+// pair above them; the pyramid is exactly as undrawable on a plane as
+// methane's tetrahedron. The generic rule for a centre with three neighbours
+// shares the circle evenly, which would give 120 each and leave the lone pair
+// nowhere to be — and on an ammonia the lone pair is the whole Lewis reading,
+// the thing that makes it a base and the thing that squeezes the hydrogens
+// below 120 in the first place.
+//
+// So the three bonds keep their real 107 and are drawn as a FAN: they span
+// 214 degrees and leave 146 open, and the lone pair goes in the gap. That is
+// the honest 2D projection of the pyramid seen from the side, and it reads as
+// a Lewis structure rather than as a propeller.
+const NH3_ANGLE = 107 * Math.PI / 180;
 function bondEnergy(elA, elB) {
   return BOND_ENERGY[[elA, elB].sort().join('-')] || 400;
 }
@@ -1683,6 +1716,11 @@ const BOND_TYPES = {
   'C-O': { els: ['C', 'O'], order: 1, D: 358, lenMult: 1,    label: 'C – O' },
   'C=O': { els: ['C', 'O'], order: 2, D: 799, lenMult: 0.86, label: 'C = O' },
   'C-H': { els: ['C', 'H'], order: 1, D: 413, lenMult: 1,    label: 'C – H' },
+  'N-H': { els: ['N', 'H'], order: 1, D: 391, lenMult: 1,    label: 'N – H' },
+  // THE STRONGEST BOND IN THE SIM, and a TRIPLE — the first one here. A real
+  // N≡N is 1.10 A against an N-N single's 1.45, so it is much the shortest
+  // thing on this list for its atoms: 0.76.
+  'N#N': { els: ['N', 'N'], order: 3, D: 941, lenMult: 0.76, label: 'N ≡ N' },
 };
 const DEFAULT_BOND = 'H-H';
 function bondType(id) { return BOND_TYPES[id] || BOND_TYPES[DEFAULT_BOND]; }
@@ -1747,9 +1785,18 @@ const BOND_SHOWN_MAX = Math.max(...Object.values(BOND_TYPES).map(t => t.D));
 // weakest was drawing at 0.506 before, against Reactions' 0.723 for the same
 // bond: selecting C-O gave a noticeably fainter lobe than meeting one in the
 // world, which is the wrong way round for the tab whose whole job is to show
-// you a bond up close. Measured after: 358 -> 0.723, 436 -> 0.783, 495 ->
-// 0.824, 799 -> 1.000. Still monotone, so a deeper well is still brighter.
-let bondShownGamma = 0.404;
+// you a bond up close.
+//
+// IT IS SOLVED, NOT DIALLED, so it has to be re-solved whenever the ceiling
+// moves. The N≡N took BOND_SHOWN_MAX from 799 to 941, and the two conditions
+// are unchanged: the weakest bond at rest draws at Reactions' own brightness
+// (358/495 = 0.723) and the strongest lands exactly on 1.0. That gives
+// gamma = ln(358/495) / ln(358/941) = 0.335, where the 799 ceiling gave 0.404.
+// After: 358 -> 0.723, 391 -> 0.745, 436 -> 0.773, 463 -> 0.788, 495 -> 0.806,
+// 799 -> 0.947, 941 -> 1.000. Still monotone, so a deeper well is still
+// brighter, and every bond that was already here is a little dimmer than it was
+// — the same cost the C=O's arrival charged, for the same reason.
+let bondShownGamma = 0.335;
 function bondShownMag(D) { return Math.pow(D / BOND_SHOWN_MAX, bondShownGamma); }
 
 const FIELD_SCALE = { 'hi-res': 0.30, 'detailed': 0.20, 'simple': 0.12 };
@@ -2212,15 +2259,15 @@ function drawNucleus(dc, px, py, scale = 1, alpha = 1) {
 // Helium's shell is full, so it bonds with nothing: a He body has no bonds and
 // its two electrons stay lone. That is the non-bonding case the renderer has to
 // handle, and the reason He is here at all.
-const VALENCE   = { H: 1, O: 6, He: 2, C: 4 };          // outer-shell electrons
+const VALENCE   = { H: 1, O: 6, He: 2, C: 4, N: 5 };    // outer-shell electrons
 
 // HOW MANY BONDS AN ATOM CAN HOLD, which is a different question from how many
 // outer-shell electrons it has: oxygen has six of those and makes two bonds.
 // The Sandbox has always known this (it was three inline ternaries in
 // `sbValence`) and recombination now needs the same answer to decide which end
 // of a CO is still open, so it is one table both read.
-const VALENCE_SLOTS = { H: 1, O: 2, He: 0, C: 4 };
-const BOND_ORDER = { 'H-H': 1, 'H-O': 1, 'O-O': 2 };    // 2 = double bond
+const VALENCE_SLOTS = { H: 1, O: 2, He: 0, C: 4, N: 3 };
+const BOND_ORDER = { 'H-H': 1, 'H-O': 1, 'O-O': 2, 'H-N': 1, 'N-N': 3 };   // 2 = double
 function bondOrder(elA, elB) {
   return BOND_ORDER[[elA, elB].sort().join('-')] || 1;
 }
@@ -2374,13 +2421,35 @@ function buildElectrons(b) {
       : Math.max(0, (VALENCE[at.el] || 0) - spent[i]);
     // Point the lone electrons away from whatever this atom is bonded to
     let awayX = 0, awayY = 0;
+    const toward = [];
     for (const [p, q] of b.bonds) {
       const other = p === i ? q : q === i ? p : -1;
       if (other < 0) continue;
       awayX += at.lx - b.atoms[other].lx;
       awayY += at.ly - b.atoms[other].ly;
+      toward.push(Math.atan2(b.atoms[other].ly - at.ly, b.atoms[other].lx - at.lx));
     }
     const facing = (awayX !== 0 || awayY !== 0) ? Math.atan2(awayY, awayX) : 0;
+    // HOW MUCH ROOM THERE ACTUALLY IS. The arc below is a fixed share of the
+    // whole ring, which was measured on an oxygen and is right wherever the
+    // atom has one or two bonds: water's O leaves 255 degrees open on the lone
+    // side and the arc only wants 162 of it.
+    //
+    // An ammonia's nitrogen has THREE, and leaves 146. The fixed arc then
+    // overhangs its own gap by 7 degrees at each end, putting each lone
+    // electron just past the bond beside it — which is the one place the arc
+    // exists to keep them out of. So it is capped at what is open. Needs two
+    // bonds to mean anything: with one there is no gap to speak of, and that is
+    // every diatomic and every OH, none of which move.
+    let openGap = Math.PI * 2;
+    if (toward.length > 1) {
+      const srt = toward.slice().sort((x, y) => x - y);
+      openGap = 0;
+      for (let q = 0; q < srt.length; q++) {
+        const g = (srt[(q + 1) % srt.length] - srt[q] + Math.PI * 2) % (Math.PI * 2);
+        if (g > openGap) openGap = g;
+      }
+    }
     // Evenly spaced round the circle — EXCEPT on a free atom, which runs its
     // ring many times faster. An even ring of n repeats every 2pi/n, so once
     // the per-frame advance approaches that spacing the whole ring appears to
@@ -2405,7 +2474,9 @@ function buildElectrons(b) {
     //
     // A free atom keeps the full circle (golden-angle spaced): nothing is
     // pushing its electrons anywhere, so they have no reason to bunch.
-    const arc = anyBond[i] ? loneArcFrac * Math.PI * 2 : Math.PI * 2;
+    const arc = anyBond[i]
+      ? Math.min(loneArcFrac * Math.PI * 2, LONE_GAP_KEEP * openGap)
+      : Math.PI * 2;
     for (let q = 0; q < lone; q++) {
       const e = makeElectron('lone', at.el);
       e.i = i;
@@ -2447,6 +2518,11 @@ let loneRadiusBonded = 0.6;   // x loneRadius, for an atom that has bonds
 // pair sits at +-99 and tips just past the halfway line onto the bond's side
 // (cos -0.16). 0.45 spans 162, putting every one of them strictly outward.
 let loneArcFrac = 0.45;
+// The share of an atom's OPEN gap its lone electrons may use, when the gap is
+// the binding constraint rather than the arc above. Under 1 so the outermost
+// electron keeps clear of the bond beside it instead of sitting on it: on an
+// ammonia's nitrogen the gap is 146 degrees and the pair lands at +-58.
+const LONE_GAP_KEEP = 0.8;
 let loneSpeed  = 0.125;   // radians per frame at 60 fps
 let loneSpeedFree = 6.0;  // x loneSpeed for an atom with no bonds at all
 
@@ -2622,6 +2698,7 @@ const SPECIES = {
   O2:    { els: ['O', 'O'] },
   He:    { els: ['He'] },        // monatomic: no bond, two lone electrons
   CH4:   { els: ['C', 'H', 'H', 'H', 'H'] },   // shape in MOLECULE_SHAPES
+  NH3:   { els: ['N', 'H', 'H', 'H'] },        // shape in MOLECULE_SHAPES
 };
 // HOW MANY, AS A MULTIPLE OF THE BALANCED EQUATION.
 //
@@ -2642,7 +2719,7 @@ const REACTANT_AMOUNT_MAX = 8;
 // the amount slider never would — an unbalanced one, on purpose. Their ceiling
 // is the most any balanced world needs: 8 units of water is 16 H2.
 const COMPOSITION_MAX = REACTANT_AMOUNT_MAX * 2;
-const COMPOSITION_DEFAULT = { H2: 2 * 3, O2: 1 * 3, He: 0, CH4: 0 };
+const COMPOSITION_DEFAULT = { H2: 2 * 3, O2: 1 * 3, He: 0, CH4: 0, NH3: 0 };
 const composition = { ...COMPOSITION_DEFAULT };
 
 // ─── Reactions ────────────────────────────────────────────────────────────────
@@ -2676,6 +2753,7 @@ const REACTIONS = {
     icon: 'H2', recombine: true,
     bondsPerUnit: 4,            // 2 waters, two O–H each
     products: ['HHO'],
+    steps: ['HO', 'HHO'],       // NOT 'HH': see joinEls
   },
   combustion: {
     label: 'CH₄ + O₂  →  CO₂ + H₂O',
@@ -2683,6 +2761,26 @@ const REACTIONS = {
     icon: 'CH4', recombine: true,
     bondsPerUnit: 6,            // 1 CO2 at two bonds, 2 waters at two
     products: ['HHO', 'COO'],
+    steps: ['HO', 'HHO', 'CO', 'COO'],
+  },
+  // AMMONIA DECOMPOSING, and the first ENDOTHERMIC reaction here: six N-H at
+  // 391 is 2,346 to break and an N≡N plus three H-H is 2,249 to make, so it
+  // costs 97 kJ/mol per unit against a real +92.4. The products therefore sit
+  // ABOVE the reactants on the graph, where water's and combustion's sit below,
+  // and nothing had to be told that — the curve is solved from the bond tables
+  // either way.
+  //
+  // It is also the first reaction whose PRODUCT is another reaction's reactant,
+  // which is what `steps` is for: H + H -> H2 must be buildable here and must
+  // stay unbuildable in the water reaction. See `joinEls`.
+  ammonia: {
+    label: 'NH₃  →  N₂ + H₂',
+    composition: { H2: 0, O2: 0, He: 0, CH4: 0, NH3: 2 },   // ONE unit
+    icon: 'NH3', recombine: true,
+    bondsPerUnit: 4,            // 1 N≡N, counted once, and 3 H-H
+    products: ['NN', 'HH'],
+    steps: ['NN', 'HH'],
+    judgedRelative: 0,         // see reactantPaceRef: this one needs the full ladder
   },
 };
 const DEFAULT_REACTION = 'water';
@@ -2763,7 +2861,7 @@ let running = false;
 // Atomic masses, in units where H = 1. Used for collision impulses and for the
 // kinetic-energy readout, so a bounce off an O2 behaves like a bounce off
 // something 16× heavier per atom.
-const ATOMIC_MASS = { H: 1, O: 16, He: 4, C: 12 };
+const ATOMIC_MASS = { H: 1, O: 16, He: 4, C: 12, N: 14 };
 
 const world = {
   w: 0, h: 0,          // wrap dimensions
@@ -2860,6 +2958,37 @@ const MOLECULE_SHAPES = {
               { el: 'O', lx:  r, ly: 0 }];
     },
     bonds: [[0, 1, 2], [1, 2, 2]],
+  },
+  // AMMONIA. Three plain N-H singles off the nitrogen, fanned at NH3_ANGLE
+  // about the +y direction so the open side — where the lone pair goes — faces
+  // -y. The orders are left to the element-pair table, which says single, and
+  // the nitrogen is then left with 5 - 3 = 2 outer electrons, so the renderer
+  // draws it exactly one lone pair without being told to.
+  NHHH: {
+    geometry: () => {
+      const r = bondLen('N', 'H');
+      const mid = Math.PI / 2;                 // the fan's middle bond, +y
+      return [{ el: 'N', lx: 0, ly: 0 }].concat([-1, 0, 1].map(k => ({
+        el: 'H',
+        lx: Math.cos(mid + k * NH3_ANGLE) * r,
+        ly: Math.sin(mid + k * NH3_ANGLE) * r,
+      })));
+    },
+    bonds: [[0, 1], [0, 2], [0, 3]],
+  },
+  // NITROGEN, AND ITS TRIPLE BOND. The order has to be written here for the
+  // same reason CO2's doubles do — except that this one the element-pair table
+  // would actually get right, since BOND_ORDER says 3 for an N-N. It is written
+  // anyway, because a product's shape saying what its bonds are is what keeps
+  // the sandbox, the spawn and a join from ever disagreeing about one molecule.
+  // Six bonding electrons, one lone pair left on each N: the Lewis structure.
+  NN: {
+    geometry: () => {
+      const r = bondLenFor('N', 'N', 3);
+      return [{ el: 'N', lx: -r / 2, ly: 0 },
+              { el: 'N', lx:  r / 2, ly: 0 }];
+    },
+    bonds: [[0, 1, 3]],
   },
 };
 function moleculeShape(els) { return MOLECULE_SHAPES[els.join('')] || null; }
@@ -4335,16 +4464,36 @@ let reactantRelative = 0.35;  // judge a hit against the molecule's own pace; 0 
 // It can only ever REDUCE, since the reference is 1 at temperature 1 and rises
 // from there, so Low is untouched at every setting and the surplus is handed
 // back to motion as always.
+// A REACTION MAY ASK TO BE JUDGED ABSOLUTELY, and ammonia does.
+//
+// The dial exists because water's reactants all broke on frame zero at High: it
+// is there to stretch a reaction whose temperatures are a cliff. Ammonia has the
+// opposite problem. Its hits are split three ways between its three N-H bonds,
+// so its hardest hit at Low already reaches 0.55 of a 1.185 threshold and the
+// dial's flattening closes the gap to Med to 1.36x — measured over 90 s, Low's
+// hardest kept dose 0.546 against Med's 0.744, with no threshold that can sit
+// between them and stay there. Judged absolutely the ladder opens back up and
+// the reaction has the three rates it should: nothing at Low over 180 s, Med
+// finishing in 13-56 s, High in 38.
+//
+// So the dial is the DEFAULT and a reaction may name its own value. Water and
+// combustion name none and are untouched, which is what keeps the dial's own
+// tuning — measured on water — meaning what it says.
+function judgedRelative() {
+  const r = currentReaction().judgedRelative;
+  return r == null ? reactantRelative : r;
+}
 function reactantPaceRef(b) {
-  if (reactantRelative <= 0) return 1;
+  const rel = judgedRelative();
+  if (rel <= 0) return 1;
   const nom = 0.5 * b.mass * b.vTarget * b.vTarget / doseUnit();
-  return nom > 1 ? Math.pow(nom, reactantRelative) : 1;
+  return nom > 1 ? Math.pow(nom, rel) : 1;
 }
 
 function queueIfBroken(b, energy) {
   if (!canStoreVib(b) || b.broken) return;
   let dose = energy / doseUnit();
-  if ((reactantTakes < 1 || reactantRelative > 0) && isReactant(b)) {
+  if ((reactantTakes < 1 || judgedRelative() > 0) && isReactant(b)) {
     const kept = dose * reactantTakes / reactantPaceRef(b);
     if (kept < dose) {
       returnFieldEnergy(b, (dose - kept) * doseUnit());
@@ -4789,10 +4938,26 @@ const JOIN_STEPS = {
   HHO: ['H', 'O', 'H'],       // -> H2O
   CO:  ['C', 'O'],            // -> CO, the half-built carbon dioxide
   COO: ['O', 'C', 'O'],       // -> CO2
+  NN:  ['N', 'N'],            // -> N2, triple-bonded; see MOLECULE_SHAPES.NN
+  HH:  ['H', 'H'],            // -> H2, and ONLY where H2 is a product
 };
+// WHICH OF THEM THIS REACTION MAY BUILD, which used to be the whole table.
+//
+// "What is not in the table matters as much as what is": no HH meant free
+// hydrogens could never make an H2 again, which is what keeps the water
+// reaction running forwards. Ammonia breaks that by making H2 its product, so
+// the rule cannot be a property of the table any more — it is a property of
+// the reaction, and each one names the steps it is allowed. A reaction that
+// names none falls back to every step, which is what the two original
+// reactions did before this existed.
+function reactionSteps() {
+  const st = currentReaction().steps;
+  return st && st.length ? st : Object.keys(JOIN_STEPS);
+}
 function joinEls(a, b) {
   const n = [...a.els, ...b.els].sort().join('');
-  return JOIN_STEPS[n] ? JOIN_STEPS[n].slice() : null;
+  if (!JOIN_STEPS[n] || !reactionSteps().includes(n)) return null;
+  return JOIN_STEPS[n].slice();
 }
 
 // WHAT A JOIN IS WORTH, kJ/mol: the bonds the product holds less the bonds the
@@ -5515,6 +5680,16 @@ function formulaOf(els) {
   // The hydroxyl radical is written OH by everyone, though strict Hill ordering
   // would make it HO. Water stays H2O, which Hill gets right.
   if (els.length === 2 && count.H === 1 && count.O === 1) return 'OH';
+  // THE HYDRIDES ARE WRITTEN THE OTHER WAY ROUND, and ammonia is the one here:
+  // strict Hill gives H₃N, and nobody writes that. The same goes for the
+  // fragments a decomposing ammonia leaves on the way down — NH₂ and NH — so
+  // the rule is "nitrogen leads any molecule that is only nitrogen and
+  // hydrogen", which carries all three without naming any of them. Carbon
+  // already leads by Hill, so methane needs nothing.
+  if (count.N && Object.keys(count).every(e => e === 'N' || e === 'H')) {
+    return 'N' + (count.N > 1 ? sub(count.N) : '') +
+           (count.H ? 'H' + (count.H > 1 ? sub(count.H) : '') : '');
+  }
   const rank = (e) => e === 'C' ? 0 : e === 'H' ? 1 : 2;
   return Object.keys(count)
     .sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))
@@ -6587,7 +6762,10 @@ function reactionCanStart() {
   const T = Math.max(0.01, tempCurrent);
   let dose = DOSE_PEAK_AT_T1 * T * T * reactantTakes;
   // The same correction `reactantPaceRef` makes, which is a power of T squared.
-  if (reactantRelative > 0) dose /= Math.pow(T * T, reactantRelative);
+  // Through the same accessor, so the prediction cannot read one dial while the
+  // collisions read another.
+  const rel = judgedRelative();
+  if (rel > 0) dose /= Math.pow(T * T, rel);
   return (bondLevels(b) + 1) * dose >= breakThreshold(b) * activationGuess;
 }
 
@@ -8063,7 +8241,8 @@ replayOnBox.addEventListener('change', () => {
       'breaks slower. OWN PACE judges the hit against how fast that molecule ' +
       'normally moves: at 0 a High hit counts 9\u00d7 a Low one and everything ' +
       'breaks at once; turn it up and the three temperatures become three ' +
-      'rates. Neither moves the energy books</div>' +
+      'rates. Neither moves the energy books. A reaction may override OWN ' +
+      'PACE — ammonia does, at 0</div>' +
     row('devRecombRange', 'Attractive reach', 1.2, 8, 0.1, recombRange, '#ffd84d') +
     '<div style="opacity:0.45;font-size:10px;">how far out two atoms that could ' +
       'bond start pulling on each other, in contact widths. Wider does not ' +
@@ -8079,6 +8258,8 @@ replayOnBox.addEventListener('change', () => {
     row('devHe', 'He atoms',       0, COMPOSITION_MAX, 1, COMPOSITION_DEFAULT.He, '#ffd84d') +
     row('devCH4', 'CH₄ molecules', 0, COMPOSITION_MAX, 1,
         COMPOSITION_DEFAULT.CH4, '#ffd84d') +
+    row('devNH3', 'NH₃ molecules', 0, COMPOSITION_MAX, 1,
+        COMPOSITION_DEFAULT.NH3, '#ffd84d') +
     row('devShWobA',  'Shell drift', 0, 0.4, 0.005, shellWobbleAmp, '#ffd84d') +
     row('devShWobHz', 'Drift speed', 0, 3,   0.02,  shellWobbleHz,  '#ffd84d') +
     row('devShShake', 'Shell shake', 0, 1.5, 0.05,  shellShake,     '#ffd84d') +
@@ -8297,6 +8478,7 @@ replayOnBox.addEventListener('change', () => {
   bind('devO2',    v => composition.O2 = v, true);
   bind('devHe',    v => composition.He = v, true);
   bind('devCH4', v => composition.CH4 = v, true);
+  bind('devNH3', v => composition.NH3 = v, true);
   bind('devConv', v => {
     fieldConvert = v;
     const n = panel.querySelector('#devConvNote');
@@ -8953,7 +9135,7 @@ const BOND_CONTACT_GONE = 4.07;  // x r0 — reads 100% here, and is gone
 // ~65 px valence shell, roughly 9x life, and you can count the particles.
 const NUC_PARTICLE_R = 10;    // bonds' PARTICLE_RADIUS, the packing's own unit
 const NUC_NUCLEON_R  = 6;     // drawn radius in canvas px — the legibility knob
-const NUCLEONS = { H: [1, 0], O: [8, 8], He: [2, 2], C: [6, 6] };   // [protons, neutrons]
+const NUCLEONS = { H: [1, 0], O: [8, 8], He: [2, 2], C: [6, 6], N: [7, 7] };   // [protons, neutrons]
 
 const _nucCache = new Map();
 function nucleusFor(el) {
@@ -9065,10 +9247,10 @@ function drawNucleons(c, cx, cy, el, wobble, nucleonR) {
 // gradient band at each occupied shell radius and a glowing dot per electron.
 // Reactions has never needed inner shells — the main tab is all valence — so
 // the configurations live here.
-const ATOM_SHELLS = { H: [1], He: [2], O: [2, 6], C: [2, 4] };   // electrons per shell
+const ATOM_SHELLS = { H: [1], He: [2], O: [2, 6], C: [2, 4], N: [2, 5] };   // electrons per shell
 // Shell radii as a fraction of the atom's valence radius. The inner figure is
 // bonds' own ratio for oxygen: shell 0 at 7 pm against shell 1 at 47.
-const SHELL_FRAC  = { H: [1], He: [1], O: [0.149, 1], C: [0.18, 1] };
+const SHELL_FRAC  = { H: [1], He: [1], O: [0.149, 1], C: [0.18, 1], N: [0.16, 1] };
 
 // Radius of shell `sh` on `el`, in canvas px. The lifelike inner fraction is
 // not enough on its own: this tab draws nuclei about 9x life so the nucleons
@@ -9161,7 +9343,10 @@ function bondTabR0() {
 // How this bond is written: an en dash for a single, an equals for a double.
 function bondTabSymbol() {
   const t = bondType(bondTab.type);
-  return t.els[0] + (t.order === 2 ? '=' : '–') + t.els[1];
+  // One glyph per order, so a triple reads as a triple. The table's own `label`
+  // spaces them out for the dropdown; this is the tight form the readouts use.
+  const bar = t.order === 3 ? '≡' : t.order === 2 ? '=' : '–';
+  return t.els[0] + bar + t.els[1];
 }
 
 // The raw Morse form only APPROACHES 1 — it is still at 99.3% even at the end
@@ -9843,11 +10028,22 @@ function sbRebuildBonds() {
   const cand = [];
   for (let i = 0; i < A.length; i++) {
     for (let k = i + 1; k < A.length; k++) {
-      const r0 = bondLen(A[i].el, A[k].el);
+      // THE ORDER DECIDES THE NUMBERS, at the moment the skeleton is laid and
+      // not only when a bond is promoted. The element-pair tables are a
+      // shorthand that happens to hold for every pair whose one order is the
+      // one they describe — an O-O really is the double's 495 at the double's
+      // length — and it breaks on the first pair they do not describe. There
+      // is no 'N-N' row at all, so a triple laid down this way read 400 kJ/mol
+      // (the fallback) at the SINGLE's 55.7 px, and the relax pass then held it
+      // out there. Asking `bondDFor`/`bondLenFor` for the order this bond
+      // actually has gives 941 at 42.4, and returns exactly the old numbers for
+      // every pair that was already here.
+      const order = bondOrder(A[i].el, A[k].el);
+      const r0 = bondLenFor(A[i].el, A[k].el, order);
       const r  = Math.hypot(A[k].x - A[i].x, A[k].y - A[i].y);
       // Past the range there is nothing to decide: they do not interact.
       if (sbContact(r, r0) <= 0) continue;
-      const D = bondEnergy(A[i].el, A[k].el);
+      const D = bondDFor(A[i].el, A[k].el, order);
       const work = sbWork(r, r0);
       // Rank by the energy a pair would actually release, NOT by how close it
       // is. Closeness is the wrong measure: a pair squashed to 0.46 of its
@@ -9855,8 +10051,7 @@ function sbRebuildBonds() {
       // the repulsive wall and releases almost nothing. Ranking by distance let
       // a crushed H-H outrank a perfect O-H and steal its atom — dropping a
       // third H beside a finished water pulled one of its bonds apart.
-      cand.push({ i, k, r, r0, D, work, order: bondOrder(A[i].el, A[k].el),
-                  gain: D * (1 - work) });
+      cand.push({ i, k, r, r0, D, work, order, gain: D * (1 - work) });
     }
   }
   cand.sort((a, b) => b.gain - a.gain);
@@ -9989,11 +10184,18 @@ function sbSnapMolecule(mol) {
     // same arithmetic that already decides how many lone pairs get drawn on the
     // atom — the picture and the shape cannot disagree about what is left.
     //
-    // Three or more without a double still share the circle evenly.
+    // THREE NEIGHBOURS ARE THE SAME QUESTION AGAIN. An ammonia's nitrogen
+    // keeps a lone pair after its three bonds, so the three hydrogens fan at
+    // NH3_ANGLE and the pair gets the gap; a centre with nothing left over has
+    // no reason to leave a gap and shares the circle evenly, which is what a
+    // methane's four bonds do one case further down. One rule, read off the
+    // leftover electrons, three molecules' worth of answers.
     const sharedAtC = order.reduce((s, i) => s + (ord.get(c + ',' + i) || 1), 0);
     const loneAtC   = Math.max(0, (VALENCE[A[c].el] || 0) - sharedAtC);
+    const even      = Math.PI * 2 * (order.length - 1) / order.length;
     const spread = order.length === 2 ? (loneAtC > 0 ? H2O_ANGLE : Math.PI)
-                 : order.length > 2   ? Math.PI * 2 * (order.length - 1) / order.length
+                 : order.length === 3 ? (loneAtC > 0 ? 2 * NH3_ANGLE : even)
+                 : order.length > 3   ? even
                  : 0;
     offs = new Map(order.map((i, k) =>
       [i, order.length === 1 ? 0 : (k / (order.length - 1) - 0.5) * spread]));
@@ -10460,15 +10662,25 @@ function sbDiatomic(a, b) {
 function sbMethane()       { return MOLECULE_SHAPES.CHHHH.geometry(); }
 function sbCarbonDioxide() { return MOLECULE_SHAPES.OCO.geometry(); }
 
+function sbAmmonia() { return MOLECULE_SHAPES.NHHH.geometry(); }
+
 // METHANE HAS NO OXYGEN, so with it as the only carbon source there would be no
 // way to build a C–O on this tab at all. CO2 is the other half of combustion
 // and it puts both carbon-oxygen bonds back within reach, which is why the list
-// is these four: the reactants and the products, one button each.
+// holds the reactants and the products, one button each.
+//
+// AMMONIA IS THE ONLY WAY NITROGEN GETS IN HERE, and it is the one molecule in
+// the sim whose lone pair decides its shape, so this tab — where you can pull
+// it apart and put it back — is exactly where it belongs. There is no N2
+// button and it needs none: take the hydrogens off two ammonias and the two
+// nitrogens left over bond into one, triple and all, by the same rule every
+// other molecule here is built by.
 const SB_ADDABLE = [
   ['sbAddH2',  'H2',  () => sbDiatomic('H', 'H')],
   ['sbAddO2',  'O2',  () => sbDiatomic('O', 'O')],
   ['sbAddCH4', 'CH4', sbMethane],
   ['sbAddCO2', 'CO2', sbCarbonDioxide],
+  ['sbAddNH3', 'NH3', sbAmmonia],
 ];
 function sbShapeOf(key) {
   const row = SB_ADDABLE.find(r => r[1] === key);

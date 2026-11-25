@@ -168,8 +168,8 @@ Two kinds of electron, which is the whole point:
 | **lone** | runs a plain circle around its own nucleus at a fixed radius |
 
 ```javascript
-const VALENCE    = { H: 1, O: 6, He: 2 };
-const BOND_ORDER = { 'H-H': 1, 'H-O': 1, 'O-O': 2 };   // 2 = double bond
+const VALENCE    = { H: 1, O: 6, He: 2, C: 4, N: 5 };
+const BOND_ORDER = { 'H-H': 1, 'H-O': 1, 'O-O': 2, 'H-N': 1, 'N-N': 3 };
 ```
 
 Electrons are derived, never hand-listed: each bond takes `order x 2`, each atom
@@ -428,10 +428,10 @@ on/off switch are all dev controls.
 
 ```javascript
 const SPECIES = { H2: { els: ['H','H'] }, O2: { els: ['O','O'] }, He: { els: ['He'] },
-                  CH4: { els: ['C','H','H','H','H'] } };
+                  CH4: { els: ['C','H','H','H','H'] }, NH3: { els: ['N','H','H','H'] } };
 let reactantAmount = 7;                                // the AMOUNT slider, 1-8
 const composition = { H2: 14, O2: 7, He: 0, CH4: 0 };  // = the unit x the amount
-const ATOMIC_MASS = { H: 1, O: 16, He: 4, C: 12 };
+const ATOMIC_MASS = { H: 1, O: 16, He: 4, C: 12, N: 14 };
 ```
 
 `spawnWorld()` builds a queue from `composition`, shuffles it so a crowded world
@@ -538,10 +538,14 @@ is where it is made.
 
 ```javascript
 const REACTIONS = {
-  water:      { composition: { H2: 2, O2: 1, He: 0, CH4: 0 }, icon: 'H2',
-                recombine: true, bondsPerUnit: 4, products: ['HHO'] },
-  combustion: { composition: { H2: 0, O2: 2, He: 0, CH4: 1 }, icon: 'CH4',
-                recombine: true, bondsPerUnit: 6, products: ['HHO', 'COO'] },
+  water:      { composition: { H2: 2, O2: 1 }, icon: 'H2',  recombine: true,
+                bondsPerUnit: 4, products: ['HHO'], steps: ['HO', 'HHO'] },
+  combustion: { composition: { O2: 2, CH4: 1 }, icon: 'CH4', recombine: true,
+                bondsPerUnit: 6, products: ['HHO', 'COO'],
+                steps: ['HO', 'HHO', 'CO', 'COO'] },
+  ammonia:    { composition: { NH3: 2 },       icon: 'NH3', recombine: true,
+                bondsPerUnit: 4, products: ['NN', 'HH'], steps: ['NN', 'HH'],
+                judgedRelative: 0 },
 };
 ```
 
@@ -5071,6 +5075,218 @@ combustion 18.4 and 52.9 s.
 
 **Reactants only.** A product is already protected by STRONG PRODUCTS, and an
 intermediate is not something a temperature button should be tuned on.
+
+## Ammonia, and the first reaction that goes uphill
+
+```
+2 NH3  ->  N2 + 3 H2
+```
+
+The third reaction in the picker, and three firsts: an **endothermic** one, a
+**triple bond**, and a product (H2) that is another reaction's reactant.
+
+| | bonds | sum D | fields |
+|---|---|---|---|
+| 2 NH3 | 6 N-H at 391 | 2,346 | **1,654** |
+| 8 free atoms | - | 0 | **4,000** |
+| N2 + 3 H2 | 1 N=N at 941, 3 H-H at 436 | 2,249 | **1,751** |
+
+**+97 kJ/mol per unit against a real +92.4** — 5% out, the same quality of
+agreement water (-485 against -484) and combustion (-808 against -802.5) get.
+Nothing was told that it is endothermic: the curve is solved from the bond
+tables either way, and the products simply come out **above** the reactants.
+Measured as drawn, products as a share of the panel: water **0.297**,
+combustion **0.318**, ammonia **0.468** against a reactant line at 0.45 on all
+three.
+
+### Nitrogen
+
+`ELEMENTS.N` is `125,180,255` — light blue, deliberately bluer and paler than
+helium's cyan, which is the only other cool colour in the table. `rScale` 1.29
+(1.55 A vdW against H's 1.20), `NUCLEONS` [7,7], `ATOM_SHELLS` [2,5],
+`SHELL_FRAC` [0.16,1], `ATOMIC_MASS` 14, `VALENCE` 5, `VALENCE_SLOTS` 3.
+
+It takes `layer: 1`, the property carbon has: nitrogen is the centre of an
+ammonia the way carbon is the centre of a methane, so it is always the atom its
+neighbours overlap, and the sort is what keeps it reading as a nitrogen in
+front of three hydrogens rather than a blend.
+
+### The triple bond is not in the element-pair table
+
+**N=N is 941 and `BOND_ENERGY` does not hold it.** That table is where
+`BOND_ENERGY_MAX` comes from, and 941 would nearly double it — re-denominating
+`kjPerSim` and every field brightness on the main tab for the sake of one bond.
+So the pair table gets only `'H-N': 391`, safely under 495, and the triple
+carries its own order: `BOND_ORDER['N-N'] = 3`, exactly as it says 2 for an
+O-O, which sends every lookup through `bondDFor` into `BOND_TYPES` and finds
+the 941 there. The same division of labour the C=O's 799 already uses.
+Verified: `BOND_ENERGY_MAX` still **495** and `kjPerSim` still **0.002546**.
+
+`BOND_TYPES` gains `'N-H'` (391) and `'N#N'` (941, `lenMult` 0.76 — a real
+N=N is 1.10 A against an N-N single's 1.45). `bondTabSymbol` grew a third
+glyph so a triple reads as one.
+
+**`bondShownGamma` had to be re-solved, because it always does.** The One Bond
+ceiling `BOND_SHOWN_MAX` is derived from `BOND_TYPES`, so the N=N took it from
+799 to 941. The two conditions are unchanged — the weakest bond at rest draws
+at Reactions' own brightness (358/495 = 0.723) and the strongest lands exactly
+on 1.0 — which gives `ln(358/495) / ln(358/941)` = **0.335**, where the 799
+ceiling gave 0.404. After: 358 -> 0.723, 391 -> 0.745, 436 -> 0.773,
+463 -> 0.788, 495 -> 0.806, 799 -> 0.947, 941 -> **1.000**. Monotone, nothing
+clips, and every bond that was already here is a little dimmer — the same cost
+the C=O's arrival charged, for the same reason.
+
+**On the main tab it clips, and that is the existing contract.** An N=N's mag
+is 941/495 = 1.90 against a `FIELD_GAIN` of 0.9, where an O=O already sits at
+1.11. Measured at the bond midpoint, N2 reads **(208,236,253)** against O2's
+(210,234,249) — the same top-of-ramp colour. The extra magnitude goes into the
+lobe being bigger rather than whiter, so it reads as the fullest bond in the
+world and not as a bond permanently flaring.
+
+### The shapes are the Lewis structures
+
+```javascript
+const NH3_ANGLE = 107 * Math.PI / 180;
+```
+
+**Ammonia is a fan, and the gap is the lone pair.** A real NH3 is trigonal
+pyramidal at 107 degrees, as undrawable on a plane as methane's tetrahedron,
+and the generic ">= 3 neighbours share the circle evenly" rule would give 120
+and leave the lone pair nowhere. On an ammonia the lone pair is the whole
+reading — it is what makes it a base, and what squeezes the hydrogens below 120
+in the first place. So the three bonds keep their 107, span 214 degrees, and
+leave **146 open** for the pair. Measured on a spawned NH3: bonds at
+-17/90/-163, gaps **146/107/107**, all three at 49.5 px.
+
+**N2 writes its order and gets 6 bonding electrons and a lone pair on each N** —
+the Lewis structure, counted off the renderer: NH3 is 6 bonding + 2 lone = 8 =
+5 + 3x1, and N2 is 6 + 4 = 10 = two nitrogens' 5 each.
+
+#### The lone arc is capped at the gap that is actually open
+
+`loneArcFrac` is a fixed 0.45 of the whole ring, measured on an oxygen, and it
+is right wherever an atom has one or two bonds: water's O leaves 255 degrees
+open on the lone side and the arc only wants 162 of them. An ammonia's nitrogen
+leaves **146**, so the fixed arc overhung its own gap by 7 degrees at each end
+and put each lone electron just past the bond beside it — the one place the arc
+exists to keep them out of.
+
+```javascript
+const LONE_GAP_KEEP = 0.8;   // share of the OPEN gap, when the gap is what binds
+```
+
+It needs two bonds to mean anything, so every diatomic and every OH is
+untouched. Measured seats before and after, as angles: **NH3 is the only
+molecule that moves** — its pair goes from +-81 (7 degrees onto the bonds) to
++-58, strictly inside the gap. Water's O stays at 99/153/207/261, O2 and CO2 at
++-27/+-81, NH2 and NH at their 162-degree spread.
+
+### A reaction names the joins it is allowed
+
+"What is not in the table matters as much as what is": `JOIN_STEPS` had no `HH`,
+so free hydrogens could never make an H2 again, and that is what keeps the water
+reaction running forwards. **Ammonia makes H2 its product**, so that rule cannot
+be a property of the table any more. It is a property of the reaction:
+
+```javascript
+water:      { steps: ['HO', 'HHO'] },              // NOT 'HH'
+combustion: { steps: ['HO', 'HHO', 'CO', 'COO'] },
+ammonia:    { steps: ['NN', 'HH'] },
+```
+
+`joinEls` checks membership; a reaction that names no steps falls back to every
+step, which is what the two original reactions did before this existed. Neither
+needs an intermediate here — N + N and H + H are both one step — so there is no
+ammonia twin of OH or CO.
+
+### It starts at Med, and that took the ladder back
+
+Asked for: initiate at medium or high. It did not — at the shipped dials it only
+ever started at High, **and the activation prediction said it should start at
+Med**, which is worse than the behaviour, since the graph would draw the whole
+curve over a world where nothing happens.
+
+The cause is structural and worth knowing before the next polyatomic: a hit on a
+molecule is split between the bonds that can hold it, so **ammonia's three N-H
+bonds each take a third of what an H2's one bond takes**. Its hardest hit at Low
+already reaches 0.55 of a 1.185 threshold, and `reactantRelative` 0.35 then
+flattens the ladder until Low and Med are **1.36x apart** — measured over 90 s,
+Low's hardest kept dose **0.546** against Med's **0.744**. No threshold can sit
+between those two and stay there.
+
+So the dial becomes a default and a reaction may name its own value:
+
+```javascript
+function judgedRelative() {
+  const r = currentReaction().judgedRelative;
+  return r == null ? reactantRelative : r;
+}
+ammonia: { judgedRelative: 0 }    // the full 27:8:1 ladder
+```
+
+Judged absolutely the gap reopens. Water and combustion name nothing and are
+untouched, which is what keeps the dial's own tuning — measured on water —
+meaning what it says. `reactionCanStart` reads the same accessor, so the
+prediction cannot consult one dial while the collisions consult another.
+
+Measured, 5 runs each (4 x 120 s at Low):
+
+| | first break | all atoms free | completed | finish |
+|---|---|---|---|---|
+| Low | **never**, 0 breaks | - | 0/4 | - |
+| Med | 0.2-1.7 s, median **1.2** | median **7.7 s** | **5/5** | median 20.8 s |
+| High | 0.1-0.8 s, median **0.1** | median **3.4 s** | **5/5** | median 20.8 s |
+
+**The temperature decides the breaking half and not the finish.** The two
+medians are the same 20.8 s because the recombination half is a search for a
+partner and does not care how hot the world is — the same thing water's and
+combustion's numbers say, and the reason the latch column is the one to read.
+
+Every run ends on exactly **9 H2 + 3 N2**, fields at the predicted **5,253**
+from a reactant 4,962, with `totalKJ` drift exactly **0**.
+
+### The Sandbox gets an NH3 button, and a bug it found
+
+Ammonia is the only way nitrogen gets into the Sandbox, and it is the one
+molecule here whose lone pair decides its shape, so the tab where you can pull
+it apart is where it belongs. There is no N2 button and it needs none: take the
+hydrogens off two ammonias and the nitrogens left over bond into one, triple and
+all, by the rule every other molecule there is built by.
+
+Building it turned up a real bug, latent until now. `sbRebuildBonds` took each
+candidate's **energy and length from the element pair** (`bondEnergy`,
+`bondLen`) while taking its **order** from `bondOrder`. That holds for every
+pair whose one order is the one the pair table describes — an O-O really is the
+double's 495 at the double's length — and it breaks on the first pair the table
+does not describe. There is no `'N-N'` row, so a hand-built triple read the
+**400 kJ/mol fallback at the single's 55.7 px**, and the relax pass then held it
+out there. Asking `bondDFor`/`bondLenFor` for the order the bond actually has
+fixes it and returns exactly the old numbers for everything else. Measured, each
+molecule built in isolation:
+
+| | total | expected | bond |
+|---|---|---|---|
+| N2 | **59** | 1000 - 941 | N=N D941 at 42.3 of its own 42.4 |
+| NH3 | **827** | 2000 - 1173 | 3 x N-H D391 at 49.5 |
+| O2 | 505 | 1000 - 495 | O=O D495 at 55.0 |
+| H2O | 574 | 1500 - 926 | 2 x O-H D463 at 49.0 |
+| CO2 | -98 | 1500 - 1598 | 2 x C=O D799 at 50.0 |
+| CH4 | 848 | 2500 - 1652 | 4 x C-H D413 at 52.3 |
+
+`formulaOf` gained one rule, not one case: **nitrogen leads any molecule that is
+only nitrogen and hydrogen**, which carries NH3, NH2 and NH without naming any
+of them. Strict Hill would write H3N, and nobody does.
+
+### What it cost the open problem
+
+`SB_FREE_ATOM = 500` is now wrong for two elements, not one. A lone CO2 reads
+-98; **an N in an ammonia reads -86.5 per atom** (500 less three N-H at half
+each), which the follow-one-atom graph plots without complaint — the curve is
+pinned at 0.45/0.88 whatever the numbers are, and nitrogen's products land at a
+perfectly ordinary 0.535 — but the number itself is nonsense. The fix is still
+the one recorded under the One Bond tab: raise it to 900, which moves One Bond's
+`SEPARATED_TOTAL` to 1800 and changes a tab nobody asked to change. Still not
+done, and now there are two molecules asking.
 
 ## Known gaps
 
