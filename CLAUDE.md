@@ -4745,6 +4745,46 @@ incapable of passing 100%, and still rounded once with the other taken from it.
 Measured across the three temperatures: **39/61, 72/28, 83/17**, summing to 100
 at each.
 
+### One shape, two subjects, the same place on the panel
+
+Selecting a particle takes the motion line away and leaves the fields curve —
+and the fields curve **jumped**, because each was fitted to its own minimum and
+maximum. A whole world's reactants sit 4,101 kJ/mol below free atoms and its
+products 5,556; one hydrogen's sit 218 and 231 below, because an H–H bond and an
+O–H bond are nearly the same depth. Fitted to its own extremes, the world's
+curve started at **0.32** of the panel and the atom's at **0.16** — the same
+curve about a different subject, drawn somewhere else, which is the one thing
+that stops you seeing it is the same curve.
+
+Both are now pinned at the two points that carry the shape: where the line
+**starts** (the reactants) and where it **peaks** (every atom free).
+
+```javascript
+const CURVE_START = 0.45;   // the reactants' height, as a share of the panel
+const CURVE_PEAK  = 0.88;
+```
+
+The product end is then wherever the chemistry puts it, which is the half of the
+picture that *should* differ and the one worth looking at when you switch.
+Measured across both reactions and every element in them:
+
+| subject | reactants | peak | products |
+|---|---|---|---|
+| water, the world | 0.45 | 0.88 | 0.297 |
+| ...an H in it | 0.45 | 0.88 | **0.423** |
+| ...an O in it | 0.45 | 0.88 | **0.076** |
+| combustion, the world | 0.45 | 0.88 | 0.318 |
+| ...a C in it | 0.45 | 0.88 | **0.464** |
+
+**The two heights are set by the deepest fall any subject has**, and that is an
+OXYGEN — in a water it carries *two* O–H bonds at half each where a hydrogen
+carries one. It goes from 251 in an O₂ to **37** in a water, a drop of 214
+against a rise to free of 249, so its products sit 0.86 of the climb *below*
+where it started. At a start of 0.35 that ran off the bottom of the panel at
+**−0.09**; 0.45 is what holds it. The cost is a shorter climb — 0.43 of the
+panel rather than 0.51 — and the motion dip shrinks with it, since the dip is
+the hump.
+
 ### A cold world draws a flat line
 
 Below the temperature that can break a reactant bond, the diagram was a lie by
