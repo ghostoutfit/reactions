@@ -3439,7 +3439,27 @@ function bodyGhosts(b) {
 // so 0.12 was spending its range on a stretch of 8% that lasted the 0.3 s of
 // the flare's decay. At 0.30 the same ordinary hit opens the bond by a fifth
 // and the hard ones by a third.
-let bondStretchMax = 0.30;      // share of its own length, at load 1
+// HOW FAR APART, IN UNITS OF "THEIR CIRCLES JUST STOP OVERLAPPING".
+//
+// It was a flat 0.30 of the bond's own length, a number with nothing behind
+// it, and at a typical hit that moved the atoms about a fifth — real,
+// measurable, and nearly impossible to SEE, because the two valence circles
+// went on overlapping the whole time. Nothing appears between them, so nothing
+// reads as having happened.
+//
+// At 1.0 a fully loaded bond opens until its two circles are exactly TANGENT.
+// The moment a gap appears is the moment the bond is at its limit, which the
+// eye catches without being told. Above 1 the gap opens further.
+//
+// EVERY MOLECULE HERE CAN DO THIS EXACTLY, which is luck worth recording. The
+// scale a pair needs is (rA + rB) / r0, and `bondLen` makes every SINGLE bond
+// the same fraction of its atoms' radii — so all of them want 1.389. CO2's two
+// doubles both want 1.615 and N2's triple wants 1.827, and each of those
+// molecules is all one kind of bond. Even hydrazine, whose N–N and N–H are
+// different bonds, has both of them single and so both at 1.389. One scale per
+// molecule therefore makes EVERY bonded pair tangent at once, with nothing
+// left over and no compromise to pick.
+let bondStretchGain = 1.0;      // 1 = circles exactly touching, at load 1
 
 function bondDrawLoad(b) { return Math.min(1, Math.max(b.flare, vibLoad(b))); }
 
@@ -3459,10 +3479,26 @@ function bondDrawLoad(b) { return Math.min(1, Math.max(b.flare, vibLoad(b))); }
 //
 // Returns `b.atoms` untouched when there is nothing to show, which is what
 // most bodies on most frames want.
+// The scale at which this body's valence circles are exactly touching: the MAX
+// over its bonds, so no bonded pair is still overlapping once the tightest one
+// has separated. As the note on `bondStretchGain` says, every molecule in the
+// sim today has one answer for all of its bonds, so the max is never a
+// compromise — it is there for the first molecule that mixes bond orders.
+function bondTangentK(b) {
+  let k = 1;
+  for (const bd of b.bonds) {
+    const ai = b.atoms[bd[0]], ak = b.atoms[bd[1]];
+    const d = Math.hypot(ak.lx - ai.lx, ak.ly - ai.ly);
+    if (d < 1e-6) continue;
+    k = Math.max(k, (valenceRadius(ai.el) + valenceRadius(ak.el)) / d);
+  }
+  return k;
+}
+
 function drawLocals(b) {
-  const load = bondStretchMax > 0 && b.bonds && b.bonds.length ? bondDrawLoad(b) : 0;
+  const load = bondStretchGain > 0 && b.bonds && b.bonds.length ? bondDrawLoad(b) : 0;
   if (load <= 0) return b.atoms;
-  const k = 1 + bondStretchMax * load;
+  const k = 1 + (bondTangentK(b) - 1) * load * bondStretchGain;
   return b.atoms.map(at => ({ ...at, lx: at.lx * k, ly: at.ly * k }));
 }
 
@@ -8854,16 +8890,19 @@ replayOnBox.addEventListener('change', () => {
       'product cannot break and cannot take energy into its fields. Ships ON ' +
       '\u2014 measured, a finished world holds 100% of the time with it and 68% ' +
       'without. The switch is here only so the two can be compared</div>' +
-    row('devStretch', 'Hit stretches bond', 0, 0.8, 0.01, bondStretchMax, '#ffd84d') +
+    row('devStretch', 'Hit opens bond to', 0, 3, 0.05, bondStretchGain, '#ffd84d') +
+    '<div style="opacity:0.45;font-size:10px;">how far apart a BONKED molecule ' +
+      'is drawn, in units of “their valence circles just stop overlapping”. ' +
+      '1× is exactly touching at a full hit — the first setting where a gap ' +
+      'actually appears — and 2× opens twice that. It tracks the same load ' +
+      'as the colour, so it grows on the hit and settles back as the energy ' +
+      'drains. Drawing only: the molecule stays rigid and no collision ' +
+      'changes</div>' +
     row('devFreeWidth', 'Free-pair ribbon', 0.01, 0.25, 0.005, sbFreeWidth, '#ffd84d') +
     '<div style="opacity:0.45;font-size:10px;">Sandbox, SHOW ENERGY IN UNBONDED ' +
       'ATOMS: how wide each pair’s lobe is as a share of the gap it spans. ' +
       'A bond’s is 0.22; at anything like that the pairs merge into one ' +
       'pink mass instead of reading as pairs</div>' +
-    '<div style="opacity:0.45;font-size:10px;">how far a fully loaded bond is ' +
-      'DRAWN apart, as a share of its own length. Tracks the same load as the ' +
-      'colour, so it grows on the hit and settles back as the energy drains. ' +
-      'Drawing only — the molecule stays rigid and no collision changes</div>' +
     row('devJoinFlash', 'New bond stays pink', 0, 3, 0.1, joinFlashSec, '#ffd84d') +
     '<div style="opacity:0.45;font-size:10px;">a join\u2019s own flash, held at ' +
       'full for the first 45% and then fading. A collision\u2019s flare is a ' +
@@ -9112,7 +9151,7 @@ replayOnBox.addEventListener('change', () => {
        v => v > 1 ? '\u00f7' + v.toFixed(2) + ' by the last' : 'off');
   bind('devBreakH', v => breakEnergy = v, false, v => v.toFixed(2));
   bind('devColFull', v => colourFull = v, false, v => Math.round(v * 100) + '% of cap');
-  bind('devStretch', v => bondStretchMax = v, false, v => Math.round(v * 100) + '%');
+  bind('devStretch', v => bondStretchGain = v, false, v => v.toFixed(2) + '\u00d7');
   bind('devFreeWidth', v => sbFreeWidth = v, false, v => v.toFixed(3));
   bind('devVibTau', v => VIB_TAU     = v, false, v => v.toFixed(1) + ' s');
   bind('devVibGlow', v => VIB_GLOW   = v, false, v => v.toFixed(2));

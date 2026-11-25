@@ -5480,16 +5480,33 @@ comes out at exactly **12%** at load 1, and the mass centre stays at (0, 0) —
 so a stretching molecule neither drifts nor wobbles about the point it spins
 on. It is also what a hot molecule actually does: breathe.
 
-`bondStretchMax` is in ACTIVE at **0.30**, and it is meant to be obvious. It
-shipped at 0.12 first, which looked right beside a cold molecule and was
-invisible in play: a hit's peak load is about **0.7 at every temperature**
-(median 0.73 / 0.71 / 0.65 at Low / Med / High over 200 events), so 0.12 was
-spending its range on a stretch of 8% lasting the 0.3 s of the flare's decay.
-At 0.30 the same ordinary hit opens the bond by a fifth and a hard one by a
-third. Measured live at High with nothing forced, the drawn stretch runs
-p50 4.2% / p90 18.9% / p99 28.6% and tops out at exactly 30.0% — the median is
-low because most frames are *between* hits, not during one. **There is no
-clamp anywhere below that 30%.**
+### How far, in units of "their circles just stop overlapping"
+
+It was a flat fraction of the bond's own length — 0.12, then 0.30 — and both
+were numbers with nothing behind them. A hit's peak load is about **0.7 at
+every temperature** (median 0.73 / 0.71 / 0.65 at Low / Med / High over 200
+events), so even 0.30 moved a typical bond about a fifth: real, measurable, and
+nearly impossible to *see*, because the two valence circles went on overlapping
+the whole time. Nothing appears between them, so nothing reads as having
+happened.
+
+`bondStretchGain` is in ACTIVE at **1.0**, and 1.0 means the circles are
+exactly **tangent** at a full hit. The moment a gap appears is the moment the
+bond is at its limit, and the eye catches that without being told. Measured, at
+a full hit every bonded pair comes out at a rim gap of **0.00** — H–H, O=O, all
+four of methane's C–H, and hydrazine's N–N and N–H simultaneously — against an
+overlap of 17–21 px at rest. The slider is linear in those units: 0× leaves it
+at rest, 2× opens a gap as wide as the overlap was.
+
+**Every molecule here can do this exactly**, which is luck worth recording. The
+scale a pair needs is `(rA + rB) / r0`, and `bondLen` makes every SINGLE bond
+the same fraction of its atoms' radii — so all of them want **1.389**. CO₂'s
+two doubles both want 1.615 and N₂'s triple wants 1.827, and each of those
+molecules is all one kind of bond. Even hydrazine, whose N–N and N–H are
+different bonds, has both of them single. One scale per molecule therefore
+makes every bonded pair tangent at once, with no compromise to pick.
+`bondTangentK` still takes the **max** over the bonds, for the first molecule
+that mixes orders.
 
 ## Asteroids is the default
 
