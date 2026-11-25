@@ -5528,6 +5528,54 @@ widest — measured rather than written down, so a reaction added later sizes th
 button itself. All three now hold the group at **164 px** with TEMP fixed at
 361 and no label clipped.
 
+## Rest energy reads the same in all three tabs
+
+A bond at its natural length drew as a **grey smudge** in One Bond and the
+Sandbox and as a **bright blue lobe** in the Reactions world. Same bond, same
+energy, two brightnesses — and the dim one was on the tab whose whole job is
+reading that energy.
+
+Two causes, and the second was the big one.
+
+**The cold stage was grey.** It was grey on purpose: the bottom of One Bond's
+scale is a bond with nothing stored, and the argument was that it should look
+like a bond rather than an event — a visible glow with no colour in it, so hue
+carried the reading instead of decorating it. Good argument, wrong result. Grey
+at a given alpha reads as *dimmer* than a saturated blue at the same alpha. The
+rest stage is now the Reactions ramp's cold blue-white, so all three stages of
+`BOND_FIELD_STAGES` match `FIELD_STAGES.energy` and the three tabs make one
+claim about one quantity. The reading survives: rest is still the coldest thing
+on the scale and stretching still carries it **blue → purple → pink**.
+
+**The alpha taper was replacing the stage alphas, not scaling them.**
+`alpha = t^1.8` existed for a real reason — the lobe is culled flat at each
+nucleus (`along < 0 || along > L`), and with the stage alphas reaching 140 by
+12% of the range, the cut had nothing to hide behind and showed as a straight
+vertical edge. But a power curve pulls *everything* down, not just the bottom:
+
+| alpha of a resting H–H lobe | peak | half | quarter |
+|---|---|---|---|
+| Reactions | 254 | 220 | 170 |
+| One Bond, before | 193 | **55** | **15** |
+| One Bond, now | 250 | 213 | 54 |
+
+So the curve now **multiplies** the stage alphas instead of replacing them, and
+only below a knee:
+
+```javascript
+alpha(t) = stageAlpha(t) * Math.min(1, Math.pow(t / BOND_ALPHA_KNEE, BOND_ALPHA_POW))
+```
+
+Above the knee (0.42) it is 1 and the ramp is the Reactions ramp exactly. Below
+it the lobe goes genuinely transparent before the cull reaches it, which is all
+the edge ever needed. `buildRampStack`'s fourth argument is an `alphaGate` now
+rather than an `alphaFn`, and the dev row is **Edge fade** — it no longer
+touches the rest of the ramp.
+
+Checked: the stretched lobe at 3.2 r₀ has no straight cut, the Reactions ramp
+is byte-for-byte what it was, and the Sandbox and the add-button thumbnails
+inherit the brighter rest for free.
+
 ## Deployment
 
 `origin` is **`github.com/ghostoutfit/reactions`**. (The fission remote was

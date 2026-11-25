@@ -1533,7 +1533,10 @@ const _rampA = new Uint8Array(256 * 4), _rampB = new Uint8Array(256 * 4);
 // `alphaFn(t)` overrides the stages' own alpha column when given — which is the
 // whole reason this is a function: the ramp's hues and its opacity taper are
 // independent choices, and two views of the same field can want different ones.
-function buildRampStack(stages, gamma, out, alphaFn) {
+// `alphaGate` SCALES the stage alphas rather than replacing them, so a caller
+// can fade one end of the ramp without flattening the brightness of the rest.
+// See BOND_ALPHA_KNEE for why that distinction is the whole point.
+function buildRampStack(stages, gamma, out, alphaGate) {
   for (let bin = 0; bin < LOAD_BINS; bin++) {
     const load = Math.pow(bin / (LOAD_BINS - 1), gamma);
     const f  = load * (stages.length - 1);
@@ -1546,9 +1549,10 @@ function buildRampStack(stages, gamma, out, alphaFn) {
     for (let j = 0; j < 1024; j++) {
       out[base + j] = _rampA[j] + (_rampB[j] - _rampA[j]) * k;
     }
-    if (alphaFn) {
+    if (alphaGate) {
       for (let i = 0; i < 256; i++) {
-        out[base + i * 4 + 3] = Math.max(0, Math.min(255, alphaFn(i / 255) * 255));
+        const a = out[base + i * 4 + 3] * alphaGate(i / 255);
+        out[base + i * 4 + 3] = Math.max(0, Math.min(255, a));
       }
     }
   }
@@ -1601,10 +1605,25 @@ const BOND_COLORMAP  = new Uint8Array(LOAD_BINS * 256 * 4);
 // value is low, the cut has nothing to hide behind and shows as a straight
 // vertical edge.
 //
-// A power curve fixes it. alpha = t^BOND_ALPHA_POW keeps the outer reaches of
-// the lobe genuinely faint, so the value falls to nothing before the opacity
-// does and the edge dissolves. Higher = softer and more concentrated.
-let BOND_ALPHA_POW = 1.8;
+// The first fix REPLACED the stage alphas with a power curve, alpha = t^1.8.
+// It dissolved the edge and it cost this tab its rest energy: the curve pulls
+// EVERYTHING down, not just the bottom, so a bond at its natural length drew
+// at alpha 55 where the same bond in the Reactions world draws at 220. One
+// Bond's resting lobe was a grey smudge beside a world full of bright ones,
+// and the Sandbox inherited it.
+//
+// So the curve now MULTIPLIES the stage alphas instead of replacing them, and
+// only bites below the knee:
+//
+//     alpha(t) = stageAlpha(t) x min(1, (t / KNEE) ^ POW)
+//
+// Above the knee it is 1 and the ramp is the Reactions ramp exactly. Below it
+// the lobe goes genuinely transparent before the cull reaches it, which is all
+// the edge ever needed. Measured on a resting H–H, alpha at the peak / half /
+// quarter of the lobe: Reactions 254 / 220 / 170, One Bond 250 / 213 / 54 —
+// matched where the field is and still fading to nothing where it is not.
+const BOND_ALPHA_KNEE = 0.42;
+let BOND_ALPHA_POW = 1.6;
 
 // Where the tab opens, as a multiple of the natural bond length. Not 1.0: at
 // the natural length the two nuclei and their shells nearly touch, there is no
@@ -1658,19 +1677,28 @@ const BOND_FIELD_SQUEEZE = 0.85;
 // barely moves.
 let BOND_FIELD_FLOOR = 0.855;   // = 1/(BOND_FIELD_GAIN x BOND_FIELD_BOOST); see bondShownGamma
 
-// One Bond's own colour stages. The main tab's cold stage is a blue-white,
-// which is right there — a resting bond in a world of them should still read as
-// something. Here the bottom of the scale is a bond at its natural length with
-// NOTHING stored, and that should look like a bond and not like an event: a
-// visible glow with no colour in it. Grey. The colour is then what stretching
-// adds, so hue carries the reading rather than decorating it.
+// One Bond's own colour stages — now the SAME three the Reactions world uses.
+//
+// The rest stage used to be grey, on the argument that the bottom of this
+// tab's scale is a bond with nothing stored and should look like a bond rather
+// than an event: a visible glow with no colour in it, so that hue carried the
+// reading instead of decorating it. The argument is fine and the result was
+// not. Grey at a given alpha reads as *dimmer* than a saturated blue at the
+// same alpha, and a resting bond here sat beside a Reactions world full of
+// bright blue ones — the same bond, the same energy, two brightnesses.
+//
+// Rest is blue-white now, exactly as it is in the world, so the three tabs
+// make one claim about one quantity. The reading survives: a resting bond is
+// still the coldest thing on the scale and stretching still carries it blue →
+// purple → pink. Only the bottom of the ramp moved, and only to where the
+// other tab already had it.
 const BOND_FIELD_STAGES = [
-  // nothing stored — grey, present but not vibrant
-  [ { t: 0.0,  r: 24,  g: 25,  b: 30,  a: 0   },
-    { t: 0.12, r: 74,  g: 77,  b: 86,  a: 140 },
-    { t: 0.40, r: 124, g: 128, b: 140, a: 210 },
-    { t: 0.70, r: 168, g: 172, b: 186, a: 245 },
-    { t: 1.0,  r: 214, g: 218, b: 228, a: 255 } ],
+  // nothing stored — the Reactions ramp's cold blue-white, kept in step
+  [ { t: 0.0,  r: 0,   g: 0,   b: 0,   a: 0   },
+    { t: 0.12, r: 10,  g: 35,  b: 170, a: 140 },
+    { t: 0.40, r: 25,  g: 85,  b: 235, a: 210 },
+    { t: 0.70, r: 70,  g: 165, b: 255, a: 245 },
+    { t: 1.0,  r: 210, g: 238, b: 255, a: 255 } ],
   // working — purple
   [ { t: 0.0,  r: 20,  g: 0,   b: 54,  a: 0   },
     { t: 0.12, r: 62,  g: 16,  b: 148, a: 140 },
@@ -1687,7 +1715,7 @@ const BOND_FIELD_STAGES = [
 
 function buildBondColormap() {
   buildRampStack(BOND_FIELD_STAGES, FIELD_STAGE_GAMMA, BOND_COLORMAP,
-                 t => Math.pow(t, BOND_ALPHA_POW));
+                 t => Math.min(1, Math.pow(t / BOND_ALPHA_KNEE, BOND_ALPHA_POW)));
 }
 
 setFieldRamp(fieldRamp);
@@ -8825,7 +8853,12 @@ replayOnBox.addEventListener('change', () => {
       'One Bond tab</div>' +
     row('devBLobeW',  'Lobe width',      0.1,  0.8, 0.02, BOND_FIELD_WIDTH, '#7b6fff') +
     row('devBLobeG',  'Lobe brightness', 0.3,  3,   0.05, BOND_FIELD_GAIN,  '#7b6fff') +
-    row('devBAlpha',  'Opacity taper',   0.6,  4,   0.1,  BOND_ALPHA_POW,   '#7b6fff') +
+    row('devBAlpha',  'Edge fade',       0.4,  4,   0.1,  BOND_ALPHA_POW,   '#7b6fff') +
+    '<div style="opacity:0.45;font-size:10px;">One Bond and Sandbox only. How ' +
+      'sharply the lobe goes transparent below the knee (' + BOND_ALPHA_KNEE +
+      '), which is what dissolves the straight cut at each nucleus. It no ' +
+      'longer touches the rest of the ramp — above the knee these tabs are ' +
+      'as bright as the Reactions world</div>' +
     '<div style="opacity:0.45;font-size:10px;">higher = fainter edges, so the ' +
       'lobe\u2019s flat cut at each nucleus stops showing</div>' +
     row('devBFloor',  'Lobe at rest',    0,    1,   0.05, BOND_FIELD_FLOOR, '#7b6fff') +
