@@ -2708,6 +2708,7 @@ function syncWorldBox() {
 }
 
 let nextBodyId = 0;
+let nextAtomUid = 1;          // see `uid` in assembleBody — 0 is kept free
 
 // Build a rigid body from a list of element symbols. Atom positions are stored
 // once in body-local coordinates; world positions are derived each frame from
@@ -2898,6 +2899,19 @@ function assembleBody(geo, bonds, x, y, heading, speed, spin, nominal = speed) {
     ly: g.ly - my,
     r: ATOM_RADIUS * ELEMENTS[g.el].rScale,
     m: ATOMIC_MASS[g.el] || 1,
+    // AN ATOM'S OWN NAME, which outlives every body it is ever part of.
+    //
+    // Bodies are not edited in place — a break and a join both throw the old
+    // ones away and build new ones from `moleculeGeometry`, so an atom object
+    // never survives a bond changing. That is fine for the physics, which only
+    // ever asks what is in the world now, and useless for FOLLOW ONE ATOM,
+    // which has to ask the same question of the same atom across exactly those
+    // moments. So the identity is a number carried in the geometry: given here
+    // when an atom is first made, and passed along by hand at the three places
+    // that take a body apart or put one together (`peelPieces`,
+    // `shatterPieces`, `joinBodies`). Anywhere else a body is built the atoms
+    // really are new, and a fresh uid is the right answer.
+    uid: g.uid != null ? g.uid : nextAtomUid++,
   }));
 
   const mass = atoms.reduce((a, at) => a + at.m, 0);
@@ -3136,6 +3150,10 @@ function spreadSpeed(mean) {
 
 function spawnWorld() {
   syncWorldBox();
+  // Nothing in the new world is the atom that was being followed, so the panel
+  // goes back to the reaction's own graph rather than silently following
+  // whatever happens to be handed the same uid later.
+  followUid = 0;
   world.bodies = [];
   world.breaking.length = 0;
   world.time = 0;
@@ -4054,9 +4072,107 @@ function setVibMode(name) {
   logAction('Bond storage: ' + VIB_MODES[name]);
 }
 
+// ─── HOW HARD A HIT COUNTS, FOR A REACTANT ───────────────────────────────────
+//
+// Press HIGH and the whole scene comes apart at once. Measured at the old
+// defaults: 18 to 21 of the 21 reactants gone inside HALF a SECOND, all 21
+// within one. So the three temperature buttons are not three rates — Low is
+// nothing, High is everything, and only Med is a reaction you can watch.
+//
+// WHAT IS ACTUALLY HAPPENING, measured, because two plausible dials were built
+// on a wrong picture of it first. At High a reactant is hit about **15 times a
+// second**, and a hit's dose is **0.06 median, 0.22 mean, 0.67 at the ninetieth
+// percentile, 2.78 at the very worst**, against an H-H threshold of **1.32**.
+// So a break is almost never one big hit. It is ACCUMULATION: fifteen small
+// deposits a second into a stack that holds about two of them, and with that
+// many throws a pair adding to 1.32 comes along several times a second.
+//
+// Two dials that were built, measured and thrown away, so they are not built
+// again:
+//
+//   A POWER ON THE DOSE did nothing at all — all 21 still gone inside a second
+//   at every exponent down to 0.3 — because `dose^x` is still above 1 whenever
+//   the dose is, and the threshold sits just above 1. It cannot move a hit from
+//   one side of the threshold to the other, which is the only thing that would
+//   have mattered if single hits were the mechanism.
+//
+//   A CAP ON ONE HIT barely helped (19-20 of 21 inside a second at 0.4x the
+//   threshold) for the reason the measurement above gives: hardly any hit is
+//   over the cap in the first place, so capping trims a handful of outliers and
+//   leaves the fifteen-a-second drizzle that does the actual work. On its own it
+//   also has a cliff — a single bond stacks one level, so it can never take
+//   more than twice the cap however long it is hit, and 0.5 cleared the scene in
+//   five seconds while 0.35 stalled at 7 of 21 in twenty and 0.25 broke nothing
+//   ever.
+//
+// So both dials act on the ACCUMULATION, which is the mechanism:
+//
+//   TAKES IN      the share of each hit a reactant's bond keeps. Linear, and
+//                 linear is what works here precisely because almost every dose
+//                 is already below the threshold: halving what is kept halves
+//                 the rate the stack fills at, and the bond needs twice as long
+//                 to get there. This is the dial that says WHICH temperature
+//                 starts breaking things.
+//   HOLDS FOR     a multiple of `VIB_TAU` for a reactant — how long its stack
+//                 keeps what it was given before leaking it back to motion. The
+//                 stack sits at about (what it keeps) x (hits per second) x
+//                 (this), and hits per second goes as the speed while a dose
+//                 goes as the speed squared, so a shorter hold cuts the reward
+//                 for being hit often and brings the three temperatures TOGETHER;
+//                 a longer one spreads them apart. This is the dial that says
+//                 how SHARP the transition is.
+//
+// NEITHER DIAL DELETES ENERGY. What the bond does not take goes straight back
+// into the molecule's motion in the same step, by the path that already exists
+// for a hit a bond shrugs off, and the leak already hands its energy back
+// through `returnFieldEnergy`. The books do not move; only the timing does.
+//
+// REACTANTS ONLY. This is for dialling in what the temperature buttons do to
+// the scene you start with. A product is already protected by STRONG PRODUCTS,
+// and an intermediate is not something a temperature button should be tuned on.
+let reactantTakes    = 1;  // share of each hit a reactant's bond keeps; 1 = off
+let reactantRelative = 0.35;  // judge a hit against the molecule's own pace; 0 = off
+
+// HOW BIG WAS THAT HIT — ABSOLUTELY, OR FOR A MOLECULE GOING THIS FAST?
+//
+// `doseUnit()` is a nominal H2 at temperature 1 and carries no temperature, so
+// the dose is an ABSOLUTE measure and High's hits really are about nine times
+// Low's. That is the 27x pumping ladder, and it is why the temperatures are a
+// cliff rather than three rates.
+//
+// This dial blends that reading towards a RELATIVE one: how big the hit was
+// against what a molecule moving at this one's own nominal pace carries. At 1 a
+// contact at High counts exactly what the same contact at Low would, and the
+// only separation left between the temperatures is the collision RATE, which
+// goes as the speed rather than its square — a 3:2:1 ladder instead of 27:8:1.
+// Between them the ladder is whatever power of the temperature you choose.
+//
+// IT READS THE MOLECULE, NOT THE THERMOSTAT. There is no `tempLevel` test
+// anywhere in the breaking mechanism and this does not add one: `vTarget` is
+// the speed the band is holding this body at, which is its own property, and
+// with equipartition 0.5*m*vTarget^2 is the same for every species at a given
+// temperature. So the reference falls out of the body itself.
+//
+// It can only ever REDUCE, since the reference is 1 at temperature 1 and rises
+// from there, so Low is untouched at every setting and the surplus is handed
+// back to motion as always.
+function reactantPaceRef(b) {
+  if (reactantRelative <= 0) return 1;
+  const nom = 0.5 * b.mass * b.vTarget * b.vTarget / doseUnit();
+  return nom > 1 ? Math.pow(nom, reactantRelative) : 1;
+}
+
 function queueIfBroken(b, energy) {
   if (!canStoreVib(b) || b.broken) return;
-  const dose = energy / doseUnit();
+  let dose = energy / doseUnit();
+  if ((reactantTakes < 1 || reactantRelative > 0) && isReactant(b)) {
+    const kept = dose * reactantTakes / reactantPaceRef(b);
+    if (kept < dose) {
+      returnFieldEnergy(b, (dose - kept) * doseUnit());
+      dose = kept;
+      energy = kept * doseUnit();
+    }
+  }
 
   // NO STACK: this hit breaks the bond on its own or it does not. What does not
   // break goes straight back into the motion the restitution took it out of, in
@@ -4227,7 +4343,8 @@ function peelPieces(b, slow) {
   // The atoms that stay, in the body-local coordinates they are already in, and
   // the bonds between them with their indices renumbered.
   const keep = b.atoms.map((_, i) => i).filter(i => i !== leaf);
-  const geo  = keep.map(i => ({ el: b.atoms[i].el, lx: b.atoms[i].lx, ly: b.atoms[i].ly }));
+  const geo  = keep.map(i => ({ el: b.atoms[i].el, lx: b.atoms[i].lx, ly: b.atoms[i].ly,
+                                uid: b.atoms[i].uid }));
   const remap = new Map(keep.map((i, k) => [i, k]));
   const bonds = b.bonds.filter(x => x !== bd).map(x =>
     x[2] ? [remap.get(x[0]), remap.get(x[1]), x[2]] : [remap.get(x[0]), remap.get(x[1])]);
@@ -4246,6 +4363,7 @@ function peelPieces(b, slow) {
   const freeNom = speciesSpeed([at.el]) * slow;
   const [fvx, fvy] = pointVel(b, rx, ry);
   const free = withElectrons(makeBody([at.el], b.x + rx, b.y + ry, 0, 0, 0, freeNom));
+  free.atoms[0].uid = at.uid;           // the atom that left is the atom that left
   const kick = breakKick * freeNom;
   free.vx = fvx * slow + kick * ux;
   free.vy = fvy * slow + kick * uy;
@@ -4289,6 +4407,7 @@ function shatterPieces(b, slow) {
     const kick = breakKick * nominal;
 
     const f = withElectrons(makeBody([at.el], b.x + rx, b.y + ry, 0, 0, 0, nominal));
+    f.atoms[0].uid = at.uid;
     f.vx = vx * slow + kick * rx / len;
     f.vy = vy * slow + kick * ry / len;
     f.spin = 0;                 // a lone atom has nothing to spin about
@@ -4672,7 +4791,7 @@ function bestPlacement(nb, src) {
   let best = null;
   for (const asg of joinAssignments(nb.els, src)) {
     const pts = nb.atoms.map((at, i) => ({
-      w: at.m, px: at.lx, py: at.ly, qx: asg[i].x, qy: asg[i].y,
+      w: at.m, px: at.lx, py: at.ly, qx: asg[i].x, qy: asg[i].y, uid: asg[i].uid,
     }));
     const p = fitPlacement(pts);
     const c = Math.cos(p.angle), s = Math.sin(p.angle);
@@ -4682,7 +4801,8 @@ function bestPlacement(nb, src) {
       const dy = p.y + t.px * s + t.py * c - t.qy;
       res += t.w * (dx * dx + dy * dy);
     }
-    if (!best || res < best.res) best = { res, p, q: pts.map(t => ({ x: t.qx, y: t.qy })) };
+    if (!best || res < best.res) best = { res, p,
+      q: pts.map(t => ({ x: t.qx, y: t.qy, uid: t.uid })) };
   }
   return best;
 }
@@ -4764,7 +4884,7 @@ function joinBodies(a, b, els) {
   for (const s of [a, b]) {
     const sc = Math.cos(s.angle), ss = Math.sin(s.angle);
     for (const at of s.atoms) {
-      src.push({ el: at.el,
+      src.push({ el: at.el, uid: at.uid,
                  x: s.x + at.lx * sc - at.ly * ss,
                  y: s.y + at.lx * ss + at.ly * sc });
     }
@@ -4774,7 +4894,14 @@ function joinBodies(a, b, els) {
     nb.angle = fit.p.angle;
     nb.x = fit.p.x;
     nb.y = fit.p.y;
+    // The fit already decided WHICH source atom goes in which slot — that is
+    // the whole of what `joinAssignments` enumerates — so the identities come
+    // along with it for free. Without the fit the slots were never matched to
+    // anything, and the order `src` was built in is the best there is.
+    nb.atoms.forEach((at, i) => { if (fit.q[i].uid != null) at.uid = fit.q[i].uid; });
     startForm(nb, fit.q);
+  } else {
+    nb.atoms.forEach((at, i) => { if (src[i] && src[i].uid != null) at.uid = src[i].uid; });
   }
 
   const released = joinReleaseKJ(a, b, nb.els) / kjPerSim();
@@ -5157,6 +5284,8 @@ function anchorBarScale() {
   const fieldsNow = fieldsKJ();
   barFullKJ = Math.max(1, fieldsNow + motionAtTemp(TEMP_HIGH));
   barMotionZeroKJ = Math.max(0, barZeroAt * motionAtTemp(TEMP_LOW));
+  // The per-atom twin of the same axis — see atomAxisTop.
+  atomAxisFullKJ = Math.max(SB_FREE_ATOM * 1.1, barFullKJ / Math.max(1, atomCount()));
 }
 
 function motionZeroKJ() { return barMotionZeroKJ; }
@@ -5355,6 +5484,8 @@ function drawWorld() {
     for (const b of world.bodies) drawElectronsAsDots(b);
     for (const p of P) drawNucleons(ctx, p.x, p.y, p.el, shellWobble, WORLD_NUCLEON_R);
   }
+
+  drawFollowHighlight();
 
   ctx.restore();
   drawEnergyGraph();
@@ -5829,7 +5960,344 @@ function splineThrough(ctx, pts) {
   }
 }
 
-function drawEnergyGraph() {
+// ─── FOLLOW ONE ATOM ─────────────────────────────────────────────────────────
+//
+// Click an atom and the panel stops being about the world and starts being
+// about that atom: where IT is between reactant and product, and what it is
+// carrying. Dev toggle, in ACTIVE.
+//
+// IT IS NOT A TIME TRACE. The world's graph is a path — landmarks recorded as
+// the reaction passes them, never rewritten. This one has no path at all: the
+// atom's own fields energy says where on the reactant-to-product axis it is,
+// and the marker JUMPS there the moment a bond forms or goes. There is nothing
+// in between to draw, because for one atom there is nothing in between: it is
+// bonded or it is not.
+let followOn    = false;   // the dev toggle
+let followUid   = 0;       // which atom, by its own uid; 0 = none picked
+let followDim   = 0.62;    // how far the rest of the world is pushed back
+let followAxisKJ = 0;      // 0 = the whole per-atom axis — see atomAxisTop()
+
+function reactionsOn() { return !bondTab.on && !sandbox.on; }
+
+// The atom, wherever it has ended up. Every body in the world is searched, not
+// a remembered one, because the body it was in a second ago may not exist: this
+// is the whole reason atoms carry a uid. Returns null once it is picked up by
+// nothing, which is what a respawn looks like from here.
+function followTarget() {
+  if (!followOn || !followUid || !reactionsOn()) return null;
+  for (const b of world.bodies) {
+    const i = b.atoms.findIndex(at => at.uid === followUid);
+    if (i >= 0) {
+      const p = bodyAtoms(b)[i];
+      return { body: b, i, x: p.x, y: p.y, el: p.el, bodyId: b.id, z: 0 };
+    }
+  }
+  return null;
+}
+
+// ONE ATOM'S SHARE OF THE FIELDS, by exactly the reckoning `fieldsKJ` uses for
+// the world: a free atom carries SB_FREE_ATOM and each bond discounts its
+// dissociation energy. A bond belongs to two atoms, so each is charged HALF of
+// it — which is what makes the per-atom numbers add back up to the world's.
+// The molecule's stored vibration is split evenly across its atoms for the same
+// reason, and is counted only when the display is allowed to know about it.
+function atomFieldsKJ(body, i) {
+  let e = SB_FREE_ATOM, n = 0;
+  for (const bd of body.bonds) {
+    if (bd[0] !== i && bd[1] !== i) continue;
+    e -= bondEnergyOf(body, bd) / 2;
+    n++;
+  }
+  if (n && vibVisible()) e += body.vib * doseUnit() * kjPerSim() / body.els.length;
+  return e;
+}
+
+// ...and its motion. `pointVel` is the velocity that atom actually has — the
+// body's drift plus what the spin contributes at its offset — so a tumbling
+// molecule's outer atoms read faster than its centre, which is true. The
+// display boost is divided back out, the same correction `trueMotionEnergy`
+// makes, so this number does not move when the drawing is retuned.
+function atomMotionKJ(body, i) {
+  const at = body.atoms[i];
+  const ca = Math.cos(body.angle), sa = Math.sin(body.angle);
+  const rx = at.lx * ca - at.ly * sa, ry = at.lx * sa + at.ly * ca;
+  const [vx, vy] = pointVel(body, rx, ry);
+  const s = displayBoost(body);
+  return 0.5 * at.m * (vx * vx + vy * vy) / (s * s) * kjPerSim();
+}
+
+// The same per-atom reckoning applied to a SPECIES rather than to a body in the
+// world: what an atom of this element carries once it is sitting in this
+// molecule. These are the two ends of the axis — where the atom started and
+// where it is going — and they come off the same tables the molecules
+// themselves are built from, so nothing here has to be written down twice.
+function speciesAtomFieldsKJ(els, el) {
+  const idx = els.indexOf(el);
+  if (idx < 0) return null;
+  let e = SB_FREE_ATOM;
+  for (const bd of moleculeBonds(els)) {
+    if (bd[0] !== idx && bd[1] !== idx) continue;
+    const a = els[bd[0]], c = els[bd[1]];
+    e -= (bd[2] ? bondDFor(a, c, bd[2]) : bondEnergy(a, c)) / 2;
+  }
+  return e;
+}
+
+function reactantSpeciesList() {
+  const u = currentReaction().composition;
+  return Object.keys(u).filter(k => (u[k] || 0) > 0 && SPECIES[k]).map(k => SPECIES[k].els);
+}
+function productSpeciesList() {
+  return (currentReaction().products || []).map(k => JOIN_STEPS[k]).filter(Boolean);
+}
+
+function reactantLevelKJ(el) {
+  for (const els of reactantSpeciesList()) {
+    const v = speciesAtomFieldsKJ(els, el);
+    if (v != null) return v;
+  }
+  return null;
+}
+// The product this atom is actually in, when it is in one — an O can end up in
+// a water or in a CO2 and those are different depths — and otherwise the
+// deepest product that could take it, which is where it is headed.
+function productLevelKJ(el, bodyEls) {
+  const here = speciesKey(bodyEls);
+  let best = null;
+  for (const els of productSpeciesList()) {
+    const v = speciesAtomFieldsKJ(els, el);
+    if (v == null) continue;
+    if (speciesKey(els) === here) return v;
+    if (best == null || v < best) best = v;
+  }
+  return best;
+}
+
+// WHICH HALF OF THE AXIS, decided by the bonds the atom is actually holding
+// rather than by what molecule it is in. A bond type that appears in one of the
+// reaction's reactants is reactant-side; one that appears in a product is
+// product-side. That is what gets an INTERMEDIATE right, and intermediates are
+// most of the interesting part of a run: the H in an OH is in a finished O-H
+// bond, so it belongs on the product side even though OH is not a product, and
+// an O still in an O2 belongs on the reactant side even once half the world has
+// moved on. Weighted by bond energy, so a carbon part-way through combustion —
+// two H left and an O arrived — lands where the balance of its bonds puts it.
+function pairInSpeciesList(list, elA, elB) {
+  for (const els of list) {
+    for (const bd of moleculeBonds(els)) {
+      const a = els[bd[0]], c = els[bd[1]];
+      if ((a === elA && c === elB) || (a === elB && c === elA)) return true;
+    }
+  }
+  return false;
+}
+function atomSideWeight(body, i) {
+  const R = reactantSpeciesList(), P = productSpeciesList();
+  let w = 0;
+  for (const bd of body.bonds) {
+    if (bd[0] !== i && bd[1] !== i) continue;
+    const other = bd[0] === i ? bd[1] : bd[0];
+    const elA = body.atoms[i].el, elB = body.atoms[other].el;
+    const D = bondEnergyOf(body, bd);
+    if (pairInSpeciesList(P, elA, elB)) w += D;
+    else if (pairInSpeciesList(R, elA, elB)) w -= D;
+  }
+  return w;
+}
+
+const clamp01 = (v) => Math.max(0, Math.min(1, v));
+
+// WHERE ON THE AXIS, from the energy and nothing else. A free atom carries the
+// most it can and sits at the peak, 0.5, which is exactly where the world's own
+// axis puts ALL ATOMS FREE — so the two graphs agree about the middle. From
+// there each half is linear in how much of its own bonding it has done.
+function followProgress(t) {
+  const body = t.body, i = t.i, el = body.atoms[i].el;
+  if (!body.bonds.some(bd => bd[0] === i || bd[1] === i)) return 0.5;
+  const E = atomFieldsKJ(body, i);
+  const FREE = SB_FREE_ATOM;
+  const side = atomSideWeight(body, i);
+  const ref = side > 0 ? productLevelKJ(el, body.els) : reactantLevelKJ(el);
+  if (ref == null || ref >= FREE) return 0.5;
+  const done = clamp01((FREE - E) / (FREE - ref));
+  return side > 0 ? 0.5 + 0.5 * done : 0.5 - 0.5 * done;
+}
+
+// THE AXIS IS FIXED FOR THE RUN, and it is the per-atom twin of the bar chart's
+// — `barFullKJ` shared out over the atoms in the scene — so switching
+// temperature moves the lines and not the frame, for the same reason the bars
+// stopped rescaling. Anchored beside the bar scale, from the same numbers.
+let atomAxisFullKJ = 1;
+function atomCount() { return world.bodies.reduce((a, b) => a + b.els.length, 0); }
+// Motion dwarfs fields per atom — about 1,400 kJ/mol against the 100-500 a bond
+// discount comes to — so the fields curve lives in the bottom fifth of an
+// honest axis. `followAxisKJ` is the knob for that: pull it down to magnify the
+// fields curve and let the motion line run off the top. 0 is the honest axis.
+function atomAxisTop() {
+  return followAxisKJ > 0 ? followAxisKJ : atomAxisFullKJ;
+}
+
+// ── The atom's own graph ────────────────────────────────────────────────────
+function drawAtomGraph(t) {
+  const body = t.body, i = t.i, el = body.atoms[i].el;
+  const E    = atomFieldsKJ(body, i);
+  const KE   = atomMotionKJ(body, i);
+  const p    = followProgress(t);
+  const E0   = reactantLevelKJ(el);
+  const E1   = productLevelKJ(el, body.els);
+  const name = el + ' in ' + formulaOf(body.els);
+
+  const G = drawGraphFrame(name.toUpperCase() + '  ·  ' + Math.round(E) +
+                           ' IN FIELDS  ·  ' + Math.round(KE) + ' IN MOTION');
+  const { W, TOP, AXIS, gH, px, pxL, pxR, LIGHT,
+          dimCol, motionCol, fieldsCol, motionGlow } = G;
+
+  const top = Math.max(1, atomAxisTop());
+  const py  = (kj) => TOP + gH * (1 - clamp01(kj / top));
+
+  // THE ATOM'S OWN REACTION CURVE: its energy where it started, free at the
+  // peak, and where it ends up. Three points, which is the whole of what one
+  // atom's reaction coordinate has to say, drawn through the same monotone
+  // spline the world's line uses so the two read as the same kind of object.
+  const pts = [];
+  if (E0 != null) pts.push({ x: px(0),   y: py(E0) });
+  pts.push({ x: px(0.5), y: py(SB_FREE_ATOM) });
+  if (E1 != null) pts.push({ x: px(1),   y: py(E1) });
+  if (pts.length > 1) {
+    // Shelves at both ends, as the world's graph has: this curve is a statement
+    // about states, not a path being walked, so both ends are known from the
+    // start and there is no future to leave blank.
+    const line = [{ x: pxL, y: pts[0].y }, ...pts,
+                  { x: pxR, y: pts[pts.length - 1].y }];
+    for (const [lw, blur, alpha] of [[6, 20, 0.22], [2, 8, 0.75]]) {
+      graphCtx.save();
+      graphCtx.globalAlpha = alpha;
+      graphCtx.shadowBlur = LIGHT ? 0 : blur;
+      graphCtx.shadowColor = fieldsCol;
+      graphCtx.strokeStyle = fieldsCol;
+      graphCtx.lineWidth = lw;
+      graphCtx.lineJoin = 'round'; graphCtx.lineCap = 'round';
+      graphCtx.beginPath(); splineThrough(graphCtx, line); graphCtx.stroke();
+      graphCtx.restore();
+    }
+  }
+
+  // THE KINETIC ENERGY IS A LEVEL, NOT A CURVE. It has no reaction coordinate —
+  // an atom's speed says nothing about how bonded it is — so drawing it as a
+  // line across the panel is the honest shape: this is how much motion this
+  // atom has, right now, against the same axis as its fields. It is where the
+  // atom's energy is NOT in its bonds, which is the comparison worth having
+  // beside the curve.
+  const ky = py(KE);
+  graphCtx.save();
+  graphCtx.setLineDash([5, 4]);
+  graphCtx.globalAlpha = KE > top ? 0.35 : 0.9;   // off the top of the axis: say so
+  graphCtx.shadowBlur = LIGHT ? 0 : 10;
+  graphCtx.shadowColor = motionGlow;
+  graphCtx.strokeStyle = motionCol;
+  graphCtx.lineWidth = 1.5;
+  graphCtx.beginPath(); graphCtx.moveTo(pxL, ky); graphCtx.lineTo(pxR, ky);
+  graphCtx.stroke();
+  graphCtx.restore();
+
+  // WHERE THE ATOM IS. The fields marker rides the curve by construction — the
+  // height IS the energy the position was read from — and the motion marker
+  // sits above or below it on the same vertical, so the gap between them is the
+  // split for this one atom.
+  const mx = px(p);
+  graphCtx.save();
+  graphCtx.setLineDash([2, 3]);
+  graphCtx.strokeStyle = dimCol;
+  graphCtx.lineWidth = 1;
+  graphCtx.beginPath(); graphCtx.moveTo(mx, TOP); graphCtx.lineTo(mx, AXIS);
+  graphCtx.stroke();
+  graphCtx.restore();
+
+  for (const [y, col, glow] of [[py(E), fieldsCol, fieldsCol],
+                                [ky,    motionCol, motionGlow]]) {
+    graphCtx.save();
+    graphCtx.shadowBlur = LIGHT ? 0 : 10;
+    graphCtx.shadowColor = glow;
+    graphCtx.fillStyle = col;
+    graphCtx.beginPath(); graphCtx.arc(mx, y, 3.6, 0, Math.PI * 2); graphCtx.fill();
+    graphCtx.restore();
+  }
+}
+
+// ── Picking one, and showing which ─────────────────────────────────────────
+// The pointer is in screen pixels and the world is behind a translate and a
+// zoom, so both come back out. Nothing else on this tab answers to a click, so
+// there is nobody to take precedence over.
+function followPick(ev) {
+  if (!followOn || !reactionsOn()) return;
+  const r = canvas.getBoundingClientRect();
+  const sx = (ev.clientX - r.left) * (canvas.width / r.width);
+  const sy = (ev.clientY - r.top)  * (canvas.height / r.height);
+  const wx = sx / sceneZoom, wy = (sy - world.top) / sceneZoom;
+  let best = 0, bestD = Infinity;
+  for (const b of world.bodies) {
+    for (const a of bodyAtoms(b)) {
+      const d = Math.hypot(wx - a.x, wy - a.y);
+      if (d < valenceRadius(a.el) && d < bestD) { bestD = d; best = b.atoms[a.i].uid; }
+    }
+  }
+  // A click on nothing CLEARS it, which is the way back to the world's graph
+  // without reaching for the dev panel.
+  followUid = best;
+  ev.preventDefault();
+}
+
+// HIGHLIGHT, NOT A RING. The scene is already full of circles — valence shells,
+// shell bands, nuclei — and another one round the followed atom would read as
+// one more piece of the diagram. So the rest of the world is pushed back behind
+// a scrim in the scene's own colour and the atom is redrawn on top of it, at
+// full strength, with a pulsing halo in its own element colour. It is the only
+// thing in focus, which is what following one atom means.
+//
+// Drawn inside the world transform, after everything else, so no drawing
+// function has to know this feature exists.
+function drawFollowHighlight() {
+  const t = followTarget();
+  if (!t) return;
+  const [br, bg, bb] = sceneBgRgb();
+  ctx.save();
+  ctx.fillStyle = 'rgba(' + br + ',' + bg + ',' + bb + ',' + followDim.toFixed(3) + ')';
+  ctx.fillRect(0, 0, world.w, world.h);
+  ctx.restore();
+
+  const vr = valenceRadius(t.el);
+  const e  = ELEMENTS[t.el] || ELEMENTS.H;
+  // Its own accumulator, so the pulse keeps going while the sim is paused — the
+  // same reason the shell drift has one.
+  const pulse = 0.55 + 0.45 * Math.sin(shellWobble * 2.1);
+  ctx.save();
+  const g = ctx.createRadialGradient(t.x, t.y, vr * 0.5, t.x, t.y, vr * 2.1);
+  g.addColorStop(0, 'rgba(' + e.rgb + ',' + (0.42 * pulse).toFixed(3) + ')');
+  g.addColorStop(1, 'rgba(' + e.rgb + ',0)');
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(t.x, t.y, vr * 2.1, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+
+  drawAtomBody(ctx, t.x, t.y, t.el, vr);
+  if (viewMode !== 'space') {
+    drawAtomShells(ctx, t);
+    drawInnerElectrons(ctx, t);
+  }
+  drawNucleons(ctx, t.x, t.y, t.el, shellWobble, WORLD_NUCLEON_R);
+}
+
+// THE FRAME, SHARED BY BOTH GRAPHS IN THIS PANEL.
+//
+// The reaction-coordinate axis — the grid, the halfway mark, the baseline, the
+// REACTANTS/PRODUCTS ends — is the same picture whether the line on it is the
+// whole world's or one atom's, and FOLLOW ONE ATOM exists precisely so the two
+// can be read against each other. Two copies of it would drift apart on the
+// first tweak, so it is drawn once here and both callers take the geometry back
+// out of it.
+//
+// `title` is the only part that differs, because it is the only part that is
+// about what is being plotted rather than about the axis.
+function drawGraphFrame(title) {
   const W = graphCanvas.width, H = graphCanvas.height;
   const PADX = 12, TOP = 6, AXIS = H - 34, gH = AXIS - TOP;
   graphCtx.clearRect(0, 0, W, H);
@@ -5900,8 +6368,23 @@ function drawEnergyGraph() {
   graphCtx.textAlign = 'center';
   graphCtx.fillStyle = dimCol;
   graphCtx.font = '700 8px Lexend, sans-serif';
-  graphCtx.fillText('REACTION PROGRESS', W / 2, AXIS + 25);
+  graphCtx.fillText(title, W / 2, AXIS + 25);
   graphCtx.restore();
+
+  return { W, H, PADX, TOP, AXIS, gH, px, pxL, pxR, LIGHT,
+           gridCol, axisCol, textCol, dimCol, motionCol, fieldsCol, motionGlow };
+}
+
+function drawEnergyGraph() {
+  // FOLLOW ONE ATOM TAKES THE PANEL. The two graphs answer the same question at
+  // two scales and there is one panel to answer it in, so the atom's reading
+  // replaces the world's rather than being squeezed in beside it.
+  const followed = followTarget();
+  if (followed) { drawAtomGraph(followed); return; }
+
+  const G = drawGraphFrame('REACTION PROGRESS');
+  const { W, H, PADX, TOP, AXIS, gH, px, pxL, pxR, LIGHT,
+          gridCol, axisCol, textCol, dimCol, motionCol, fieldsCol, motionGlow } = G;
 
   if (progressTrace.length < 1) return;
 
@@ -6442,6 +6925,36 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
       'color:#ffd84d;font-weight:700;margin-top:10px;">Active</div>' +
     '<div style="opacity:0.45;font-size:10px;margin-bottom:2px;">still being ' +
       'turned. Below the line is settled tuning.</div>' +
+    '<label style="display:flex;align-items:center;gap:7px;margin:9px 0 2px;cursor:pointer;">' +
+      '<input type="checkbox" id="devFollow" style="margin:0">' +
+      '<span>Follow one atom</span>' +
+    '</label>' +
+    '<div style="opacity:0.45;font-size:10px;margin-left:21px;">click an atom in ' +
+      'the world and the line graph becomes ITS graph — where that one atom ' +
+      'sits between reactant and product, read off the energy in its own bonds, ' +
+      'with its kinetic energy as a level beside it. Click empty space to let ' +
+      'it go. The rest of the world dims; there is no ring, there are enough ' +
+      'circles out there already</div>' +
+    row('devFollowDim',  'Followed: rest dims', 0, 0.9, 0.02, followDim, '#ffd84d') +
+    row('devFollowAxis', 'Followed: axis top',  0, 2000, 50, followAxisKJ, '#ffd84d') +
+    '<div style="opacity:0.45;font-size:10px;">an atom carries far more motion ' +
+      'than its bonds are worth, so on an honest axis the fields curve lives in ' +
+      'the bottom fifth. Pull the top down to magnify it and let the motion ' +
+      'line run off above. 0 is the honest axis</div>' +
+    row('devTakes',  'Reactant takes in', 0.05, 1, 0.05, reactantTakes,  '#ffd84d') +
+    row('devPace',   'Judged by own pace', 0, 1, 0.05, reactantRelative, '#ffd84d') +
+    '<div style="opacity:0.45;font-size:10px;">a REACTANT’s breakability ' +
+      'against speed, and they only work as a pair. ONE HIT caps what a single ' +
+      'hit\u2019s dose reaches the bond \u2014 a reactant is hit about 15 times ' +
+      'a second at High and almost every one of those is well under the ' +
+      'threshold, so breaking is accumulation and halving what is taken in ' +
+      'halves how fast the stack fills. That is WHICH temperature starts ' +
+      'breaking. HOLDS FOR is its own \u00d7 on the vibration hold: the stack ' +
+      'sits at takes \u00d7 hits-per-second \u00d7 hold, and hits-per-second goes ' +
+      'as the speed while a dose goes as its square, so a shorter hold brings ' +
+      'the three temperatures together and a longer one spreads them apart. ' +
+      'That is how SHARP it is. Energy the bond does not take goes back to the ' +
+      'motion, so neither dial moves the books. Both 1 are off</div>' +
     row('devRecombRange', 'Attractive reach', 1.2, 8, 0.1, recombRange, '#ffd84d') +
     '<div style="opacity:0.45;font-size:10px;">how far out two atoms that could ' +
       'bond start pulling on each other, in contact widths. Wider does not ' +
@@ -6694,6 +7207,15 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
   const strongCb = panel.querySelector('#devStrong');
   strongCb.checked = strongWater;
   strongCb.addEventListener('change', () => setStrongProducts(strongCb.checked));
+  const followCb = panel.querySelector('#devFollow');
+  followCb.checked = followOn;
+  followCb.addEventListener('change', () => {
+    followOn = followCb.checked;
+    // Switching it off lets the atom go, so turning it back on does not resume
+    // following something chosen minutes ago in a world that has moved on.
+    if (!followOn) followUid = 0;
+    canvas.style.cursor = followOn && reactionsOn() ? 'crosshair' : '';
+  });
   bind('devJoinFlash', v => joinFlashSec = v, false,
        v => v > 0 ? v.toFixed(1) + ' s' : 'off');
   bind('devScatter', v => collisionScatter = v, false,
@@ -6719,6 +7241,13 @@ document.getElementById('energyGraphToggle').addEventListener('click', () => {
        v => v > 0 ? Math.round(v * 100) + '%' : 'raw steps');
   bind('devRecombPull', v => recombPull  = v, false, v => Math.round(v) + ' px/s²');
   bind('devRecombRange', v => recombRange = v, false, v => v.toFixed(1) + '× natural');
+  bind('devFollowDim',  v => followDim = v, false, v => Math.round(v * 100) + '%');
+  bind('devFollowAxis', v => followAxisKJ = v, false,
+       v => v > 0 ? Math.round(v) + ' kJ/mol' : 'honest');
+  bind('devTakes',  v => reactantTakes = v, false,
+       v => v >= 1 ? 'all of it' : Math.round(v * 100) + '% of a hit');
+  bind('devPace',   v => reactantRelative = v, false,
+       v => v > 0 ? 'temp^' + (2 - 2 * v).toFixed(2) + ' per hit' : 'absolute');
   bind('devJoinForm', v => joinFormSec = v, false,
        v => v > 0 ? v.toFixed(2) + ' s' : 'instantly');
   bind('devRecombAlign', v => recombAlign = v, false,
@@ -7959,6 +8488,7 @@ function bondTabRelease() {
   canvas.style.cursor = '';
 }
 
+canvas.addEventListener('pointerdown', followPick);
 canvas.addEventListener('pointerdown', bondTabGrab);
 window.addEventListener('pointermove', bondTabMove);
 window.addEventListener('pointerup', bondTabRelease);

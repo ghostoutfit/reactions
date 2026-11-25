@@ -4108,6 +4108,8 @@ gold above a gold rule, holding the handful still being turned:
 | Motion zero at | the bar axis's displayed zero |
 | Strong products | ships ON; here only so it can be compared |
 | Bond capacity, Vibration hold | together, whether the scene comes apart |
+| Follow one atom, and its two dials | one atom's own reaction coordinate — see **Follow one atom** |
+| Reactant takes in, Judged by own pace | whether the temperatures are three rates or a cliff |
 
 **Each of these lives there and nowhere else.** The rows were *moved* out of
 their old sections, not copied into a second place: a slider duplicated into
@@ -4153,6 +4155,178 @@ gives **rgb(253, 94, 205)** mid-flash against **rgb(207, 221, 250)** at rest.
 **It is purely cosmetic.** `flare` only ever scales brightness and picks a
 colour; no energy is read from it, so lengthening it cannot move a number in
 the bars. Confirmed anyway: `totalKJ` drift is still exactly 0 over a full run.
+
+### Follow one atom
+
+A dev toggle in ACTIVE. With it on, clicking an atom in the Reactions world
+makes the line-graph panel stop being about the world and start being about
+that atom; clicking empty space lets it go.
+
+**It is not a time trace.** The world's graph is a path — landmarks recorded as
+the reaction passes them, never rewritten. This one has no path at all. The
+atom's own energy in fields says where on the reactant-to-product axis it is,
+and the marker **jumps** there the moment a bond forms or goes, because for one
+atom there is nothing in between: it is bonded or it is not.
+
+```javascript
+atomFieldsKJ(body, i) = SB_FREE_ATOM - sum over its bonds of D/2  (+ its share of vib)
+p = 0.5 ± 0.5 x (FREE - E) / (FREE - reference)      // + towards products
+```
+
+**A bond is charged half to each of its two atoms**, which is what makes the
+per-atom numbers add back up to `fieldsKJ`. A free atom carries the most it can
+and sits at **0.5** — exactly where the world's own axis puts ALL ATOMS FREE, so
+the two graphs agree about the middle.
+
+**Which half of the axis is decided by the BONDS, not by the molecule.** A bond
+type that appears in one of the reaction's reactants is reactant-side; one that
+appears in a product is product-side, weighted by bond energy where an atom
+holds some of each. That is what gets an **intermediate** right, and
+intermediates are most of the interesting part of a run: the H in an OH is in a
+finished O-H bond and belongs at the product end even though OH is not a
+product. Measured on one H followed through a whole run:
+
+| it is in | reads | p |
+|---|---|---|
+| H₂ | 282 = 500 − 436/2 | **0** |
+| free H | 500 | **0.5** |
+| OH | 269 = 500 − 463/2 | **1** |
+| H₂O | 269 | **1** |
+
+The OH and the H₂O read the same because for that hydrogen they *are* the same:
+one O-H bond either way. The jump it makes is 0.5 → 1 when the OH forms, and
+the water finishing changes nothing about this atom — which is the honest
+per-atom reading and worth knowing before it looks like a bug.
+
+**The kinetic energy is a level, not a curve.** An atom's speed says nothing
+about how bonded it is, so it has no reaction coordinate and is drawn as a
+dashed line across the panel at its current height, with the marker on the same
+vertical as the fields marker. The gap between the two is the split for that one
+atom.
+
+#### Atoms needed names
+
+Bodies are not edited in place — a break and a join both throw the old ones away
+and rebuild from `moleculeGeometry`, so **an atom object never survives a bond
+changing**. Fine for the physics, which only ever asks what is in the world now,
+and useless for following one atom across exactly those moments.
+
+So every atom carries a `uid`, given in `assembleBody` and passed along by hand
+at the three places a body is taken apart or put together: `peelPieces` (the
+leaving atom keeps its own, the residue carries its geometry's), `shatterPieces`,
+and `joinBodies` — where `bestPlacement` has *already* decided which source atom
+goes in which slot, so the identities ride along with the fit for free.
+Everywhere else the atoms really are new and a fresh uid is right.
+
+Verified: 42 atoms, 42 distinct uids at spawn; one H followed through a break,
+two joins and 60 s of High and still found. `spawnWorld` clears it, because
+nothing in a new world is that atom.
+
+#### The axis, and the highlight
+
+The axis is the per-atom twin of the bar chart's — `barFullKJ` over the atoms in
+the scene, about **1,740 kJ/mol** — anchored at spawn so switching temperature
+moves the lines and not the frame. Motion dwarfs fields per atom (about 1,400
+against a bond discount of 100–500), so on an honest axis the fields curve lives
+in the bottom fifth. **Followed: axis top** pulls the ceiling down to magnify it
+and lets the motion line run off above; 0 is the honest axis.
+
+**The highlight is not a ring.** The scene is already full of circles — valence
+shells, shell bands, nuclei — and one more would read as another piece of the
+diagram. Instead the rest of the world goes behind a scrim in the scene's own
+colour and the atom is redrawn on top at full strength with a pulsing halo in
+its element colour, driven by `shellWobble` so it keeps going while paused.
+Measured against an identical atom elsewhere in the same frame:
+**rgb(229,88,139) against rgb(82,25,51)**, about 2.8x. Drawn inside the world
+transform after everything else, so no drawing function knows the feature
+exists.
+
+### Breakability against speed: it was a cliff, not three rates
+
+Press HIGH and the whole scene came apart at once. Measured at the old
+defaults, 8 runs: the **first** break lands on frame zero and all 21 reactants
+are gone in **0.5–1.0 s, median 0.8**. Med takes 3.7–7.2 s and Low never breaks
+anything. So the three buttons were not three rates.
+
+**Two dials were built on a wrong picture of the mechanism first, and the
+record of them is the useful part.** The assumption was that High one-shots
+bonds, so the fix was to stop a single hit doing it. Measured, at High a
+reactant is hit about **15 times a second** and a hit's dose is **0.06 median,
+0.22 mean, 0.67 at the ninetieth percentile, 2.78 at worst**, against an H-H
+threshold of **1.32**. Almost no hit can break a bond on its own. It is
+accumulation.
+
+- **A power on the dose did nothing at all** — all 21 still gone inside a
+  second at every exponent down to 0.3 — because `dose^x` is still above 1
+  whenever the dose is, and the threshold sits just above 1. It cannot move a
+  hit across the threshold, which is the only thing that would have mattered if
+  single hits were the mechanism.
+- **A cap on one hit barely helped** (19–20 of 21 inside a second at 0.4x the
+  threshold), because hardly any hit is over the cap to begin with. It also has
+  a **cliff**: a single bond stacks one level, so it can never take more than
+  twice the cap however long it is hit — 0.5 cleared the scene in five seconds,
+  0.35 stalled at 7 of 21 in twenty, and 0.25 broke nothing, ever.
+- **A deeper stack for reactants** did real work on the Med–High gap but made
+  High *faster*, since a deeper stack integrates more of the drizzle.
+
+So the dials act on the accumulation, which is the mechanism:
+
+```javascript
+let reactantTakes    = 1;     // share of each hit a reactant's bond keeps
+let reactantRelative = 0.35;  // judge a hit against the molecule's own pace
+kept = dose x reactantTakes / (0.5 m vTarget^2 / doseUnit()) ^ reactantRelative
+```
+
+**TAKES IN** is linear, and linear is what works here precisely because almost
+every dose is already below the threshold: halving what is kept halves the rate
+the stack fills at. It says *which* temperature starts breaking. It ships at
+**1**, its own no-op, because the second dial turned out to be the one that was
+needed and a default that is not a no-op is a silent change to every screenshot
+ever taken.
+
+**JUDGED BY OWN PACE** is the one that ships on. `doseUnit()` is a nominal H₂ at
+temperature 1 and carries no temperature, so the dose is an **absolute**
+measure and High's hits really are nine times Low's — that, times three times
+the collision rate, is the 27:8:1 pumping ladder and the whole of the cliff.
+This blends that reading towards a **relative** one: how big the hit was against
+what a molecule moving at this one's own nominal pace carries. At 1 a contact at
+High counts exactly what the same contact at Low would and only the rate is
+left, a 3:2:1 ladder; in between the ladder is `temp^(2 − 2 × dial)` per hit.
+
+**It reads the molecule, not the thermostat.** There is no `tempLevel` test
+anywhere in the breaking mechanism and this does not add one: `vTarget` is the
+speed the band is holding this body at, which is its own property, and with
+equipartition `0.5 m vTarget²` is the same for every species at a given
+temperature. The reference falls out of the body itself, and is 1 at temperature
+1, so **Low is untouched at every setting**.
+
+Measured, 8 runs at High, first break → all 21 cleared:
+
+| `reactantRelative` | High | Med | Low |
+|---|---|---|---|
+| 0 (off) | 0–0.1 → **0.5–1.0 s**, median 0.8 | 3.7–7.2 s | never |
+| 0.25 | 0.1 → 1.2–1.9 s | 7.5–18 s | never |
+| **0.35 (ships)** | 0–0.5 → **1.1–3.5 s**, median 2.5 | **15–108 s** | never |
+| 0.5 | 0.2–1.5 → 4.4–9.7 s | 35 s–never | never |
+| 1 | never | never | never |
+
+**The trade is real and it is Med's.** There is no setting that stretches High
+and leaves Med where it was, because the ladder is a cliff by construction —
+High pumps about 27 times what Low does, not twice. At the shipped 0.35, High
+takes about **three times as long** and no longer loses its first bond on frame
+zero; Med becomes a slow, very variable simmer (measured over 8 runs: first
+break 0.3–97 s, cleared 8.5–108 s) where it used to be the one watchable
+setting. Pull the dial to **0.25** to trade most of that back, or lower **Bond
+capacity** — already in ACTIVE — to bring the whole ladder down under it.
+
+**Neither dial moves the books.** What the bond does not take goes straight back
+into the molecule's motion in the same step, by the path that already exists for
+a hit a bond shrugs off. Verified: `totalKJ` drift exactly **0** over full runs
+of both reactions, which still complete at High — water 16.7 and 19.2 s,
+combustion 18.4 and 52.9 s.
+
+**Reactants only.** A product is already protected by STRONG PRODUCTS, and an
+intermediate is not something a temperature button should be tuned on.
 
 ## Known gaps
 
