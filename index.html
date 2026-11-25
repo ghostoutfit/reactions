@@ -995,6 +995,9 @@
         <button id="sbAddNH3" class="btn sb-add" title="Add an NH3">
           <canvas class="sb-thumb"></canvas><span>NH&#8323;</span>
         </button>
+        <button id="sbAddN2H4" class="btn sb-add" title="Add an N2H4">
+          <canvas class="sb-thumb"></canvas><span>N&#8322;H&#8324;</span>
+        </button>
       </div>
       <div style="display:flex;flex-direction:column;gap:5px;justify-content:center;padding:8px 0;min-width:120px;">
         <span style="font-size:9px;letter-spacing:0.07em;text-transform:uppercase;opacity:0.5;">In the scene</span>
@@ -1748,14 +1751,17 @@ setFieldRamp(fieldRamp);
 // that. (It was a literal 498 while that happened to be O=O's number, which is
 // exactly the kind of agreement that quietly stops being true.)
 const BOND_ENERGY = { 'H-H': 436, 'H-O': 463, 'O-O': 495, 'C-O': 358, 'C-H': 413,
-                      'H-N': 391 };
+                      'H-N': 391, 'N-N': 163 };
+// THE N-N IN THIS TABLE IS THE SINGLE, 163 — the one a hydrazine is built
+// around, and the one a fragment with no shape of its own falls back to.
+//
 // N≡N IS 941 AND IT IS NOT IN THE TABLE ABOVE, on purpose. This table is
 // where `BOND_ENERGY_MAX` comes from, and 941 would nearly double it —
 // re-denominating `kjPerSim` and every field brightness in Reactions for the
-// sake of one bond. The triple carries its own order instead (BOND_ORDER
-// says 3 for an N-N pair, exactly as it says 2 for an O-O), so every lookup
+// sake of one bond. The triple carries its own order instead, so every lookup
 // goes through `bondDFor` into BOND_TYPES and finds the 941 there. The same
-// division of labour the C=O's 799 already uses.
+// division of labour the C=O's 799 already uses. Adding the 163 changes
+// nothing about the maximum, which is still O=O's 495.
 const BOND_ENERGY_MAX = Math.max(...Object.values(BOND_ENERGY));   // 495, O=O
 
 // What a free atom carries on its own, kJ/mol, so that a pair fully apart reads
@@ -1828,6 +1834,12 @@ const BOND_TYPES = {
   'C=O': { els: ['C', 'O'], order: 2, D: 799, lenMult: 0.86, label: 'C = O' },
   'C-H': { els: ['C', 'H'], order: 1, D: 413, lenMult: 1,    label: 'C – H' },
   'N-H': { els: ['N', 'H'], order: 1, D: 391, lenMult: 1,    label: 'N – H' },
+  // THE WEAKEST BOND IN THE SIM, and the reason hydrazine comes apart at all:
+  // 163 kJ/mol, less than half an N-H and a sixth of the triple the same two
+  // atoms make when they are free to. A molecule built around one is a molecule
+  // holding a loose thread, which is the whole of why N2H4 decomposes where
+  // ammonia will not.
+  'N-N': { els: ['N', 'N'], order: 1, D: 163, lenMult: 1,    label: 'N – N' },
   // THE STRONGEST BOND IN THE SIM, and a TRIPLE — the first one here. A real
   // N≡N is 1.10 A against an N-N single's 1.45, so it is much the shortest
   // thing on this list for its atoms: 0.76.
@@ -1855,13 +1867,20 @@ function bondLenFor(elA, elB, order) {
   const t = bondRowFor(elA, elB, order);
   return bondLen(elA, elB) * (t ? t.lenMult : 1);
 }
-// A pair is promotable when the table holds BOTH a single and a double for it —
-// i.e. when the order is a real choice rather than a property of the pair. Only
-// C–O is, today. O=O has no single in the table and so is never promoted: it is
-// made a double up front by BOND_ORDER, exactly as it was.
+// A pair is promotable when the table holds MORE THAN ONE order for it — i.e.
+// when the order is a real choice rather than a property of the pair. C–O is
+// (single 358, double 799) and N–N is (single 163, triple 941). O=O has only
+// the double in the table and so is never promoted: it is made one up front by
+// BOND_ORDER, exactly as it was.
+//
+// Note the N–N skips straight from 1 to 3. Nothing here assumes the orders are
+// consecutive — `bondUpgradeOrders` just hands back what the table actually
+// holds, highest first, and the promotion takes the best one that fits.
 function bondPromotable(elA, elB) {
-  const rows = bondTypesFor(elA, elB);
-  return rows.some(t => t.order === 1) && rows.some(t => t.order === 2);
+  return bondTypesFor(elA, elB).length > 1;
+}
+function bondUpgradeOrders(elA, elB) {
+  return bondTypesFor(elA, elB).map(t => t.order).sort((a, b) => b - a);
 }
 
 // The strongest bond ON OFFER in the One Bond list, which is what that tab's
@@ -2388,7 +2407,12 @@ const VALENCE   = { H: 1, O: 6, He: 2, C: 4, N: 5 };    // outer-shell electrons
 // `sbValence`) and recombination now needs the same answer to decide which end
 // of a CO is still open, so it is one table both read.
 const VALENCE_SLOTS = { H: 1, O: 2, He: 0, C: 4, N: 3 };
-const BOND_ORDER = { 'H-H': 1, 'H-O': 1, 'O-O': 2, 'H-N': 1, 'N-N': 3 };   // 2 = double
+// The order a pair takes when nothing else decides. N-N IS 1 HERE, not 3: two
+// nitrogens make a triple when they have three slots each going spare and a
+// SINGLE when they do not, and hydrazine is the molecule where they do not.
+// Which one it is falls out of the leftover valence in `sbPromoteBonds`, the
+// same way a C–O finds out whether it is the single or the double.
+const BOND_ORDER = { 'H-H': 1, 'H-O': 1, 'O-O': 2, 'H-N': 1, 'N-N': 1 };   // 2 = double
 function bondOrder(elA, elB) {
   return BOND_ORDER[[elA, elB].sort().join('-')] || 1;
 }
@@ -2820,6 +2844,7 @@ const SPECIES = {
   He:    { els: ['He'] },        // monatomic: no bond, two lone electrons
   CH4:   { els: ['C', 'H', 'H', 'H', 'H'] },   // shape in MOLECULE_SHAPES
   NH3:   { els: ['N', 'H', 'H', 'H'] },        // shape in MOLECULE_SHAPES
+  N2H4:  { els: ['N', 'N', 'H', 'H', 'H', 'H'] },   // hydrazine; shape below
 };
 // HOW MANY, AS A MULTIPLE OF THE BALANCED EQUATION.
 //
@@ -2840,7 +2865,7 @@ const REACTANT_AMOUNT_MAX = 8;
 // the amount slider never would — an unbalanced one, on purpose. Their ceiling
 // is the most any balanced world needs: 8 units of water is 16 H2.
 const COMPOSITION_MAX = REACTANT_AMOUNT_MAX * 2;
-const COMPOSITION_DEFAULT = { H2: 2 * 3, O2: 1 * 3, He: 0, CH4: 0, NH3: 0 };
+const COMPOSITION_DEFAULT = { H2: 2 * 3, O2: 1 * 3, He: 0, CH4: 0, NH3: 0, N2H4: 0 };
 const composition = { ...COMPOSITION_DEFAULT };
 
 // ─── Reactions ────────────────────────────────────────────────────────────────
@@ -2868,40 +2893,74 @@ const composition = { ...COMPOSITION_DEFAULT };
 // that happen to look reasonable. Spawn it unbalanced and the leftovers simply
 // stay free at the end, which is also true of the real thing.
 const REACTIONS = {
+  // ACTIVATION 3.0 — it takes HIGH, and MED now leaves it alone. Measured, the
+  // peak dose against the threshold runs 0.62 / 2.48 / 5.58 at Low / Med /
+  // High, so 3.0 puts those at 0.21 / 0.83 / 1.86: Med a sixth below the line
+  // and High most of the way again above it. MED used to clear the bar by half
+  // and the middle of the three temperatures was a second High.
   water: {
     label: 'H₂ + O₂  →  H₂O',
+    activation: 3.0,
     composition: { H2: 2, O2: 1, He: 0, CH4: 0 },   // ONE unit; x reactantAmount
     icon: 'H2', recombine: true,
     bondsPerUnit: 4,            // 2 waters, two O–H each
     products: ['HHO'],
     steps: ['HO', 'HHO'],       // NOT 'HH': see joinEls
   },
+  // The same 3.0, and the same numbers: measured, combustion's reactants sit on
+  // exactly water's ladder, so one value does for both. It is the reaction that
+  // pins the value from above, though — at 3.4 it stopped starting at High.
   combustion: {
     label: 'CH₄ + O₂  →  CO₂ + H₂O',
+    activation: 3.0,
     composition: { H2: 0, O2: 2, He: 0, CH4: 1 },   // ONE unit; x reactantAmount
     icon: 'CH4', recombine: true,
     bondsPerUnit: 6,            // 1 CO2 at two bonds, 2 waters at two
     products: ['HHO', 'COO'],
     steps: ['HO', 'HHO', 'CO', 'COO'],
   },
-  // AMMONIA DECOMPOSING, and the first ENDOTHERMIC reaction here: six N-H at
-  // 391 is 2,346 to break and an N≡N plus three H-H is 2,249 to make, so it
-  // costs 97 kJ/mol per unit against a real +92.4. The products therefore sit
-  // ABOVE the reactants on the graph, where water's and combustion's sit below,
-  // and nothing had to be told that — the curve is solved from the bond tables
-  // either way.
+  // HYDRAZINE DECOMPOSING — the CATALYSED reaction, which is the whole point of
+  // it being here. N2H4 → N2 + 2 H2 over a catalyst is the thruster reaction,
+  // and what a catalyst does is lower the activation energy: it opens a cheaper
+  // route to the same products without changing how much energy they hold. So
+  // this is the reaction that goes at MEDIUM, where the other two need HIGH,
+  // and `activation` is the one number that says so.
   //
-  // It is also the first reaction whose PRODUCT is another reaction's reactant,
-  // which is what `steps` is for: H + H -> H2 must be buildable here and must
-  // stay unbuildable in the water reaction. See `joinEls`.
-  ammonia: {
-    label: 'NH₃  →  N₂ + H₂',
-    composition: { H2: 0, O2: 0, He: 0, CH4: 0, NH3: 2 },   // ONE unit
-    icon: 'NH3', recombine: true,
-    bondsPerUnit: 4,            // 1 N≡N, counted once, and 3 H-H
+  // THE MOLECULE IS BUILT AROUND THE WEAKEST BOND IN THE SIM. Four N–H at 391
+  // and one N–N at 163 is 1,727 to break; an N≡N at 941 and two H–H at 436 is
+  // 1,813 to make. So it gives back 86 kJ/mol per unit against a real 95.4 —
+  // exothermic, like the other two, with its products below its reactants.
+  // Nothing is told that: the curve is solved from the bond tables either way.
+  //
+  // The low activation is not a fudge on top of that; it is the same fact read
+  // twice. The bond that has to go first is a sixth of the one the two
+  // nitrogens will make once they are free, and a molecule holding a thread
+  // that loose comes apart in conditions that leave an O=O or a C–H alone.
+  //
+  // Its PRODUCT is another reaction's reactant, which is what `steps` is for:
+  // H + H -> H2 must be buildable here and must stay unbuildable in the water
+  // reaction. See `joinEls`.
+  hydrazine: {
+    label: 'N₂H₄  →  N₂ + 2 H₂',
+    composition: { H2: 0, O2: 0, He: 0, CH4: 0, NH3: 0, N2H4: 1 },   // ONE unit
+    icon: 'N2H4', recombine: true,
+    bondsPerUnit: 3,            // 1 N≡N, counted once, and 2 H-H
     products: ['NN', 'HH'],
     steps: ['NN', 'HH'],
-    judgedRelative: 0,         // see reactantPaceRef: this one needs the full ladder
+    // CATALYSED, and under a FIFTH of what the other two need. Against the 3.0
+    // water and combustion want, that is the catalyst — in the one number that
+    // means activation energy and nothing else.
+    //
+    // 0.55 is pinned from both sides by measurement. Its reactants' hardest hit
+    // runs about 0.28 at Low and 0.80 at Med against a threshold of 1.185 at
+    // 1.0, so the bar at 0.65 sits above Low's hardest hit taken twice (0.56)
+    // and below Med's taken once. It was 0.42 first, which had Low intact over
+    // 75 s — and drew the full curve over it anyway, because `reactionCanStart`
+    // predicts from a nominal peak dose of 0.62 at Low and 0.42 put the bar
+    // under that. A graph promising a reaction to a world where nothing is
+    // happening is worse than either answer on its own, so the bar goes above
+    // the prediction too and Low is flat in both senses.
+    activation: 0.55,
   },
 };
 const DEFAULT_REACTION = 'water';
@@ -3103,6 +3162,43 @@ const MOLECULE_SHAPES = {
       })));
     },
     bonds: [[0, 1], [0, 2], [0, 3]],
+  },
+  // HYDRAZINE. Two nitrogens joined by the weakest bond in the sim, with two
+  // hydrogens on each — and that single N–N is the whole reason this molecule
+  // is the one that comes apart.
+  //
+  // IT IS TWO AMMONIAS BACK TO BACK, and drawn as exactly that. Each nitrogen
+  // is a centre with three bonds fanned at NH3_ANGLE, one of which is the bond
+  // to the other nitrogen; the two hydrogens take the other two directions and
+  // the 146° gap left over is where that nitrogen's lone pair goes. So the
+  // same fan that makes an ammonia read as a Lewis structure makes this one
+  // read as two of them, with both lone pairs pointing out along the axis,
+  // away from each other — which is what they do.
+  //
+  // THE ORDER IS WRITTEN HERE, 1. The element-pair table now says 1 for an N–N
+  // as well, so this is belt and braces; but a molecule's shape saying what its
+  // bonds are is what keeps the spawn, the sandbox and a join from ever
+  // disagreeing, and this is the one bond in the sim where the same two
+  // elements make either the weakest thing here or the strongest.
+  NNHHHH: {
+    geometry: () => {
+      const rNN = bondLenFor('N', 'N', 1);
+      const rNH = bondLen('N', 'H');
+      const nx = rNN / 2;
+      // side = +1 for the right-hand nitrogen, whose bonds fan about 180°.
+      const arm = (side, k) => {
+        const mid = side > 0 ? Math.PI : 0;     // towards the other nitrogen
+        const a = mid + k * NH3_ANGLE;
+        return { lx: side * nx + Math.cos(a) * rNH, ly: Math.sin(a) * rNH };
+      };
+      return [
+        { el: 'N', lx: -nx, ly: 0 },
+        { el: 'N', lx:  nx, ly: 0 },
+        { el: 'H', ...arm(-1, -1) }, { el: 'H', ...arm(-1, 1) },
+        { el: 'H', ...arm( 1, -1) }, { el: 'H', ...arm( 1, 1) },
+      ];
+    },
+    bonds: [[0, 1, 1], [0, 2], [0, 3], [1, 4], [1, 5]],
   },
   // NITROGEN, AND ITS TRIPLE BOND. The order has to be written here for the
   // same reason CO2's doubles do — except that this one the element-pair table
@@ -4363,10 +4459,35 @@ function updateReactantEase() {
   reactantEase = 1 + (breakEaseMax - 1) * Math.max(0, Math.min(1, gone));
 }
 
+// ── ACTIVATION ENERGY, PER REACTION ─────────────────────────────────────────
+// A multiplier on what this reaction's own reactants have to take before a
+// bond lets go. It is the activation energy and nothing else: 1 is the dial's
+// own tuning, above 1 means a hotter world is needed to start it, below 1
+// means a cooler one will do.
+//
+// IT CHANGES WHEN, NOT WHAT, exactly as `breakEaseMax` does. The energy a
+// break puts into the fields is set by the bond that stopped existing, and D is
+// not in this — so the bars, the curve and the totals are untouched and only
+// the temperature at which anything happens moves. That is what an activation
+// energy IS, and it is why a catalysed reaction and an uncatalysed one end up
+// at the same place by different roads.
+//
+// REACTANTS ONLY, like the ease it sits beside: a product is not what the
+// activation energy is about, and an intermediate is not a reactant.
+//
+// It ships at 1 for water and combustion — their ladder is the dial's, measured
+// — and at 0.42 for the catalysed hydrazine, which is what puts it within reach
+// of MED where the other two need HIGH.
+function reactionActivation() {
+  const a = currentReaction().activation;
+  return a == null ? 1 : a;
+}
+
 function breakThreshold(b) {
   const f = bondEnergyFactor(b);
   if (!f) return Infinity;
-  return breakEnergy * f / (isReactant(b) ? reactantEase : 1);
+  const r = isReactant(b);
+  return breakEnergy * f * (r ? reactionActivation() : 1) / (r ? reactantEase : 1);
 }
 
 // Fraction of a body's held vibration, 0..1 — what the bond's COLOUR reads.
@@ -4390,7 +4511,9 @@ function vibLoad(b) {
   // "about to go". Left undivided, an eased reactant would break while its
   // colour was still climbing — exactly the failure the note above describes,
   // arriving by a different door.
-  const cap = breakEnergy * colourFull * f / (isReactant(b) ? reactantEase : 1);
+  const r = isReactant(b);
+  const cap = breakEnergy * colourFull * f * (r ? reactionActivation() : 1)
+            / (r ? reactantEase : 1);
   return cap > 0 ? Math.min(1, b.vib / cap) : 0;
 }
 
@@ -4619,7 +4742,7 @@ function setVibMode(name) {
 // the scene you start with. A product is already protected by STRONG PRODUCTS,
 // and an intermediate is not something a temperature button should be tuned on.
 let reactantTakes    = 1;  // share of each hit a reactant's bond keeps; 1 = off
-let reactantRelative = 0.35;  // judge a hit against the molecule's own pace; 0 = off
+let reactantRelative = 0;     // judge a hit against the molecule's own pace; 0 = off
 
 // HOW BIG WAS THAT HIT — ABSOLUTELY, OR FOR A MOLECULE GOING THIS FAST?
 //
@@ -4644,21 +4767,28 @@ let reactantRelative = 0.35;  // judge a hit against the molecule's own pace; 0 
 // It can only ever REDUCE, since the reference is 1 at temperature 1 and rises
 // from there, so Low is untouched at every setting and the surplus is handed
 // back to motion as always.
-// A REACTION MAY ASK TO BE JUDGED ABSOLUTELY, and ammonia does.
+// IT SHIPS AT 0 NOW — every reaction is judged absolutely — and the reason is
+// the three-temperature ladder the sim is drawn as.
 //
-// The dial exists because water's reactants all broke on frame zero at High: it
-// is there to stretch a reaction whose temperatures are a cliff. Ammonia has the
-// opposite problem. Its hits are split three ways between its three N-H bonds,
-// so its hardest hit at Low already reaches 0.55 of a 1.185 threshold and the
-// dial's flattening closes the gap to Med to 1.36x — measured over 90 s, Low's
-// hardest kept dose 0.546 against Med's 0.744, with no threshold that can sit
-// between them and stay there. Judged absolutely the ladder opens back up and
-// the reaction has the three rates it should: nothing at Low over 180 s, Med
-// finishing in 13-56 s, High in 38.
+// The dial was 0.35, put there because water's reactants all broke on frame
+// zero at High: it is there to stretch a reaction whose temperatures are a
+// cliff. What it also does is FLATTEN THEM, and once MED had to mean "nothing
+// happens" there was no room left. At 0.35 the dose goes as T^1.3, so the gap
+// between Med and High is only 1.69x: measured, water's peak dose against its
+// threshold ran 0.62 / 1.53 / 2.59 at Low / Med / High. An activation energy
+// that blocks Med has to sit above 1.53, and one that lets High run has to sit
+// below 2.59 — and in that narrow band combustion would not start at High AT
+// ALL, no break in 60 s at 2.0 while the predictor said it could.
 //
-// So the dial is the DEFAULT and a reaction may name its own value. Water and
-// combustion name none and are untouched, which is what keeps the dial's own
-// tuning — measured on water — meaning what it says.
+// At 0 the dose goes as T squared, the Med-to-High gap is 2.25x, and the same
+// three numbers become 0.62 / 2.48 / 5.58. Measured at an activation of 3.0,
+// High's first break comes at 0.4 s for water and 9.6 s for combustion, where
+// 3.4 put combustion back to nothing in 30 s. The ladder is a ladder again.
+//
+// A REACTION MAY STILL NAME ITS OWN VALUE and none now needs to: the dial is
+// what every reaction uses, so moving it moves all three together, which is
+// the honest behaviour for a dial that is about how hits are judged rather
+// than about any one reaction.
 function judgedRelative() {
   const r = currentReaction().judgedRelative;
   return r == null ? reactantRelative : r;
@@ -8211,6 +8341,17 @@ function fillReactionPick() {
   sel.value = reaction;
 }
 
+// The activation dial shows the reaction you are on, for the same reason the
+// composition dials do: it writes that reaction's own number, so left stale it
+// would be a lie about the one on screen.
+function syncActivationSlider() {
+  const sl  = document.getElementById('devActEnergy');
+  const val = document.getElementById('devActEnergyVal');
+  const a = reactionActivation();
+  if (sl)  sl.value = a;
+  if (val) val.textContent = a.toFixed(2) + '\u00d7';
+}
+
 // The dev panel's composition dials, put back in step with `composition`. The
 // panel builds itself in an IIFE and may not exist at all, so this reaches for
 // the elements by id and does nothing if they are not there.
@@ -8318,9 +8459,9 @@ function syncReactionButton() {
 
 // ── THE BUTTON IS SIZED FOR ITS WIDEST REACTION, ONCE ───────────────────────
 // Its face changes with the reaction and the faces are not the same width: two
-// reactants and "CH₄ + O₂ → CO₂ + H₂O" come to 163 px where ammonia's one
+// reactants and "CH₄ + O₂ → CO₂ + H₂O" come to 163 px where a one-reactant
 // picture and "NH₃ → N₂ + H₂" come to 102. Left to itself the group shrank by
-// 61 px on ammonia and dragged TEMP, AMOUNT and the counters left with it —
+// reaction's single picture came to 102, dragging TEMP and AMOUNT with it —
 // the toolbar rearranging itself because of a choice made inside one control.
 //
 // So every face is built once, measured, and the widest wins. MEASURED rather
@@ -8350,6 +8491,7 @@ function setReaction(id, respawn = true) {
   if (sel) sel.value = id;
   syncReactionButton();
   syncCompositionSliders();
+  syncActivationSlider();
   if (respawn) spawnWorld();
   logAction('Reaction: ' + id);
 }
@@ -8662,13 +8804,19 @@ replayOnBox.addEventListener('change', () => {
       'burns, and how much room is left above and below its curve</div>' +
     row('devTakes', 'Reactant takes in',  0.05, 1, 0.05, reactantTakes,    '#ffd84d') +
     row('devPace',  'Judged by own pace', 0,    1, 0.05, reactantRelative, '#ffd84d') +
+    row('devActEnergy', 'Activation x', 0.2, 2.5, 0.01, 1, '#ffd84d') +
+    '<div style="opacity:0.45;font-size:10px;">THIS REACTION\u2019S activation ' +
+      'energy, as a multiple of the dial\u2019s own: what its reactants have to ' +
+      'take before a bond lets go. Water and combustion ship at 1 and need ' +
+      'HIGH; the catalysed hydrazine ships at 0.42 and goes at MED. It moves ' +
+      'when, never what \u2014 the bars and the curve are untouched</div>' +
     '<div style="opacity:0.45;font-size:10px;">how hard a hit counts for a ' +
       'REACTANT. TAKES IN is the share of each hit its bond keeps \u2014 lower ' +
       'breaks slower. OWN PACE judges the hit against how fast that molecule ' +
       'normally moves: at 0 a High hit counts 9\u00d7 a Low one and everything ' +
       'breaks at once; turn it up and the three temperatures become three ' +
       'rates. Neither moves the energy books. A reaction may override OWN ' +
-      'PACE — ammonia does, at 0</div>' +
+      'PACE \u2014 hydrazine does, at 0</div>' +
     row('devRecombRange', 'Attractive reach', 1.2, 8, 0.1, recombRange, '#ffd84d') +
     '<div style="opacity:0.45;font-size:10px;">how far out two atoms that could ' +
       'bond start pulling on each other, in contact widths. Wider does not ' +
@@ -8686,6 +8834,8 @@ replayOnBox.addEventListener('change', () => {
         COMPOSITION_DEFAULT.CH4, '#ffd84d') +
     row('devNH3', 'NH₃ molecules', 0, COMPOSITION_MAX, 1,
         COMPOSITION_DEFAULT.NH3, '#ffd84d') +
+    row('devN2H4', 'N₂H₄ molecules', 0, COMPOSITION_MAX, 1,
+        COMPOSITION_DEFAULT.N2H4, '#ffd84d') +
     row('devShWobA',  'Shell drift', 0, 0.4, 0.005, shellWobbleAmp, '#ffd84d') +
     row('devShWobHz', 'Drift speed', 0, 3,   0.02,  shellWobbleHz,  '#ffd84d') +
     row('devShShake', 'Shell shake', 0, 1.5, 0.05,  shellShake,     '#ffd84d') +
@@ -8910,6 +9060,7 @@ replayOnBox.addEventListener('change', () => {
   bind('devHe',    v => composition.He = v, true);
   bind('devCH4', v => composition.CH4 = v, true);
   bind('devNH3', v => composition.NH3 = v, true);
+  bind('devN2H4', v => composition.N2H4 = v, true);
   bind('devConv', v => {
     fieldConvert = v;
     const n = panel.querySelector('#devConvNote');
@@ -8998,6 +9149,11 @@ replayOnBox.addEventListener('change', () => {
               ? v.toFixed(1) + '\u00d7 \u2014 one buffer pixel per screen pixel'
               : v > 1 ? v.toFixed(1) + '\u00d7 the field buffer' : 'same as the sim');
   bind('devActivation', v => activationGuess = v, false, v => v.toFixed(2) + '\u00d7');
+  // Writes the CURRENT reaction's own activation, so the slider edits the
+  // reaction you are looking at rather than a global that would quietly
+  // re-tune the other two. Switching reaction re-reads it; see setReaction.
+  bind('devActEnergy', v => { currentReaction().activation = v; },
+       false, v => v.toFixed(2) + '\u00d7');
   bind('devFollowGlow', v => followGlow = v, false,
        v => v > 0 ? Math.round(v * 100) + '%' : 'off');
   const toroidCb = panel.querySelector('#devToroid');
@@ -10493,12 +10649,48 @@ function sbRebuildBonds() {
       // out there. Asking `bondDFor`/`bondLenFor` for the order this bond
       // actually has gives 941 at 42.4, and returns exactly the old numbers for
       // every pair that was already here.
-      const order = bondOrder(A[i].el, A[k].el);
-      const r0 = bondLenFor(A[i].el, A[k].el, order);
+      // WHETHER A PAIR BONDS AT ALL IS A QUESTION ABOUT DISTANCE. WHICH ORDER
+      // IT TAKES IS A QUESTION ABOUT SLOTS. Keeping those apart is the whole
+      // of this, and nitrogen is what made it necessary: an N≡N is 941 kJ/mol
+      // at 42 px and an N–N is 163 at 56, so asking the table for "the" N-N
+      // order can only ever name one of them.
+      //
+      // Judged only as a single, a nitrogen molecule sitting at the triple's
+      // length reads as a single crushed 25% past its own natural length — up
+      // the repulsive wall, gain under the floor — and the two atoms came out
+      // NOT BONDED AT ALL. So the test below asks for the best order the pair
+      // could manage at this distance.
+      //
+      // But that best order must NOT be the one placed. Try it and hydrazine
+      // comes apart on the spot: its N–N, costed as a triple stretched half as
+      // far again, still scores 650 against an N–H's 391, so the triple is laid
+      // first, takes all three slots on each nitrogen, and the four hydrogens
+      // pair off with each other — N2 + 2 H2 instead of the molecule. A
+      // stretched strong bond outscoring a perfect weak one is exactly the
+      // trap the ranking note below describes, arriving from the other side.
+      //
+      // So the pair is PLACED at the table's order, takes one slot at each end,
+      // and the promotion pass raises it only as far as the leftover valence
+      // allows. Bare nitrogens have three slots each and go to a triple;
+      // hydrazine's nitrogens have one each and stay a single. Every pair with
+      // one order in the table is unaffected, placed and ranked exactly as
+      // before.
+      const el1 = A[i].el, el2 = A[k].el;
       const r  = Math.hypot(A[k].x - A[i].x, A[k].y - A[i].y);
-      // Past the range there is nothing to decide: they do not interact.
-      if (sbContact(r, r0) <= 0) continue;
-      const D = bondDFor(A[i].el, A[k].el, order);
+      const orders = bondPromotable(el1, el2)
+                   ? bondUpgradeOrders(el1, el2) : [bondOrder(el1, el2)];
+      let reach = 0, best = -Infinity;
+      for (const o of orders) {
+        const or0 = bondLenFor(el1, el2, o);
+        if (sbContact(r, or0) <= 0) continue;
+        reach = 1;
+        best = Math.max(best, bondDFor(el1, el2, o) * (1 - sbWork(r, or0)));
+      }
+      // Out of range at every order it could take: they do not interact.
+      if (!reach) continue;
+      const order = bondOrder(el1, el2);
+      const r0 = bondLenFor(el1, el2, order);
+      const D = bondDFor(el1, el2, order);
       const work = sbWork(r, r0);
       // Rank by the energy a pair would actually release, NOT by how close it
       // is. Closeness is the wrong measure: a pair squashed to 0.46 of its
@@ -10506,7 +10698,7 @@ function sbRebuildBonds() {
       // the repulsive wall and releases almost nothing. Ranking by distance let
       // a crushed H-H outrank a perfect O-H and steal its atom — dropping a
       // third H beside a finished water pulled one of its bonds apart.
-      cand.push({ i, k, r, r0, D, work, order, gain: D * (1 - work) });
+      cand.push({ i, k, r, r0, D, work, order, gain: best });
     }
   }
   cand.sort((a, b) => b.gain - a.gain);
@@ -10526,31 +10718,43 @@ function sbRebuildBonds() {
 // whether a given C–O is the single or the double. So the order is not read off
 // a table; it FALLS OUT of what the atoms have left over.
 //
-// Once the singles are placed, any promotable bond whose two atoms both still
-// have a free slot becomes a double. On a CO2 that is both bonds: carbon has
-// used 2 of 4 and each oxygen 1 of 2, so both promote and every atom ends full.
-// On a methane it is none of them — carbon is already full at four singles and
-// a hydrogen has nothing to give — so CH4 comes out of this pass untouched.
-// That is the Lewis structure, arrived at rather than hard-coded, which also
-// means it survives having an H pulled off: the remains re-bond under the same
-// rule, and a CH3 with an O brought up to it becomes what it should.
+// Once the singles are placed, any promotable bond takes the HIGHEST order its
+// two atoms still have the slots for. On a CO2 that makes both bonds doubles:
+// carbon has used 2 of 4 and each oxygen 1 of 2, so both promote and every atom
+// ends full. On a methane it is none of them — carbon is already full at four
+// singles and a hydrogen has nothing to give — so CH4 comes out untouched.
+//
+// NITROGEN IS WHY THIS ASKS FOR THE HIGHEST AND NOT THE NEXT. Two bare
+// nitrogens have three slots each, so their bond goes straight from 1 to 3 and
+// the pair is N≡N. Put two hydrogens on each nitrogen first and there is
+// exactly one slot left on each, the jump does not fit, and the same two atoms
+// stay a single: that is hydrazine. One rule, and the difference between the
+// sim's strongest bond and its weakest falls out of what else is attached.
+//
+// It is the Lewis structure arrived at rather than hard-coded, which is also
+// why it survives having an H pulled off: the remains re-bond under the same
+// rule, and an N2H3 that loses its last two hydrogens becomes an N≡N by itself.
 //
 // Nothing else in the sim is promotable (see bondPromotable), so H2, O2 and
 // water come out of this pass untouched.
 function sbPromoteBonds(used) {
   const A = sandbox.atoms;
   for (const b of sandbox.bonds) {
-    if (b.order !== 1) continue;
     const ei = A[b.i].el, ek = A[b.k].el;
     if (!bondPromotable(ei, ek)) continue;
-    if (used[b.i] + 1 > sbValence(ei) || used[b.k] + 1 > sbValence(ek)) continue;
-    used[b.i]++; used[b.k]++;
-    b.order = 2;
-    b.D  = bondDFor(ei, ek, 2);
-    b.r0 = bondLenFor(ei, ek, 2);
-    const r = Math.hypot(A[b.k].x - A[b.i].x, A[b.k].y - A[b.i].y);
-    b.work = sbWork(r, b.r0);
-    b.contact = sbContact(r, b.r0);
+    for (const order of bondUpgradeOrders(ei, ek)) {
+      const add = order - b.order;
+      if (add <= 0) continue;
+      if (used[b.i] + add > sbValence(ei) || used[b.k] + add > sbValence(ek)) continue;
+      used[b.i] += add; used[b.k] += add;
+      b.order = order;
+      b.D  = bondDFor(ei, ek, order);
+      b.r0 = bondLenFor(ei, ek, order);
+      const r = Math.hypot(A[b.k].x - A[b.i].x, A[b.k].y - A[b.i].y);
+      b.work = sbWork(r, b.r0);
+      b.contact = sbContact(r, b.r0);
+      break;
+    }
   }
 }
 
@@ -11226,6 +11430,14 @@ function sbCarbonDioxide() { return MOLECULE_SHAPES.OCO.geometry(); }
 
 function sbAmmonia() { return MOLECULE_SHAPES.NHHH.geometry(); }
 
+// HYDRAZINE, and the molecule this tab can now actually build. Its N–N is the
+// one bond in the sim whose order is decided by what else is attached, so
+// before `sbPromoteBonds` learned to look past the double, two nitrogens laid
+// down here always came out as a triple and the four hydrogens paired off
+// alone. Pull the hydrogens off one of these and the nitrogens left over find
+// the triple by themselves — which is the reaction, done by hand.
+function sbHydrazine() { return MOLECULE_SHAPES.NNHHHH.geometry(); }
+
 // METHANE HAS NO OXYGEN, so with it as the only carbon source there would be no
 // way to build a C–O on this tab at all. CO2 is the other half of combustion
 // and it puts both carbon-oxygen bonds back within reach, which is why the list
@@ -11243,6 +11455,7 @@ const SB_ADDABLE = [
   ['sbAddCH4', 'CH4', sbMethane],
   ['sbAddCO2', 'CO2', sbCarbonDioxide],
   ['sbAddNH3', 'NH3', sbAmmonia],
+  ['sbAddN2H4', 'N2H4', sbHydrazine],
 ];
 function sbShapeOf(key) {
   const row = SB_ADDABLE.find(r => r[1] === key);

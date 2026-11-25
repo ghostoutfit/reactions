@@ -4107,6 +4107,7 @@ gold above a gold rule, holding the handful still being turned:
 | control | why it is here |
 |---|---|
 | Bond storage | **first in the panel.** Whether hits stack at all, and whether the colour says so |
+| Activation × | this reaction's activation energy — see **Hydrazine replaces ammonia** |
 | Attractive reach | how far out the pull acts — visible, not faster |
 | View zoom | the camera — see **The camera** |
 | H₂ / O₂ / He / CH₄ molecules | density, which is the clock on the whole run |
@@ -5081,6 +5082,15 @@ intermediate is not something a temperature button should be tuned on.
 
 ## Ammonia, and the first reaction that goes uphill
 
+> **SUPERSEDED.** This reaction was replaced by the catalysed decomposition of
+> hydrazine — see **Hydrazine replaces ammonia, and MED stops being a second
+> HIGH**. Nitrogen, the triple bond, the Lewis fan, the lone-pair gap, the
+> per-reaction joins and the Sandbox's NH₃ button are all still here and still
+> work as written; what is gone is `REACTIONS.ammonia` itself and the
+> endothermic reading it was the only example of. Hydrazine is exothermic, so
+> **no shipped reaction currently runs uphill** — the curve still solves for it
+> from the tables if one ever does.
+
 ```
 2 NH3  ->  N2 + 3 H2
 ```
@@ -5575,6 +5585,116 @@ touches the rest of the ramp.
 Checked: the stretched lobe at 3.2 r₀ has no straight cut, the Reactions ramp
 is byte-for-byte what it was, and the Sandbox and the add-button thumbnails
 inherit the brighter rest for free.
+
+## Hydrazine replaces ammonia, and MED stops being a second HIGH
+
+`2 NH₃ → N₂ + 3 H₂` is gone. In its place is the **catalysed** decomposition
+of hydrazine, `N₂H₄ → N₂ + 2 H₂`, and the catalysis is the point: what a
+catalyst does is lower the activation energy — a cheaper road to the same
+products, without changing how much energy they hold. So this is the reaction
+that runs at **MED**, where the other two now need **HIGH**.
+
+### The molecule is built around the weakest bond in the sim
+
+| | kJ/mol |
+|---|---|
+| 4 × N–H | 1,564 |
+| 1 × **N–N** | **163** |
+| to break | **1,727** |
+| 1 × N≡N | 941 |
+| 2 × H–H | 872 |
+| to make | **1,813** |
+
+**−86 kJ/mol**, against a real −95.4: exothermic, like the other two, products
+below reactants. Nothing is told that — the curve is solved from the tables.
+
+The low activation is not a fudge sitting on top of that; it is the same fact
+read twice. The bond that has to go is a **sixth** of the one the two nitrogens
+will make once they are free.
+
+### The same two atoms make the strongest bond here and the weakest
+
+`BOND_ORDER` used to say an N–N is a triple, full stop. It cannot: hydrazine's
+is a single and nitrogen's is a triple. So the order is **derived**, the way a
+C–O's already was:
+
+- **`sbPromoteBonds` asks for the highest order the leftover slots allow**, not
+  the next one up. Two bare nitrogens have three slots each, so their bond goes
+  straight from 1 to 3 — the jump skips the double the table does not hold.
+  Put two hydrogens on each nitrogen first and there is one slot left on each,
+  the jump does not fit, and the same pair stays a single. One rule, and the
+  difference between 941 and 163 falls out of what else is attached.
+- **Whether a pair bonds at all is a question about distance; which order it
+  takes is a question about slots.** Keeping those apart is the whole of it.
+  Judged only as a single, an N₂ sitting at the triple's 42 px reads as a
+  single crushed 25% past its natural length — up the repulsive wall, gain
+  under the floor — and the two atoms came out *not bonded at all*. So the
+  skeleton tests the best order the pair could manage at that distance, and
+  then **places the table's order anyway** and lets promotion decide. Place the
+  best one instead and hydrazine detonates on the spot: its N–N, costed as a
+  stretched triple, still scores 650 against an N–H's 391, takes all three
+  slots on each nitrogen, and the four hydrogens pair off — N₂ + 2 H₂ instead
+  of the molecule.
+
+Every pre-existing molecule returns its exact previous total: NH₃ 827, CO₂ −98,
+CH₄ 848, H₂O 574, O₂ 505, H₂ 564, N₂ 59.
+
+### Activation energy, per reaction
+
+```javascript
+function reactionActivation() { ... }      // a multiplier on breakThreshold
+```
+
+It changes **when, not what**, exactly as `breakEaseMax` does: D is not in it,
+so the bars, the curve and the totals are untouched and only the temperature at
+which anything happens moves. Reactants only.
+
+**The dial had to be opened up first.** `reactantRelative` was 0.35, which
+stretches a reaction whose temperatures are a cliff — and *flattens* them. At
+0.35 the dose goes as T^1.3 and the Med-to-High gap is only 1.69×: water's peak
+dose against its threshold ran 0.62 / 1.53 / 2.59. An activation that blocks
+Med must sit above 1.53 and one that lets High run must sit below 2.59, and in
+that band **combustion would not start at High at all** — no break in 60 s at
+2.0 while the predictor said it could. At **0** the dose goes as T², the gap is
+2.25×, and the same three numbers become 0.62 / 2.48 / 5.58. It ships at 0, and
+no reaction overrides it.
+
+| reaction | activation | why |
+|---|---|---|
+| water | **3.0** | 0.21 / 0.83 / 1.86 against the bar |
+| combustion | **3.0** | same ladder; it pins the value from above — at 3.4 it stopped starting at High |
+| hydrazine | **0.55** | catalysed: under a fifth of the others |
+
+Hydrazine's 0.55 is pinned from both sides by measurement. Its reactants'
+hardest hit runs about **0.28 at Low** and **0.80 at Med** against a 1.185
+threshold, so a bar at 0.65 sits above Low's hardest hit *taken twice* (0.56)
+and below Med's taken once. It was 0.42 first, which left Low intact over 75 s
+— and **drew the full curve over it anyway**, because `reactionCanStart`
+predicts from a nominal peak dose of 0.62 at Low. A graph promising a reaction
+to a world where nothing is happening is worse than either answer alone, so the
+bar goes above the prediction too.
+
+### The ladder, measured
+
+| | Low | Med | High |
+|---|---|---|---|
+| water | flat, nothing | **flat, nothing** | break 6.8 s, done 23.4 s |
+| combustion | flat, nothing | **flat, nothing** | break 41.1 s |
+| hydrazine | flat, nothing | break 2.3 s, **done 37.8 s** | break 16.1 s, done 40.6 s |
+
+Every "flat" is a 75-second run with the reactants intact at the end *and*
+`reactionCanStart` false, so the graph is a horizontal line and not a promise.
+`totalKJ` drift was 0 or 1 everywhere.
+
+**The cost of blocking Med is a slower start at High**, and it is worth knowing
+before retuning anything: the first break rides on a rare hard collision, so it
+is highly variable — water was measured at 0.4 s, 6.8 s and 40.9 s in three
+separate runs at the same setting. Once one bond goes, `breakEaseMax` carries
+the rest.
+
+`N₂H₄` has a Sandbox button like every other reactant, and One Bond's list now
+holds both an N–N (163) and an N≡N (941) — the weakest and the strongest bonds
+in the sim, made by the same two atoms.
 
 ## Deployment
 
