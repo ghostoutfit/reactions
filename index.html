@@ -1760,7 +1760,9 @@ const FIELD_SCALE = { 'hi-res': 0.30, 'detailed': 0.20, 'simple': 0.12 };
 // worth spending it on: the lobe between two atoms about to bond is the whole
 // subject of the shot, and at the ordinary buffer resolution it is being
 // magnified about twice before it is blitted.
-let replayDetail = 2.2;        // x the field buffer resolution, while replaying
+// 1 / FIELD_SCALE['hi-res'] is the setting at which a buffer pixel is exactly a
+// screen pixel, since the buffer is cut to the viewport — see drawFieldHeatmap.
+let replayDetail = 3.33;       // x the field buffer resolution, while replaying
 let FIELD_WIDTH = 0.30;     // lobe half-width as a fraction of the bond length
 // Lower is brighter: the accumulated value that maps to the top of the colormap.
 // A bond at rest peaks at its own energy over the strongest bond — 0.88 for H-H,
@@ -1842,16 +1844,35 @@ function drawFieldHeatmap(destCtx, segsIn, boxW, boxH, opts) {
   // zoomed-out world would allocate a buffer four times the area to be blitted
   // down into the same strip of screen — paying for resolution the display
   // cannot show.
-  const scale = (FIELD_SCALE[_quality] || 0.2) * (boxW ? 1 : drawZoom())
-              * (replayCam && !boxW ? replayDetail : 1);
-  const w = Math.max(1, Math.ceil((boxW || world.w) * scale));
-  const h = Math.max(1, Math.ceil((boxH || world.h) * scale));
+  //
+  // AND IT ONLY COVERS WHAT IS ON SCREEN. The ordinary view shows the whole
+  // box, so a world-sized buffer is a screen-sized buffer. The replay's
+  // close-up shows about a third of the box's area and throws the rest away —
+  // so the buffer is cut to the viewport instead, which buys the visible part
+  // 3-4x the pixels for the same cost. `view` is in world units, like
+  // everything else below the zoom.
+  // The clip's own resolution does not depend on the tier. Playback forces
+  // hi-res for the frames it steps, but a clip starts and ends on frames that
+  // are not inside that swap, and a buffer that changes size mid-clip is a
+  // visible softening on the first frame of every replay.
+  const view = (replayCam && !boxW) ? replayView() : null;
+  const scale = (view ? FIELD_SCALE['hi-res'] * replayDetail
+                      : (FIELD_SCALE[_quality] || 0.2))
+              * (boxW ? 1 : drawZoom());
+  const bw = view ? view.w : (boxW || world.w);
+  const bh = view ? view.h : (boxH || world.h);
+  const ox = view ? view.x : 0, oy = view ? view.y : 0;
+  const w = Math.max(1, Math.ceil(bw * scale));
+  const h = Math.max(1, Math.ceil(bh * scale));
   ensureFieldBuffers(w, h);
   fieldAcc.fill(0);
   fieldLoad.fill(0);
   const inv = 1 / scale;
 
   for (const s of segs) {
+    // In BUFFER world coordinates: the same world units, with the buffer's own
+    // origin subtracted off. Zero for everything but the replay's viewport.
+    const ax = s.x1 - ox, ay = s.y1 - oy, bx2 = s.x2 - ox, by2 = s.y2 - oy;
     const sdx = s.x2 - s.x1, sdy = s.y2 - s.y1;
     const L = Math.hypot(sdx, sdy);
     if (L < 1e-6) continue;
@@ -1862,15 +1883,15 @@ function drawFieldHeatmap(destCtx, segsIn, boxW, boxH, opts) {
     const reach  = sigma * 2.5;
 
     // Only the pixels this one lobe can reach — a box about a bond long
-    const x0 = Math.max(0,     Math.floor((Math.min(s.x1, s.x2) - reach) * scale));
-    const x1 = Math.min(w - 1, Math.ceil ((Math.max(s.x1, s.x2) + reach) * scale));
-    const y0 = Math.max(0,     Math.floor((Math.min(s.y1, s.y2) - reach) * scale));
-    const y1 = Math.min(h - 1, Math.ceil ((Math.max(s.y1, s.y2) + reach) * scale));
+    const x0 = Math.max(0,     Math.floor((Math.min(ax, bx2) - reach) * scale));
+    const x1 = Math.min(w - 1, Math.ceil ((Math.max(ax, bx2) + reach) * scale));
+    const y0 = Math.max(0,     Math.floor((Math.min(ay, by2) - reach) * scale));
+    const y1 = Math.min(h - 1, Math.ceil ((Math.max(ay, by2) + reach) * scale));
 
     for (let py = y0; py <= y1; py++) {
-      const wy = py * inv - s.y1;
+      const wy = py * inv - ay;
       for (let px = x0; px <= x1; px++) {
-        const wx = px * inv - s.x1;
+        const wx = px * inv - ax;
         const along = wx * ux + wy * uy;        // distance along the bond axis
         if (along < 0 || along > L) continue;   // nothing outside the two nuclei
         const perpSq = wx * wx + wy * wy - along * along;
@@ -1902,7 +1923,7 @@ function drawFieldHeatmap(destCtx, segsIn, boxW, boxH, opts) {
   destCtx.save();
   destCtx.imageSmoothingEnabled = true;        // the upscale is what softens it
   destCtx.imageSmoothingQuality = 'high';
-  destCtx.drawImage(fieldCanvas, 0, 0, boxW || world.w, boxH || world.h);
+  destCtx.drawImage(fieldCanvas, ox, oy, bw, bh);
   destCtx.restore();
 }
 
@@ -6758,6 +6779,17 @@ const replay = {
 let replayCam = null;
 function drawZoom() { return replayCam ? sceneZoom * replayZoom : sceneZoom; }
 
+// What the close-up actually shows, in world units — the same rectangle
+// `drawWorld` clips to, solved back through the camera's transform. It is NOT
+// clamped to the box: the camera is not either, so a moment near a wall shows
+// the space past it. Used by the field heatmap, which has no reason to compute
+// a lobe nobody can see.
+function replayView() {
+  const z = sceneZoom * replayZoom;
+  const vw = sceneW() / z, vh = (world.h * sceneZoom) / z;
+  return { x: replayCam.x - vw / 2, y: replayCam.y - vh / 2, w: vw, h: vh };
+}
+
 function replayFrameOf() {
   const t = followTarget();
   if (!t) return null;
@@ -7985,7 +8017,7 @@ replayOnBox.addEventListener('change', () => {
     row('devReplayRate', 'Replay speed',    0.05, 1,   0.05, replayRate,     '#ffd84d') +
     row('devReplayZoom', 'Replay zoom',     1,    5,   0.1,  replayZoom,     '#ffd84d') +
     row('devReplayHold', 'Replay cooldown', 0,    15,  0.5,  replayCooldown, '#ffd84d') +
-    row('devReplayDetail', 'Replay detail', 1,  4,   0.1,  replayDetail,   '#ffd84d') +
+    row('devReplayDetail', 'Replay detail', 1,  6,   0.1,  replayDetail,   '#ffd84d') +
     row('devActivation', 'Curve appears at', 0.3, 3, 0.05, activationGuess, '#ffd84d') +
     '<div style="opacity:0.45;font-size:10px;">how hot it has to be before the ' +
       'graph shows a reaction instead of a flat line. x the break threshold the ' +
@@ -8347,7 +8379,9 @@ replayOnBox.addEventListener('change', () => {
   bind('devReplayHold', v => replayCooldown = v, false,
        v => v > 0 ? v.toFixed(1) + ' s' : 'every moment');
   bind('devReplayDetail', v => replayDetail = v, false,
-       v => v > 1 ? v.toFixed(1) + '\u00d7 the field buffer' : 'same as the sim');
+       v => v >= 1 / FIELD_SCALE['hi-res'] - 0.01
+              ? v.toFixed(1) + '\u00d7 \u2014 one buffer pixel per screen pixel'
+              : v > 1 ? v.toFixed(1) + '\u00d7 the field buffer' : 'same as the sim');
   bind('devActivation', v => activationGuess = v, false, v => v.toFixed(2) + '\u00d7');
   bind('devFollowGlow', v => followGlow = v, false,
        v => v > 0 ? Math.round(v * 100) + '%' : 'off');

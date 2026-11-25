@@ -4660,6 +4660,57 @@ Measured: the buffer goes **298×127 to 1246×531**, 17.5× the pixels, and a
 replay frame costs **2.13 ms** against an ordinary frame's 0.48 and a budget of
 16.7.
 
+#### ...and it only covers what is on screen
+
+That still blitted at **1.5 screen pixels per buffer pixel**, which is a soft
+lobe in the one shot that exists to be looked at closely. The reason was that
+the buffer covered the whole **box** while the close-up shows about a third of
+its area: at `replayZoom` 1.9 the viewport is `world.w / 1.9` by `world.h / 1.9`,
+so **72% of the pixels being computed were outside the frame.**
+
+So the replay's buffer is cut to the viewport. `replayView()` solves the camera's
+transform back into world units — the same rectangle `drawWorld` clips to, and
+not clamped to the box, because the camera is not either. `drawFieldHeatmap`
+then carries an **origin**: the lobe loop works in buffer-world coordinates
+(`s.x1 - ox`) and the blit lands at `drawImage(fieldCanvas, ox, oy, bw, bh)`.
+With no viewport the origin is 0 and every other caller is untouched.
+
+`1 / FIELD_SCALE['hi-res']` is now the setting at which a buffer pixel is
+exactly a screen pixel, and `replayDetail` ships **at it, 3.33**. Measured: the
+buffer comes out **993×435** against a viewport of 993×435 screen px —
+magnification **1.001** — where the whole-box buffer at the same setting would
+have been 1885×826.
+
+**It cost nothing.** The same stored clip replayed at three settings, 149 frames
+each, real frame intervals:
+
+| `replayDetail` | buffer | magnification | p50 | p90 | frames > 20 ms |
+|---|---|---|---|---|---|
+| 2.2 (was) | 656×288 | 1.51 | 7.3 ms | 13.3 | 1 |
+| **3.33 (ships)** | **993×435** | **1.00** | **7.7 ms** | **14.6** | **2** |
+| 4.5 | 1341×588 | 0.74 | 5.2 ms | 17.7 | 2 |
+
+The field pass itself measured p50 **2.6 ms**, p90 4.2, over 271 replay frames
+of a real run — against the 16.7 budget and a paused world. So the slider's top
+half is genuinely available; past 3.33 it is supersampling, which is why the
+note under it names the 1:1 point.
+
+**The clip's resolution does not read the tier.** Playback forces `hi-res` for
+the frames it steps, but a clip starts and ends on frames outside that swap, and
+a buffer that changes size mid-clip is a visible softening on the first frame of
+every replay — measured as 2 frames of 256 at the lower size. The viewport
+branch takes `FIELD_SCALE['hi-res']` outright, so one clip is one buffer size:
+re-measured at a forced `simple` tier, **993×435 for all 234 frames**.
+
+**It composes with the torus.** On the torus the clip is also shifted to centre
+the moment, so the lobes and the atoms are drawn from the same shifted copies
+and the viewport origin is subtracted off both. Measured with shifts of
+(−242, −176) and (−364, 275): the drawn pixel at a bond's midpoint is lit in
+**40 of 40** samples, luminance 154–232. In the walled box the same probe reads
+**(210,232,249)** at the bond and the background's **(5,4,15)** 140 px to the
+side, against (210,233,250) and (5,4,15) in the ordinary view — the lobe lands
+on the bond, at the same colour, with no offset.
+
 ### LOCK and ALL
 
 The VISUALS row is **Replay · LOCK · ALL** — the label shortened from "Replay
