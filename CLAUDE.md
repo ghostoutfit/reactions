@@ -4043,7 +4043,9 @@ overlaps after either, counting bonded partners as the bonds they are.
 
 ### The graph has a before and an after
 
-The graph is **821 px** wide where it used to be 587. The toggle beside it was
+The graph is **986 px** wide where it used to be 587 — 821 once the caption was
+capped, and the rest when the caption was deleted outright (see **The two
+numbers are shares**). The toggle beside it was
 never the culprit — at `flex: 1` it was being squeezed to 56 px — it was the
 one-line caption under the percentages, which made `#energyReadout` a 534 px
 column and took every one of those pixels off the graph in the flex row beside
@@ -4677,6 +4679,39 @@ scene you are following one atom through wants a little more time in it. The
 default lives in two places that must agree — `PBSPEED_DEFAULT` and the slider's
 `value` in the markup — because the tick that marks the default is positioned
 from the constant and the slider reads its own attribute on load.
+
+### The two numbers are shares of one total
+
+The caption under the percentages is **gone**. It had been three different
+sentences about three different axes and was wrong again as soon as the curve
+stopped being a trace. The two numbers above it say what they are, the labels
+beside the lines say which is which, and that is the whole of it. The graph
+gained the width it was taking.
+
+The numbers themselves were neither a share nor of one total:
+
+| | was | measured |
+|---|---|---|
+| motion | the **measured** kinetic energy over the energy at spawn | runs well past 100%, because the speed band's floor top-ups are energy from nowhere |
+| fields | `shownFieldEnergy` — the **stored vibration alone** | exactly **0** in the shipped bond-storage mode, which hides it |
+
+So the pair read something like **"117% 0%"** and could not be added up to
+anything.
+
+They are now the **drawn fractions** — the same numbers the line graph plots and
+the bar chart fills, read off the same two ranges — so the three readouts agree
+by construction rather than by three functions happening to work alike. Since
+motion shares fields' span (see **The dip is the hump**) those fractions sum to
+one, so the pair sums to 100% and neither can pass it.
+
+Measured over two full 60 s runs, one per reaction, sampling every frame:
+**sum exactly 100% at every frame, 0 violations, neither number ever above
+88%**, and both within rounding of the bar and the line at the same instant.
+
+**The rounding is done once and the other is taken from it.** Rounding both
+separately is how 51% and 50% end up side by side claiming to be a whole. That
+only applies while they share a scale — with *Motion line spans speeds* on they
+are two readings on two axes, and each is rounded on its own.
 
 ### What it opens on
 

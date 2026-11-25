@@ -616,13 +616,6 @@
     display: flex;
     gap: 10px;
   }
-  #energyPctNote {
-    font-size: 12px;
-    color: #ff3a6e;
-    text-align: center;
-    letter-spacing: 0.02em;
-    line-height: 1.3;
-  }
   /* Same fixed width as the graph toggle beside it, and the same two lines, so
      the pair is one block that cannot resize whichever state either is in. */
   #replayBtn {
@@ -992,7 +985,6 @@
           <span id="energyPctMotion" style="color:#ff2060;text-shadow:0 0 8px rgba(255,20,80,0.7);">100%</span>
           <span id="energyPctFields" style="color:#c46cff;text-shadow:0 0 8px rgba(196,108,255,0.7);margin-left:10px;">0%</span>
         </div>
-        <div id="energyPctNote">Motion and fields, relative to the energy at the start</div>
       </div>
       <div id="energyBarButtons">
         <button id="replayBtn" class="btn">REPLAY<br>AGAIN</button>
@@ -7439,24 +7431,42 @@ function syncBarPanel() {
   barChartCanvas.height = Math.max(1, window.innerHeight - tbH - sbH);
 }
 
+// THE TWO NUMBERS ARE SHARES OF THE SAME TOTAL, read off the same scales the
+// line graph and the bar chart are drawn on — so the three readouts agree by
+// construction rather than by three functions happening to work the same way.
+//
+// They were neither of those things. Motion was the MEASURED kinetic energy
+// over the energy at spawn, which the speed band's floor top-ups drive well past
+// 100%; fields was `shownFieldEnergy`, the stored vibration alone, which is zero
+// outright in the shipped bond-storage mode — so the pair read something like
+// "117% 0%" and could not be added up to anything.
+//
+// Now they are the drawn fractions, and in the shipped mode those sum to one by
+// construction (see motionAxisRange). The rounding is done ONCE and the other
+// is taken from it, because rounding both separately is how 51% and 50% end up
+// side by side claiming to be a whole.
 function updateEnergyPct() {
   const el = document.getElementById('energyPctMotion');
-  if (!el) return;
-  el.textContent = Math.round(energyOfMotion() / energyAtSpawn * 100) + '%';
   const fl = document.getElementById('energyPctFields');
-  if (fl) fl.textContent = Math.round(shownFieldEnergy() / energyAtSpawn * 100) + '%';
+  if (!el && !fl) return;
+  const fa = fieldsAxisRange(), ma = motionAxisRange();
+  const cl = (v) => Math.max(0, Math.min(1, v));
+  const f = cl((fieldsKJ() - fieldsZeroKJ - fa.lo) / Math.max(1, fa.hi - fa.lo));
+  const m = cl((motionKJ() - motionZeroKJ() - ma.lo) / Math.max(1, ma.hi - ma.lo));
+  // Only a shared scale makes them two halves of one thing; on separate scales
+  // they are two readings and each is rounded on its own.
+  const sum = f + m;
+  const fPct = Math.round(f * 100);
+  const mPct = (!motionAxisSpansSpeeds && Math.abs(sum - 1) < 1e-6)
+    ? 100 - fPct : Math.round(m * 100);
+  if (el) el.textContent = mPct + '%';
+  if (fl) fl.textContent = fPct + '%';
 }
 
-// What the curve is, in one line under it. The old caption described a trace
-// against TIME, and the caveat it carried — that the speed band makes the line
-// climb and plateau — belonged to that axis, not to this one.
-function updateEnergyNote() {
-  const el = document.getElementById('energyPctNote');
-  if (!el) return;
-  el.textContent = productBondTarget()
-    ? 'The whole reaction, worked out from the bonds before it runs \u2014 the dashed line is where it has got to'
-    : 'Energy along the reaction \u2014 this one has no product half modelled yet, so it ends at the peak';
-}
+// The caption under the percentages is gone. It had been three different
+// sentences about three different axes and was wrong again as soon as the curve
+// stopped being a trace; the two numbers above it say what they are, the labels
+// beside the lines say which is which, and that is the whole of it.
 
 // ─── Controls ─────────────────────────────────────────────────────────────────
 document.getElementById('goBtn').addEventListener('click', () => {
@@ -7513,9 +7523,6 @@ function setReaction(id, respawn = true) {
   if (lbl) lbl.textContent = formulaOf(SPECIES[REACTIONS[id].icon].els);
   syncCompositionSliders();
   if (respawn) spawnWorld();
-  // The graph's caption says whether this reaction has a product half, so it
-  // has to be rewritten when the reaction changes, not only at load.
-  updateEnergyNote();
   logAction('Reaction: ' + id);
 }
 
@@ -8306,7 +8313,6 @@ replayOnBox.addEventListener('change', () => {
   clamp.addEventListener('change', () => {
     speedBandOn = clamp.checked;
     syncBandNote();
-    updateEnergyNote();
     logAction('Speed band ' + (speedBandOn ? 'on' : 'off'));
   });
 
@@ -10622,7 +10628,6 @@ sbSyncAddButtons();
 applyTab('reactions');
 syncReplayBtn();
 updateGraphBtn();
-updateEnergyNote();
 document.getElementById('energyBar').classList.add('visible');
 spawnWorld();
 // IT OPENS MOVING, at Low. The world used to open paused, which meant the first
