@@ -5678,9 +5678,42 @@ no reaction overrides it.
 
 | reaction | activation | why |
 |---|---|---|
-| water | **3.0** | 0.21 / 0.83 / 1.86 against the bar |
-| combustion | **3.0** | same ladder; it pins the value from above — at 3.4 it stopped starting at High |
-| hydrazine | **0.55** | catalysed: under a fifth of the others |
+| water | **2.4** | bar at 3.17 — see below |
+| combustion | **2.4** | same ladder; Med held 120 s at this setting |
+| hydrazine | **0.55** | catalysed: under a quarter of the others |
+
+#### The bar is set against the dose a hit actually delivers
+
+Not against `reactionCanStart`'s estimate — the two disagree, and the
+collisions are the ones that decide. Sampled over 30 s with breaking off, a
+water reactant's hits run:
+
+| | hits | p99 | hardest | best stack of two |
+|---|---|---|---|---|
+| MED | 992 | 1.01 | 1.24 | **2.47** |
+| HIGH | 2,290 | 1.76 | 3.35 | 6.70 |
+
+A bond holds at most `bondLevels` hits' worth before the next one has to
+resolve it, so **twice the hardest hit is the ceiling at a temperature**, and
+that ceiling is what Med has to fail to reach. 2.4 puts the bar at **3.17**:
+above Med's 2.47 by a quarter, and *below High's hardest single hit*, so High
+breaks bonds in ordinary play instead of waiting on a coincidence.
+
+**It shipped at 3.0 first and that was too high**, by a margin that only showed
+in use. The bar sat at 3.96 — above every single hit High produces — so a break
+needed two big ones on the same bond inside the vibration's decay, and whether
+a given spawn could manage that at all was luck. Measured over 12 runs, about
+five never started in 45 s while the rest started inside a second. That is the
+"sometimes it takes a lot longer" a user will report, and it is **nothing to do
+with pausing or resetting**: the dose distribution after a pause+resume
+(p99 1.65) and after a Reset (p99 1.69) is the same as a steady run's (1.70).
+Reset only re-rolls the world, and at 3.0 some worlds were duds.
+
+At 2.4, six of six water runs at High started within 0.4 s and combustion's
+four within 2 s; water completed in 14.6 s with drift 0; and both Med runs held
+120 s with every reactant intact and the graph flat. Raising `VIB_TAU` was
+tried first and does nothing for it — 2.2 / 5 / 8 all produced the same mix of
+instant starts and duds.
 
 Hydrazine's 0.55 is pinned from both sides by measurement. Its reactants'
 hardest hit runs about **0.28 at Low** and **0.80 at Med** against a 1.185
@@ -5695,19 +5728,17 @@ bar goes above the prediction too.
 
 | | Low | Med | High |
 |---|---|---|---|
-| water | flat, nothing | **flat, nothing** | break 6.8 s, done 23.4 s |
-| combustion | flat, nothing | **flat, nothing** | break 41.1 s |
+| water | flat, nothing | **flat, nothing** | break 0.2–0.4 s, done 14.6 s |
+| combustion | flat, nothing | **flat, nothing** | break 0.2–2.0 s |
 | hydrazine | flat, nothing | break 2.3 s, **done 37.8 s** | break 16.1 s, done 40.6 s |
 
 Every "flat" is a 75-second run with the reactants intact at the end *and*
 `reactionCanStart` false, so the graph is a horizontal line and not a promise.
 `totalKJ` drift was 0 or 1 everywhere.
 
-**The cost of blocking Med is a slower start at High**, and it is worth knowing
-before retuning anything: the first break rides on a rare hard collision, so it
-is highly variable — water was measured at 0.4 s, 6.8 s and 40.9 s in three
-separate runs at the same setting. Once one bond goes, `breakEaseMax` carries
-the rest.
+Blocking Med costs a slower start at High only if the bar is set above High's
+hardest single hit — see **The bar is set against the dose a hit actually
+delivers** for what that looked like, and why 2.4 rather than 3.0.
 
 `N₂H₄` has a Sandbox button like every other reactant, and One Bond's list now
 holds both an N–N (163) and an N≡N (941) — the weakest and the strongest bonds

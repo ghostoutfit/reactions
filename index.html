@@ -2893,26 +2893,44 @@ const composition = { ...COMPOSITION_DEFAULT };
 // that happen to look reasonable. Spawn it unbalanced and the leftovers simply
 // stay free at the end, which is also true of the real thing.
 const REACTIONS = {
-  // ACTIVATION 3.0 — it takes HIGH, and MED now leaves it alone. Measured, the
-  // peak dose against the threshold runs 0.62 / 2.48 / 5.58 at Low / Med /
-  // High, so 3.0 puts those at 0.21 / 0.83 / 1.86: Med a sixth below the line
-  // and High most of the way again above it. MED used to clear the bar by half
-  // and the middle of the three temperatures was a second High.
+  // ACTIVATION 2.4 — it takes HIGH, and MED leaves it alone.
+  //
+  // THE BAR IS SET AGAINST THE DOSE A HIT ACTUALLY DELIVERS, not against the
+  // predictor, because the two disagree and the collisions are the ones that
+  // decide. Sampled over 30 s with breaking off, a reactant's hits run:
+  //
+  //   MED   992 hits, p99 1.01, hardest 1.24  — best possible stack of two: 2.47
+  //   HIGH 2290 hits, p99 1.76, hardest 3.35  — best possible stack of two: 6.70
+  //
+  // A bond holds at most `bondLevels` hits' worth before the next one has to
+  // resolve it, so TWICE THE HARDEST HIT is the ceiling at a temperature, and
+  // that ceiling is what MED has to fail to reach. 2.4 puts the bar at 3.17:
+  // above Med's 2.47 by a quarter, and below High's hardest SINGLE hit — so at
+  // High ordinary play breaks bonds instead of waiting on a coincidence.
+  //
+  // IT WAS 3.0 AND THAT WAS TOO HIGH, by a margin that only showed in use. The
+  // bar sat at 3.96, above every single hit High produces, so a break needed
+  // two big ones on the same bond inside the vibration's decay — and whether a
+  // given spawn could manage that at all was luck. Measured over 12 runs,
+  // about five never started in 45 s while the rest started inside a second.
+  // At 2.4, six of six started within 0.4 s, and Med held for 120 s untouched
+  // with the graph flat. Raising VIB_TAU was tried first and does nothing for
+  // it: 2.2 / 5 / 8 all produced the same mix of instant starts and duds.
   water: {
     label: 'H₂ + O₂  →  H₂O',
-    activation: 3.0,
+    activation: 2.4,
     composition: { H2: 2, O2: 1, He: 0, CH4: 0 },   // ONE unit; x reactantAmount
     icon: 'H2', recombine: true,
     bondsPerUnit: 4,            // 2 waters, two O–H each
     products: ['HHO'],
     steps: ['HO', 'HHO'],       // NOT 'HH': see joinEls
   },
-  // The same 3.0, and the same numbers: measured, combustion's reactants sit on
-  // exactly water's ladder, so one value does for both. It is the reaction that
-  // pins the value from above, though — at 3.4 it stopped starting at High.
+  // The same 2.4, and the same numbers: measured, combustion's reactants sit on
+  // exactly water's ladder, so one value does for both. Its MED was held for
+  // 120 s at this setting with every reactant intact.
   combustion: {
     label: 'CH₄ + O₂  →  CO₂ + H₂O',
-    activation: 3.0,
+    activation: 2.4,
     composition: { H2: 0, O2: 2, He: 0, CH4: 1 },   // ONE unit; x reactantAmount
     icon: 'CH4', recombine: true,
     bondsPerUnit: 6,            // 1 CO2 at two bonds, 2 waters at two
